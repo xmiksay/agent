@@ -1,0 +1,26 @@
+[workspace]
+members = [".", "migration"]
+
+[package]
+name = "gitlab-claude-agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+reqwest = { version = "0.12", features = ["json"] }
+dotenvy = "0.15"
+anyhow = "1"
+urlencoding = "2"
+sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+chrono = { version = "0.4", features = ["serde"] }
+migration = { path = "migration" }
+minijinja = { version = "2", features = ["loader"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }

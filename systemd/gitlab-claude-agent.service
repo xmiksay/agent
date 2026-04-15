@@ -1,0 +1,16 @@
+[Unit]
+Description=GitLab Claude Agent
+After=network.target
+
+[Service]
+Type=simple
+User=claude-agent
+EnvironmentFile=/etc/gitlab-claude-agent/env
+ExecStart=/usr/local/bin/gitlab-claude-agent
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
