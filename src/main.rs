@@ -1,39 +1,47 @@
 mod api;
+mod auth;
 mod config;
 mod entity;
-mod gitlab;
+mod git_service;
 mod jobs;
-mod views;
+mod project;
+mod provider;
 mod webhook;
+mod workspace;
 
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use axum::middleware;
-use axum::routing::{get, post};
+use axum::middleware as axum_middleware;
+use axum::routing::{get, post, put};
 use axum::Router;
+use anyhow::Context;
 use migration::MigratorTrait;
-use minijinja::Environment;
 use sea_orm::Database;
-use tracing::info;
+use tower_http::services::{ServeDir, ServeFile};
+use tracing::{info, warn};
 
+use crate::auth::store::AuthStore;
+use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
-use crate::gitlab::client::GitLabClient;
+use crate::git_service::GitServiceStore;
+use crate::jobs::output_log::TaskOutputLog;
+use crate::jobs::registry::RunningTasks;
 use crate::jobs::store::TaskStore;
-use crate::webhook::handler::handle_webhook;
-use crate::webhook::verify::verify_token;
+use crate::project::ProjectStore;
+use crate::provider::ProviderRegistry;
+use crate::workspace::Workspace;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
     pub task_store: Arc<TaskStore>,
-    pub templates: Arc<Environment<'static>>,
-}
-
-fn init_templates() -> Environment<'static> {
-    let mut env = Environment::new();
-    env.set_loader(minijinja::path_loader("templates"));
-    env
+    pub project_store: Arc<ProjectStore>,
+    pub git_service_store: GitServiceStore,
+    pub workspace: Arc<Workspace>,
+    pub providers: ProviderRegistry,
+    pub auth_store: Arc<AuthStore>,
+    pub auth_waiter: AuthWaiter,
 }
 
 #[tokio::main]
@@ -50,41 +58,141 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::connect(&config.database_url).await?;
     migration::Migrator::up(&db, None).await?;
 
-    let gitlab = GitLabClient::new(&config.gitlab_url, &config.gitlab_token);
-    let task_store = Arc::new(TaskStore::new(db, config.clone(), gitlab));
-    let templates = Arc::new(init_templates());
+    let git_service_store = GitServiceStore::new(db.clone());
+    let providers = ProviderRegistry::new(git_service_store.clone());
+    providers.reload().await?;
+
+    let project_store = Arc::new(ProjectStore::new(db.clone()));
+    let workspace = Arc::new(Workspace::new(&config.repo_base_path));
+    workspace
+        .install_shared_hooks()
+        .await
+        .context("installing shared agent hooks")?;
+    let auth_store = Arc::new(AuthStore::new(db.clone()));
+    let auth_waiter = AuthWaiter::new();
+    let output_log = TaskOutputLog::new();
+    let running = RunningTasks::new();
+    let task_store = Arc::new(TaskStore::new(
+        db,
+        config.clone(),
+        providers.clone(),
+        project_store.clone(),
+        workspace.clone(),
+        output_log,
+        running,
+    ));
+
+    // Any task left running/pending in the DB was orphaned by a previous
+    // process — flip those rows to `killed` so the UI matches reality.
+    match task_store.recover_orphans().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(recovered = n, "marked orphan tasks as killed"),
+        Err(e) => tracing::warn!(error = %e, "failed to recover orphan tasks"),
+    }
 
     let state = AppState {
         config: config.clone(),
         task_store,
-        templates,
+        project_store,
+        git_service_store,
+        workspace,
+        providers,
+        auth_store,
+        auth_waiter,
     };
-
-    let webhook_routes = Router::new()
-        .route("/webhook/gitlab", post(handle_webhook))
-        .route_layer(middleware::from_fn_with_state(state.clone(), verify_token));
 
     let api_routes = Router::new()
         .route("/api/tasks", get(api::handlers::list_tasks))
-        .route("/api/tasks/{id}", get(api::handlers::get_task))
-        .route("/api/tasks/{id}/confirm", post(api::handlers::confirm_task));
+        .route(
+            "/api/tasks/{id}",
+            get(api::handlers::get_task).delete(api::handlers::delete_task),
+        )
+        .route("/api/tasks/{id}/confirm", post(api::handlers::confirm_task))
+        .route("/api/tasks/{id}/retry", post(api::handlers::retry_task))
+        .route("/api/tasks/{id}/kill", post(api::handlers::kill_task))
+        .route("/api/tasks/{id}/continue", post(api::handlers::continue_task))
+        .route("/api/tasks/{id}/output", get(api::handlers::task_output))
+        .route("/api/projects", get(api::projects::list_projects))
+        .route(
+            "/api/projects/{id}",
+            get(api::projects::get_project),
+        )
+        .route(
+            "/api/projects/{id}/config",
+            put(api::projects::update_config),
+        )
+        .route(
+            "/api/projects/{id}/branches",
+            get(api::projects::list_branches),
+        )
+        .route(
+            "/api/git_services",
+            get(api::git_services::list).post(api::git_services::create),
+        )
+        .route(
+            "/api/git_services/{id}",
+            get(api::git_services::get)
+                .put(api::git_services::update)
+                .delete(api::git_services::delete),
+        )
+        .route(
+            "/api/auth_requests",
+            get(api::auth_requests::list_auth_requests),
+        )
+        .route(
+            "/api/auth_requests/{id}",
+            get(api::auth_requests::get_auth_request),
+        )
+        .route(
+            "/api/auth_requests/{id}/resolve",
+            post(api::auth_requests::resolve_auth_request),
+        )
+        .route_layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            auth::middleware::require_bearer,
+        ))
+        // Cheap probe the SPA uses to detect whether the token is valid.
+        .route(
+            "/api/auth/check",
+            get(StatusCode::NO_CONTENT).route_layer(axum_middleware::from_fn_with_state(
+                state.clone(),
+                auth::middleware::require_bearer,
+            )),
+        );
 
-    let html_routes = Router::new()
-        .route("/", get(views::tasks_page))
-        .route("/tasks/{id}", get(views::task_detail_page))
-        .route("/tasks/{id}/confirm", post(views::confirm_task_page));
+    let spa_root = std::env::var("FRONTEND_DIST")
+        .unwrap_or_else(|_| "frontend/dist".to_string());
+    let index = std::path::PathBuf::from(&spa_root).join("index.html");
+    let spa_service = if index.exists() {
+        Some(
+            ServeDir::new(&spa_root)
+                .not_found_service(ServeFile::new(index)),
+        )
+    } else {
+        warn!(spa = %spa_root, "SPA dist not found; only JSON API will be served");
+        None
+    };
 
-    let app = Router::new()
-        .merge(webhook_routes)
+    let mut app = Router::new()
+        .route("/webhook/gitlab/{slug}", post(webhook::gitlab::handle))
+        .route("/webhook/github/{slug}", post(webhook::github::handle))
+        .route("/internal/authcheck", post(auth::handlers::authcheck))
         .merge(api_routes)
-        .merge(html_routes)
         .route("/health", get(health))
         .with_state(state);
+
+    if let Some(svc) = spa_service {
+        app = app.fallback_service(svc);
+    }
 
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     info!(addr = %config.listen_addr, "server starting");
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

@@ -15,17 +15,58 @@ pub struct Model {
     pub created_at: DateTimeWithTimeZone,
     pub started_at: Option<DateTimeWithTimeZone>,
     pub finished_at: Option<DateTimeWithTimeZone>,
+    pub provider: String,
+    pub branch: Option<String>,
+    pub project_id: Option<Uuid>,
+    pub git_service_id: Option<Uuid>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub session_id: Option<String>,
+    pub pid: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(has_one = "super::task_results::Entity")]
     TaskResult,
+    #[sea_orm(has_many = "super::auth_requests::Entity")]
+    AuthRequest,
+    #[sea_orm(
+        belongs_to = "super::projects::Entity",
+        from = "Column::ProjectId",
+        to = "super::projects::Column::Id",
+        on_delete = "SetNull"
+    )]
+    Project,
+    #[sea_orm(
+        belongs_to = "super::git_services::Entity",
+        from = "Column::GitServiceId",
+        to = "super::git_services::Column::Id",
+        on_delete = "SetNull"
+    )]
+    GitService,
 }
 
 impl Related<super::task_results::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::TaskResult.def()
+    }
+}
+
+impl Related<super::auth_requests::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AuthRequest.def()
+    }
+}
+
+impl Related<super::projects::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Project.def()
+    }
+}
+
+impl Related<super::git_services::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::GitService.def()
     }
 }
 

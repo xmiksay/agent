@@ -1,69 +1,226 @@
-use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{info, warn, error};
 
+
 use crate::config::Config;
-use crate::gitlab::client::GitLabClient;
+use crate::git_service::GitService;
+use crate::jobs::output_log::{LiveEntry, TaskOutputLog};
 use crate::jobs::types::{ClaudeOutput, TriggerReason};
+use crate::project::{BranchStatus, NewBranchEntry, ProjectStore};
+use crate::provider::GitProvider;
+use crate::workspace::Workspace;
+use crate::workspace::layout::slugify;
 
 pub async fn run_job(
+    task_id: uuid::Uuid,
     trigger: TriggerReason,
+    service: GitService,
+    project_id: Option<uuid::Uuid>,
     git_url: String,
     project_path: String,
     default_branch: String,
+    branch_override: Option<String>,
     config: Config,
-    gitlab: GitLabClient,
+    provider: Arc<dyn GitProvider>,
+    workspace: Arc<Workspace>,
+    project_store: Arc<ProjectStore>,
+    output_log: TaskOutputLog,
+    resume_session_id: Option<String>,
+    mut pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+    session_tx: Option<tokio::sync::oneshot::Sender<String>>,
 ) -> Result<ClaudeOutput> {
-    let job_id = uuid::Uuid::new_v4().to_string();
-    let work_dir = format!("{}/{}", config.repo_base_path, job_id);
+    let project_slug = slugify(&project_path);
+    let branch = branch_override
+        .as_deref()
+        .or_else(|| trigger.branch())
+        .unwrap_or(&default_branch)
+        .to_string();
+    let branch_slug = slugify(&branch);
 
-    info!(job_id, "cloning repository");
-
-    let branch = trigger.branch().unwrap_or(&default_branch);
-    let clone_status = Command::new("git")
-        .args(["clone", "--depth", "1", "--branch", branch, &git_url, &work_dir])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .status()
-        .await
-        .context("failed to spawn git clone")?;
-
-    if !clone_status.success() {
-        bail!("git clone failed for {git_url} branch {branch}");
-    }
-
-    ensure_claude_config(&work_dir).await?;
-
-    let prompt = build_prompt(&trigger);
-    info!(job_id, %prompt, "running claude");
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(config.job_timeout_secs),
-        Command::new("claude")
-            .args([
-                "-p", &prompt,
-                "--output-format", "json",
-                "--max-turns", "50",
-            ])
-            .current_dir(&work_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output(),
-    )
-    .await
-    .context("claude job timed out")?
-    .context("failed to spawn claude")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    let claude_result: ClaudeOutput = serde_json::from_str(&stdout)
-        .context("failed to parse claude output")?;
+    let work_dir = workspace.branch_dir(&service.slug, &project_slug, &branch_slug);
 
     info!(
-        job_id,
+        service = %service.slug,
+        project = %project_path,
+        branch = %branch,
+        path = %work_dir.display(),
+        "ensuring branch checkout"
+    );
+
+    let _guard = workspace
+        .lock_project(&service.slug, &project_slug)
+        .await
+        .context("locking project workspace")?;
+
+    // git_url is the SSH URL (git@host:path.git) populated by the webhook
+    // normalizers. The agent host has SSH keys configured for the bot user, so
+    // we clone/fetch directly — no token injection.
+    workspace.clone_or_fetch(&work_dir, &git_url, &branch).await?;
+    write_settings_local(&work_dir, &workspace.authcheck_hook_path())
+        .await
+        .context("writing .claude/settings.local.json")?;
+
+    if let Some(pid) = project_id {
+        let issue_iid = trigger.issue_iid().map(|v| v as i64);
+        let pr_iid = trigger.pr_iid().map(|v| v as i64);
+        project_store
+            .upsert_branch(
+                pid,
+                NewBranchEntry {
+                    branch_name: branch.clone(),
+                    branch_slug: branch_slug.clone(),
+                    issue_iid,
+                    pr_iid,
+                    status: BranchStatus::Active,
+                },
+            )
+            .await
+            .context("upserting branch state")?;
+    }
+
+    drop(_guard);
+
+    let prompt = build_prompt(&trigger);
+    info!(%prompt, "running claude");
+
+    let agent_port = config
+        .listen_addr
+        .rsplit_once(':')
+        .map(|(_, p)| p.to_string())
+        .unwrap_or_else(|| "3000".to_string());
+    // stream-json + --verbose emits newline-delimited JSON events as claude
+    // works, so we can show progress while it runs. The last event is
+    // `{"type":"result", ...}` with the same fields the old `json` format
+    // returned in a single blob.
+    let mut claude_args: Vec<String> = vec!["-p".into(), prompt.clone()];
+    if let Some(sid) = resume_session_id.as_deref() {
+        claude_args.push("-r".into());
+        claude_args.push(sid.into());
+    }
+    claude_args.extend([
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
+    ]);
+    let command_line = format!("claude {}", claude_args.join(" "));
+
+    let entry = if resume_session_id.is_some() {
+        output_log.resume_or_start(task_id, command_line.clone()).await
+    } else {
+        output_log.start(task_id, command_line.clone()).await
+    };
+
+    let mut child = Command::new("claude")
+        .args(&claude_args)
+        .current_dir(&work_dir)
+        .env("CLAUDE_TASK_ID", task_id.to_string())
+        .env("AGENT_PORT", agent_port)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .context("failed to spawn claude")?;
+
+    if let Some(pid) = child.id() {
+        info!(%task_id, pid, "claude process running");
+        if let Some(tx) = pid_tx.take() {
+            let _ = tx.send(pid);
+        }
+    }
+
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
+
+    // Token-budget abort: stream reader counts output_tokens from each event's
+    // `usage` field and fires this oneshot once cumulative use hits 50% of the
+    // configured budget. Aborting via SIGKILL is fine — session_id was already
+    // captured from the init event, so the task can Resume after rate limit
+    // resets.
+    let (budget_tx, budget_rx) = tokio::sync::oneshot::channel::<u64>();
+    let token_limit = config.task_token_budget / 2;
+
+    let stdout_reader = tokio::spawn(stream_into_entry(
+        stdout_pipe,
+        entry.clone(),
+        Stream::Stdout,
+        session_tx,
+        Some((token_limit, budget_tx)),
+    ));
+    let stderr_reader = tokio::spawn(stream_into_entry(
+        stderr_pipe,
+        entry.clone(),
+        Stream::Stderr,
+        None,
+        None,
+    ));
+
+    // No timeout — claude tasks can run as long as they need. Operator can
+    // Pause/Kill from the UI if a task is stuck. We do enforce a token budget
+    // (above) which races against child.wait().
+    let exit_status = tokio::select! {
+        res = child.wait() => res.context("waiting for claude exit")?,
+        used = budget_rx => {
+            let used = used.unwrap_or_default();
+            warn!(%task_id, used, limit = token_limit, "token budget reached, killing claude");
+            let _ = child.start_kill();
+            let status = child.wait().await.context("waiting for claude exit after kill")?;
+            // Surface as a graceful pause: the outer save path treats non-zero
+            // exits as failure, but session_id is set so Resume works.
+            status
+        }
+    };
+    let exit_code = exit_status.code();
+
+    // Drain readers (they'll finish once the pipes hit EOF).
+    let _ = stdout_reader.await;
+    let _ = stderr_reader.await;
+
+    // Snapshot the streamed state for downstream use.
+    let (stdout, stderr) = {
+        let mut guard = entry.lock().await;
+        guard.exit_code = exit_code;
+        guard.finished = true;
+        (guard.stdout.clone(), guard.stderr.clone())
+    };
+
+    info!(
+        exit_code = ?exit_code,
+        stdout_bytes = stdout.len(),
+        stderr_bytes = stderr.len(),
+        "claude process exited"
+    );
+
+    if !exit_status.success() {
+        // The full stdout/stderr are already in the in-memory output log and
+        // rendered nicely by the Command output panel. Keep this error short
+        // (it ends up in task_results.result_text) — only include the stderr
+        // tail because that's where curl/launch failures show up.
+        let stderr_tail = tail(stderr.trim(), 600);
+        if stderr_tail.is_empty() {
+            bail!("claude exited with status {:?}", exit_code);
+        } else {
+            bail!(
+                "claude exited with status {:?}\nstderr tail:\n{stderr_tail}",
+                exit_code
+            );
+        }
+    }
+
+    let claude_result = parse_stream_json_result(&stdout).with_context(|| {
+        let stderr_tail = tail(stderr.trim(), 600);
+        if stderr_tail.is_empty() {
+            "no result event in claude stream-json output".to_string()
+        } else {
+            format!("no result event in claude stream-json output\nstderr tail:\n{stderr_tail}")
+        }
+    })?;
+
+    info!(
         cost = claude_result.total_cost_usd,
         turns = claude_result.num_turns,
         is_error = claude_result.is_error,
@@ -71,22 +228,21 @@ pub async fn run_job(
     );
 
     if claude_result.is_error {
-        error!(job_id, result = %claude_result.result, "claude returned error");
+        error!(result = %claude_result.result, "claude returned error");
     }
 
-    // Post result back to GitLab
-    post_result(&trigger, &claude_result, &project_path, &gitlab).await?;
+    // Post result back to provider
+    post_result(&trigger, &claude_result, &project_path, provider.as_ref()).await?;
 
     // Push any changes for issue/fix workflows
-    if matches!(trigger, TriggerReason::Issue { .. } | TriggerReason::FixReview { .. }) {
-        push_changes(&work_dir).await?;
+    if matches!(
+        trigger,
+        TriggerReason::Issue { .. } | TriggerReason::FixReview { .. }
+    ) {
+        push_changes(work_dir.to_string_lossy().as_ref()).await?;
     }
 
-    // Cleanup
-    if let Err(e) = tokio::fs::remove_dir_all(&work_dir).await {
-        error!(job_id, error = %e, "failed to cleanup work dir");
-    }
-
+    // NOTE: checkout is intentionally NOT removed here — see workspace lifecycle.
     Ok(claude_result)
 }
 
@@ -98,7 +254,6 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  Description:\n{description}\n\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Read CLAUDE.md for project context\n\
                  - Implement the issue\n\
                  - Create a new branch and commit your changes\n\
                  - Create a merge request using `glab mr create`"
@@ -110,7 +265,6 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  Branch: {source_branch} -> {target_branch}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Read CLAUDE.md for project context\n\
                  - Review the diff: `git diff {target_branch}...{source_branch}`\n\
                  - Post your review as a comment using `glab mr note {iid}`\n\
                  - If changes are needed, list them clearly\n\
@@ -123,7 +277,6 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  Branch: {source_branch}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Read CLAUDE.md for project context\n\
                  - Check review comments: `glab mr view {iid} --comments`\n\
                  - Address each comment\n\
                  - Commit and push fixes"
@@ -135,7 +288,6 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  Comment: {comment}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Read CLAUDE.md for project context\n\
                  - Address the request in the comment\n\
                  - Reply using `glab mr note {mr_iid}`"
             )
@@ -146,7 +298,6 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  Comment: {comment}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Read CLAUDE.md for project context\n\
                  - Address the request in the comment\n\
                  - Reply using `glab issue note {issue_iid}`"
             )
@@ -158,15 +309,16 @@ async fn post_result(
     trigger: &TriggerReason,
     result: &ClaudeOutput,
     project_path: &str,
-    gitlab: &GitLabClient,
+    provider: &dyn GitProvider,
 ) -> Result<()> {
-    let (noteable_type, noteable_iid) = match trigger {
+    use crate::provider::NoteTarget;
+    let target = match trigger {
         TriggerReason::Issue { iid, .. } | TriggerReason::IssueComment { issue_iid: iid, .. } => {
-            ("issues", *iid)
+            NoteTarget::Issue(*iid)
         }
         TriggerReason::ReviewMR { iid, .. }
         | TriggerReason::FixReview { iid, .. }
-        | TriggerReason::MRComment { mr_iid: iid, .. } => ("merge_requests", *iid),
+        | TriggerReason::MRComment { mr_iid: iid, .. } => NoteTarget::MergeRequest(*iid),
     };
 
     let status = if result.is_error { "error" } else { "completed" };
@@ -183,7 +335,7 @@ async fn post_result(
         }
     );
 
-    gitlab.post_note(project_path, noteable_type, noteable_iid, &body).await
+    provider.post_note(project_path, target, &body).await
 }
 
 async fn push_changes(work_dir: &str) -> Result<()> {
@@ -224,68 +376,143 @@ async fn push_changes(work_dir: &str) -> Result<()> {
     Ok(())
 }
 
-const DEFAULTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/defaults");
-
-async fn ensure_claude_config(work_dir: &str) -> Result<()> {
-    let claude_md = Path::new(work_dir).join("CLAUDE.md");
-    let claude_dir = Path::new(work_dir).join(".claude");
-
-    if !claude_md.exists() {
-        info!("CLAUDE.md not found, copying defaults");
-        tokio::fs::copy(
-            Path::new(DEFAULTS_DIR).join("CLAUDE.md"),
-            &claude_md,
-        )
-        .await
-        .context("failed to copy default CLAUDE.md")?;
-    } else {
-        info!("CLAUDE.md already exists, keeping project version");
-    }
-
-    if !claude_dir.exists() {
-        info!(".claude/ not found, copying defaults");
-        copy_dir_recursive(
-            &Path::new(DEFAULTS_DIR).join(".claude"),
-            &claude_dir,
-        )
-        .await
-        .context("failed to copy default .claude/")?;
-    } else {
-        // Ensure settings.json exists even if .claude/ dir is present
-        let settings = claude_dir.join("settings.json");
-        if !settings.exists() {
-            warn!(".claude/ exists but settings.json missing, copying default");
-            tokio::fs::copy(
-                Path::new(DEFAULTS_DIR).join(".claude/settings.json"),
-                &settings,
-            )
-            .await
-            .context("failed to copy default settings.json")?;
+/// Writes a per-task `.claude/settings.local.json` pointing Claude Code at the
+/// shared authcheck hook. `settings.local.json` is the conventional Claude
+/// Code per-machine override file (typically gitignored), so it does not need
+/// to be committed by the project — projects that want it gitignored just need
+/// `.claude/settings.local.json` in their `.gitignore` (Claude Code adds this
+/// automatically on first run in most setups).
+async fn write_settings_local(
+    work_dir: &std::path::Path,
+    hook_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let claude_dir = work_dir.join(".claude");
+    tokio::fs::create_dir_all(&claude_dir).await?;
+    let body = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{ "type": "command", "command": hook_path.to_string_lossy() }]
+                },
+                {
+                    "matcher": "AskUserQuestion",
+                    "hooks": [{ "type": "command", "command": hook_path.to_string_lossy() }]
+                }
+            ]
         }
-    }
-
+    });
+    let path = claude_dir.join("settings.local.json");
+    tokio::fs::write(&path, serde_json::to_vec_pretty(&body)?).await?;
     Ok(())
 }
 
-fn copy_dir_recursive<'a>(
-    src: &'a Path,
-    dst: &'a Path,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-    Box::pin(async move {
-        tokio::fs::create_dir_all(dst).await?;
+/// Scan the newline-delimited stream-json output for the final
+/// `{"type":"result", ...}` event and decode it as ClaudeOutput.
+fn parse_stream_json_result(stdout: &str) -> Result<ClaudeOutput> {
+    for line in stdout.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v.get("type").and_then(|t| t.as_str()) == Some("result") {
+            return serde_json::from_value::<ClaudeOutput>(v)
+                .context("parsing result event");
+        }
+    }
+    anyhow::bail!("no result event found in stream-json output")
+}
 
-        let mut entries = tokio::fs::read_dir(src).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let src_path = entry.path();
-            let dst_path = dst.join(entry.file_name());
+fn tail(s: &str, n: usize) -> &str {
+    if s.len() <= n {
+        s
+    } else {
+        &s[s.len() - n..]
+    }
+}
 
-            if entry.file_type().await?.is_dir() {
-                copy_dir_recursive(&src_path, &dst_path).await?;
-            } else {
-                tokio::fs::copy(&src_path, &dst_path).await?;
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+async fn stream_into_entry<R>(
+    reader: R,
+    entry: LiveEntry,
+    which: Stream,
+    mut session_tx: Option<tokio::sync::oneshot::Sender<String>>,
+    mut budget: Option<(u64, tokio::sync::oneshot::Sender<u64>)>,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut reader = BufReader::new(reader);
+    let mut buf = Vec::new();
+    let mut output_tokens: u64 = 0;
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf).await {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                let chunk = String::from_utf8_lossy(&buf).into_owned();
+                {
+                    let mut guard = entry.lock().await;
+                    match which {
+                        Stream::Stdout => guard.stdout.push_str(&chunk),
+                        Stream::Stderr => guard.stderr.push_str(&chunk),
+                    }
+                }
+                // Sniff session_id from the first stream-json line that has it.
+                // The init event arrives within the first few lines; we send
+                // it ASAP so a pause/kill still leaves something to resume from.
+                if let Some(tx) = session_tx.take() {
+                    match extract_session_id(chunk.trim()) {
+                        Some(sid) => {
+                            let _ = tx.send(sid);
+                        }
+                        None => session_tx = Some(tx),
+                    }
+                }
+                // Track output tokens for budget abort.
+                if let Some((limit, _)) = budget.as_ref() {
+                    if let Some(delta) = extract_output_tokens(chunk.trim()) {
+                        output_tokens = output_tokens.saturating_add(delta);
+                        if output_tokens >= *limit {
+                            if let Some((_, tx)) = budget.take() {
+                                let _ = tx.send(output_tokens);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "reading process pipe");
+                break;
             }
         }
-
-        Ok(())
-    })
+    }
 }
+
+/// Pull `usage.output_tokens` from a single stream-json line, if present.
+fn extract_output_tokens(line: &str) -> Option<u64> {
+    if line.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let usage = v
+        .get("usage")
+        .or_else(|| v.get("message").and_then(|m| m.get("usage")))?;
+    usage.get("output_tokens").and_then(|n| n.as_u64())
+}
+
+fn extract_session_id(line: &str) -> Option<String> {
+    if line.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    v.get("session_id").and_then(|s| s.as_str()).map(String::from)
+}
+

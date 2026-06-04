@@ -38,7 +38,11 @@ pub enum TriggerReason {
 impl TriggerReason {
     pub fn event_id(&self) -> String {
         match self {
-            Self::Issue { iid, .. } => format!("issue-{iid}"),
+            // Hash title+description so editing the issue creates a new task,
+            // but a no-op re-fire (same content twice in a row) is deduped.
+            Self::Issue { iid, title, description, .. } => {
+                format!("issue-{iid}-{}", hash_str(&format!("{title}\n{description}")))
+            }
             Self::ReviewMR { iid, .. } => format!("review-mr-{iid}"),
             Self::FixReview { iid, .. } => format!("fix-review-{iid}"),
             Self::MRComment { mr_iid, comment, .. } => {
@@ -65,6 +69,22 @@ impl TriggerReason {
             Self::ReviewMR { source_branch, .. }
             | Self::FixReview { source_branch, .. }
             | Self::MRComment { source_branch, .. } => Some(source_branch),
+            _ => None,
+        }
+    }
+
+    pub fn issue_iid(&self) -> Option<u64> {
+        match self {
+            Self::Issue { iid, .. } | Self::IssueComment { issue_iid: iid, .. } => Some(*iid),
+            _ => None,
+        }
+    }
+
+    pub fn pr_iid(&self) -> Option<u64> {
+        match self {
+            Self::ReviewMR { iid, .. }
+            | Self::FixReview { iid, .. }
+            | Self::MRComment { mr_iid: iid, .. } => Some(*iid),
             _ => None,
         }
     }

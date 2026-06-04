@@ -1,0 +1,18 @@
+<script setup lang="ts">
+import type { ProviderKind } from "../types/api";
+
+defineProps<{ provider: ProviderKind }>();
+</script>
+
+<template>
+  <span
+    class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium uppercase tracking-wide"
+    :class="
+      provider === 'gitlab'
+        ? 'bg-orange-100 text-orange-800'
+        : 'bg-gray-900 text-white'
+    "
+  >
+    {{ provider }}
+  </span>
+</template>

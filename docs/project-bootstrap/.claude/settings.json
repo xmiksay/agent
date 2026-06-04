@@ -1,0 +1,26 @@
+{
+  "$comment_purpose": "Team-shared Claude Code settings, committed to the repo. The authcheck hook is NOT configured here — the agent writes that into .claude/settings.local.json (gitignored) at task time so it can point at the absolute path of the shared hook script on the agent host. Interactive developers running `claude` locally do not get the authcheck hook, which is intentional.",
+
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~/*)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard*)",
+      "Bash(sudo *)",
+      "Bash(curl * | sh*)",
+      "Bash(curl * | bash*)",
+      "Bash(wget * | sh*)",
+      "Bash(wget * | bash*)"
+    ]
+  }
+}

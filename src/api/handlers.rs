@@ -60,3 +60,70 @@ pub async fn confirm_task(
 
     Ok(StatusCode::ACCEPTED)
 }
+
+#[derive(Serialize)]
+pub struct RetryResponse {
+    pub task_id: Uuid,
+}
+
+pub async fn retry_task(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RetryResponse>, (StatusCode, String)> {
+    let new_id = state
+        .task_store
+        .retry_task(id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    Ok(Json(RetryResponse { task_id: new_id }))
+}
+
+pub async fn kill_task(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .task_store
+        .kill_task(id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub async fn task_output(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<crate::jobs::output_log::TaskOutput>, StatusCode> {
+    state
+        .task_store
+        .output_log()
+        .get(id)
+        .await
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+pub async fn delete_task(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .task_store
+        .delete_task(id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn continue_task(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RetryResponse>, (StatusCode, String)> {
+    let new_id = state
+        .task_store
+        .continue_task(id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(RetryResponse { task_id: new_id }))
+}

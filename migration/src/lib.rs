@@ -2,6 +2,15 @@ pub use sea_orm_migration::prelude::*;
 
 mod m20260415_000001_create_tasks;
 mod m20260415_000002_create_task_results;
+mod m20260601_000003_create_projects;
+mod m20260601_000004_create_project_branches;
+mod m20260601_000005_extend_tasks;
+mod m20260601_000006_create_auth_requests;
+mod m20260601_000007_create_git_services;
+mod m20260601_000008_add_git_service_to_tasks;
+mod m20260601_000009_add_task_session_id;
+mod m20260601_000010_add_task_pid;
+mod m20260601_000011_add_auth_request_metadata;
 
 pub struct Migrator;
 
@@ -11,6 +20,15 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20260415_000001_create_tasks::Migration),
             Box::new(m20260415_000002_create_task_results::Migration),
+            Box::new(m20260601_000003_create_projects::Migration),
+            Box::new(m20260601_000004_create_project_branches::Migration),
+            Box::new(m20260601_000005_extend_tasks::Migration),
+            Box::new(m20260601_000006_create_auth_requests::Migration),
+            Box::new(m20260601_000007_create_git_services::Migration),
+            Box::new(m20260601_000008_add_git_service_to_tasks::Migration),
+            Box::new(m20260601_000009_add_task_session_id::Migration),
+            Box::new(m20260601_000010_add_task_pid::Migration),
+            Box::new(m20260601_000011_add_auth_request_metadata::Migration),
         ]
     }
 }

@@ -1,0 +1,48 @@
+use sea_orm::entity::prelude::*;
+use serde::Serialize;
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize)]
+#[sea_orm(table_name = "projects")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
+    pub provider: String,
+    pub project_slug: String,
+    pub full_name: String,
+    pub remote_url: String,
+    pub default_branch: String,
+    pub my_username: String,
+    pub allowed_operations: Json,
+    #[sea_orm(column_type = "Text")]
+    pub notes: String,
+    pub git_service_id: Option<Uuid>,
+    pub created_at: DateTimeWithTimeZone,
+    pub updated_at: DateTimeWithTimeZone,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(has_many = "super::project_branches::Entity")]
+    Branch,
+    #[sea_orm(
+        belongs_to = "super::git_services::Entity",
+        from = "Column::GitServiceId",
+        to = "super::git_services::Column::Id",
+        on_delete = "SetNull"
+    )]
+    GitService,
+}
+
+impl Related<super::project_branches::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Branch.def()
+    }
+}
+
+impl Related<super::git_services::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::GitService.def()
+    }
+}
+
+impl ActiveModelBehavior for ActiveModel {}

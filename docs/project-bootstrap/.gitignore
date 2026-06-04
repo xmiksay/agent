@@ -1,0 +1,10 @@
+# Append the following entries to your project's existing .gitignore.
+
+# Per-machine Claude Code overrides. The Claude Agent writes this file into the
+# worktree at task time to wire up the authcheck hook; it must never be
+# committed.
+.claude/settings.local.json
+
+# Claude Code's local caches / transient state.
+.claude/cache/
+.claude/state/

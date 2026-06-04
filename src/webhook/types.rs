@@ -14,6 +14,10 @@ pub struct IssueEvent {
     pub user: User,
     pub project: Project,
     pub object_attributes: IssueAttributes,
+    /// GitLab puts assignees at the top level (object_attributes only has
+    /// `assignee_ids`).
+    #[serde(default)]
+    pub assignees: Vec<Assignee>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -21,6 +25,10 @@ pub struct MergeRequestEvent {
     pub user: User,
     pub project: Project,
     pub object_attributes: MergeRequestAttributes,
+    #[serde(default)]
+    pub assignees: Vec<Assignee>,
+    #[serde(default)]
+    pub reviewers: Vec<Reviewer>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,8 +61,6 @@ pub struct IssueAttributes {
     pub title: String,
     pub description: Option<String>,
     pub action: Option<String>,
-    #[serde(default)]
-    pub assignees: Vec<Assignee>,
     pub labels: Option<Vec<Label>>,
     pub url: String,
 }
@@ -70,10 +76,6 @@ pub struct MergeRequestAttributes {
     pub target_branch: String,
     pub author_id: u64,
     pub url: String,
-    #[serde(default)]
-    pub reviewers: Vec<Reviewer>,
-    #[serde(default)]
-    pub assignees: Vec<Assignee>,
 }
 
 #[derive(Debug, Deserialize)]
