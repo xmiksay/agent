@@ -2,14 +2,18 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::{info, warn, error};
 
 
+use crate::agent::{AgentBackend, ClaudeCode};
 use crate::config::Config;
 use crate::git_service::GitService;
-use crate::jobs::output_log::{LiveEntry, TaskOutputLog};
+use crate::jobs::hub::LiveSessions;
+use crate::jobs::output_log::TaskOutputLog;
+use crate::jobs::prompt::build_prompt;
+use crate::jobs::stream::{Stream, stream_into_entry, tail};
 use crate::jobs::types::{ClaudeOutput, TriggerReason};
 use crate::project::{BranchStatus, NewBranchEntry, ProjectStore, ProviderKind};
 use crate::provider::GitProvider;
@@ -30,6 +34,7 @@ pub async fn run_job(
     workspace: Arc<Workspace>,
     project_store: Arc<ProjectStore>,
     output_log: TaskOutputLog,
+    hub: LiveSessions,
     resume_session_id: Option<String>,
     prompt_override: Option<String>,
     mut pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
@@ -64,9 +69,12 @@ pub async fn run_job(
     // normalizers. The agent host has SSH keys configured for the bot user, so
     // we clone/fetch directly — no token injection.
     workspace.clone_or_fetch(&work_dir, &git_url, &branch, &default_branch).await?;
-    write_settings_local(&work_dir, &workspace.authcheck_hook_path())
+
+    // Hardcoded to Claude Code for now; a future per-task config will choose.
+    let backend: Arc<dyn AgentBackend> = Arc::new(ClaudeCode);
+    write_worktree_files(&work_dir, backend.worktree_files(&workspace.authcheck_hook_path()))
         .await
-        .context("writing .claude/settings.local.json")?;
+        .context("writing agent worktree files")?;
 
     if let Some(pid) = project_id {
         let issue_iid = trigger.issue_iid().map(|v| v as i64);
@@ -92,28 +100,15 @@ pub async fn run_job(
         Some(p) if !p.trim().is_empty() => p,
         _ => build_prompt(&trigger, &branch),
     };
-    info!(%prompt, "running claude");
+    info!(%prompt, program = backend.program(), "running agent");
 
     let agent_port = config
         .listen_addr
         .rsplit_once(':')
         .map(|(_, p)| p.to_string())
         .unwrap_or_else(|| "3000".to_string());
-    // stream-json + --verbose emits newline-delimited JSON events as claude
-    // works, so we can show progress while it runs. The last event is
-    // `{"type":"result", ...}` with the same fields the old `json` format
-    // returned in a single blob.
-    let mut claude_args: Vec<String> = vec!["-p".into(), prompt.clone()];
-    if let Some(sid) = resume_session_id.as_deref() {
-        claude_args.push("-r".into());
-        claude_args.push(sid.into());
-    }
-    claude_args.extend([
-        "--output-format".into(),
-        "stream-json".into(),
-        "--verbose".into(),
-    ]);
-    let command_line = format!("claude {}", claude_args.join(" "));
+    let agent_args = backend.build_args(resume_session_id.as_deref());
+    let command_line = format!("{} {}", backend.program(), agent_args.join(" "));
 
     let entry = if resume_session_id.is_some() {
         output_log.resume_or_start(task_id, command_line.clone()).await
@@ -128,24 +123,51 @@ pub async fn run_job(
         ProviderKind::Gitlab => ("GITLAB_TOKEN", service.token.clone()),
     };
 
-    let mut child = Command::new("claude")
-        .args(&claude_args)
-        .current_dir(&work_dir)
-        .env("CLAUDE_TASK_ID", task_id.to_string())
-        .env("AGENT_PORT", agent_port)
+    let mut cmd = Command::new(backend.program());
+    cmd.args(&agent_args).current_dir(&work_dir);
+    for (key, value) in backend.extra_env(task_id, &agent_port) {
+        cmd.env(key, value);
+    }
+    let mut child = cmd
         .env(provider_token_var, provider_token_value)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .context("failed to spawn claude")?;
+        .context("failed to spawn agent")?;
 
     if let Some(pid) = child.id() {
-        info!(%task_id, pid, "claude process running");
+        info!(%task_id, pid, "agent process running");
         if let Some(tx) = pid_tx.take() {
             let _ = tx.send(pid);
         }
     }
+
+    // Interactive stdin: a pump task drains operator messages from the hub into
+    // the child's stdin. The initial prompt is the first message. Holding the
+    // ChildStdin keeps the session alive; the hub's `stop`/`end` drops the
+    // sender, the pump sees the channel close, drops ChildStdin → EOF → claude
+    // finishes the current turn and exits.
+    let mut child_stdin = child.stdin.take().expect("piped stdin");
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<String>(32);
+    let stdin_pump = tokio::spawn(async move {
+        while let Some(line) = stdin_rx.recv().await {
+            if child_stdin.write_all(line.as_bytes()).await.is_err()
+                || child_stdin.write_all(b"\n").await.is_err()
+                || child_stdin.flush().await.is_err()
+            {
+                break;
+            }
+        }
+    });
+    // Send the initial prompt, then hand the sender to the hub (only the hub
+    // holds a sender now, so a graceful Stop closes stdin deterministically).
+    stdin_tx
+        .send(backend.encode_user_message(&prompt))
+        .await
+        .context("failed to queue initial prompt")?;
+    hub.register(task_id, backend.clone(), stdin_tx).await;
 
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
@@ -162,6 +184,9 @@ pub async fn run_job(
         stdout_pipe,
         entry.clone(),
         Stream::Stdout,
+        backend.clone(),
+        hub.clone(),
+        task_id,
         session_tx,
         Some((token_limit, budget_tx)),
     ));
@@ -169,6 +194,9 @@ pub async fn run_job(
         stderr_pipe,
         entry.clone(),
         Stream::Stderr,
+        backend.clone(),
+        hub.clone(),
+        task_id,
         None,
         None,
     ));
@@ -190,9 +218,15 @@ pub async fn run_job(
     };
     let exit_code = exit_status.code();
 
-    // Drain readers (they'll finish once the pipes hit EOF).
+    // The child is gone; stop the stdin pump and drain the readers (they finish
+    // once the pipes hit EOF).
+    stdin_pump.abort();
     let _ = stdout_reader.await;
     let _ = stderr_reader.await;
+
+    // Close the live session: flush the unpersisted event tail to event_log and
+    // drop the channel so any attached WebSocket finishes.
+    hub.end(task_id).await;
 
     // Snapshot the streamed state for downstream use.
     let (stdout, stderr) = {
@@ -225,12 +259,12 @@ pub async fn run_job(
         }
     }
 
-    let claude_result = parse_stream_json_result(&stdout).with_context(|| {
+    let claude_result = backend.parse_result(&stdout).with_context(|| {
         let stderr_tail = tail(stderr.trim(), 600);
         if stderr_tail.is_empty() {
-            "no result event in claude stream-json output".to_string()
+            "no result event in agent output".to_string()
         } else {
-            format!("no result event in claude stream-json output\nstderr tail:\n{stderr_tail}")
+            format!("no result event in agent output\nstderr tail:\n{stderr_tail}")
         }
     })?;
 
@@ -261,84 +295,6 @@ pub async fn run_job(
 
     // NOTE: checkout is intentionally NOT removed here — see workspace lifecycle.
     Ok(claude_result)
-}
-
-fn build_prompt(trigger: &TriggerReason, branch: &str) -> String {
-    match trigger {
-        TriggerReason::Issue { iid, title, description, url, .. } => {
-            format!(
-                "Implement GitLab issue #{iid}: {title}\n\n\
-                 Description:\n{description}\n\n\
-                 URL: {url}\n\n\
-                 Instructions:\n\
-                 - You are already on branch `{branch}`, checked out from the default \
-                   branch. Do NOT create or switch branches.\n\
-                 - Implement the issue\n\
-                 - Commit your changes\n\
-                 - Push with `git push -u origin HEAD`\n\
-                 - Open a merge request with `glab mr create --source-branch {branch} --fill`"
-            )
-        }
-        TriggerReason::ReviewMR { iid, title, source_branch, target_branch, url, .. } => {
-            format!(
-                "Review merge request !{iid}: {title}\n\
-                 Branch: {source_branch} -> {target_branch}\n\
-                 URL: {url}\n\n\
-                 Instructions:\n\
-                 - Review the diff: `git diff {target_branch}...{source_branch}`\n\
-                 - Post your review as a comment using `glab mr note {iid}`\n\
-                 - If changes are needed, list them clearly\n\
-                 - If everything looks good, approve with `glab mr approve {iid}`"
-            )
-        }
-        TriggerReason::FixReview { iid, title, source_branch, url, review_body, .. } => {
-            let review_section = if review_body.trim().is_empty() {
-                String::new()
-            } else {
-                format!("\nReview body:\n{review_body}\n")
-            };
-            format!(
-                "Fix review comments on MR !{iid}: {title}\n\
-                 Branch: {source_branch}\n\
-                 URL: {url}\n\
-                 {review_section}\n\
-                 Instructions:\n\
-                 - Check review comments: `glab mr view {iid} --comments`\n\
-                 - Address each comment\n\
-                 - Commit and push fixes"
-            )
-        }
-        TriggerReason::MRComment { mr_iid, comment, url, .. } => {
-            format!(
-                "A reviewer commented on MR !{mr_iid}\n\
-                 Comment: {comment}\n\
-                 URL: {url}\n\n\
-                 Instructions:\n\
-                 - Treat the comment as a change request against this branch\n\
-                 - Make the requested code changes\n\
-                 - Commit the changes with a message that references the comment\n\
-                 - Push so the MR picks up the new commit\n\
-                 - Reply on the thread with `glab mr note {mr_iid}` summarising what changed"
-            )
-        }
-        TriggerReason::IssueComment { issue_iid, comment, url, .. } => {
-            format!(
-                "A new comment was posted on issue #{issue_iid} (assigned to the bot)\n\
-                 Comment: {comment}\n\
-                 URL: {url}\n\n\
-                 Instructions:\n\
-                 - You are already on branch `{branch}` (the existing feature branch for \
-                   this issue). Do NOT create or switch branches.\n\
-                 - Re-read the issue and any prior conversation to recover context\n\
-                 - Treat the comment as additional guidance or a follow-up request\n\
-                 - Rework or extend the implementation as needed\n\
-                 - Commit and push any code changes with `git push -u origin HEAD`\n\
-                 - If no merge request exists yet for `{branch}`, open one with \
-                   `glab mr create --source-branch {branch} --fill`\n\
-                 - Reply to the comment using `glab issue note {issue_iid}` summarising what changed"
-            )
-        }
-    }
 }
 
 async fn post_result(
@@ -415,150 +371,23 @@ async fn push_changes(work_dir: &str) -> Result<()> {
     Ok(())
 }
 
-/// Writes a per-task `.claude/settings.local.json` pointing Claude Code at the
-/// shared authcheck hook. `settings.local.json` is the conventional Claude
-/// Code per-machine override file (typically gitignored), so it does not need
-/// to be committed by the project — projects that want it gitignored just need
-/// `.claude/settings.local.json` in their `.gitignore` (Claude Code adds this
-/// automatically on first run in most setups).
-async fn write_settings_local(
+/// Materialize the backend's per-run worktree files (agent config, hooks),
+/// creating parent directories as needed.
+async fn write_worktree_files(
     work_dir: &std::path::Path,
-    hook_path: &std::path::Path,
+    files: Vec<crate::agent::WorktreeFile>,
 ) -> anyhow::Result<()> {
-    let claude_dir = work_dir.join(".claude");
-    tokio::fs::create_dir_all(&claude_dir).await?;
-    // `bypassPermissions` skips Claude Code's interactive permission prompts
-    // (which can't be answered in headless `-p` mode). The Bash + AskUserQuestion
-    // PreToolUse hooks still fire — they're the actual policy layer — so this
-    // only unblocks Edit/Write/MultiEdit/Read/etc., which are not gated here.
-    let body = serde_json::json!({
-        "permissions": {
-            "defaultMode": "bypassPermissions"
-        },
-        "hooks": {
-            "PreToolUse": [
-                {
-                    "matcher": "Bash",
-                    "hooks": [{ "type": "command", "command": hook_path.to_string_lossy() }]
-                },
-                {
-                    "matcher": "AskUserQuestion",
-                    "hooks": [{ "type": "command", "command": hook_path.to_string_lossy() }]
-                }
-            ]
+    for file in files {
+        let path = work_dir.join(&file.rel_path);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("creating {}", parent.display()))?;
         }
-    });
-    let path = claude_dir.join("settings.local.json");
-    tokio::fs::write(&path, serde_json::to_vec_pretty(&body)?).await?;
+        tokio::fs::write(&path, file.contents)
+            .await
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
     Ok(())
-}
-
-/// Scan the newline-delimited stream-json output for the final
-/// `{"type":"result", ...}` event and decode it as ClaudeOutput.
-fn parse_stream_json_result(stdout: &str) -> Result<ClaudeOutput> {
-    for line in stdout.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if v.get("type").and_then(|t| t.as_str()) == Some("result") {
-            return serde_json::from_value::<ClaudeOutput>(v)
-                .context("parsing result event");
-        }
-    }
-    anyhow::bail!("no result event found in stream-json output")
-}
-
-fn tail(s: &str, n: usize) -> &str {
-    if s.len() <= n {
-        s
-    } else {
-        &s[s.len() - n..]
-    }
-}
-
-enum Stream {
-    Stdout,
-    Stderr,
-}
-
-async fn stream_into_entry<R>(
-    reader: R,
-    entry: LiveEntry,
-    which: Stream,
-    mut session_tx: Option<tokio::sync::oneshot::Sender<String>>,
-    mut budget: Option<(u64, tokio::sync::oneshot::Sender<u64>)>,
-) where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut reader = BufReader::new(reader);
-    let mut buf = Vec::new();
-    let mut output_tokens: u64 = 0;
-    loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf).await {
-            Ok(0) => break, // EOF
-            Ok(_) => {
-                let chunk = String::from_utf8_lossy(&buf).into_owned();
-                {
-                    let mut guard = entry.lock().await;
-                    match which {
-                        Stream::Stdout => guard.stdout.push_str(&chunk),
-                        Stream::Stderr => guard.stderr.push_str(&chunk),
-                    }
-                }
-                // Sniff session_id from the first stream-json line that has it.
-                // The init event arrives within the first few lines; we send
-                // it ASAP so a pause/kill still leaves something to resume from.
-                if let Some(tx) = session_tx.take() {
-                    match extract_session_id(chunk.trim()) {
-                        Some(sid) => {
-                            let _ = tx.send(sid);
-                        }
-                        None => session_tx = Some(tx),
-                    }
-                }
-                // Track output tokens for budget abort.
-                if let Some((limit, _)) = budget.as_ref() {
-                    if let Some(delta) = extract_output_tokens(chunk.trim()) {
-                        output_tokens = output_tokens.saturating_add(delta);
-                        if output_tokens >= *limit {
-                            if let Some((_, tx)) = budget.take() {
-                                let _ = tx.send(output_tokens);
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "reading process pipe");
-                break;
-            }
-        }
-    }
-}
-
-/// Pull `usage.output_tokens` from a single stream-json line, if present.
-fn extract_output_tokens(line: &str) -> Option<u64> {
-    if line.is_empty() {
-        return None;
-    }
-    let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    let usage = v
-        .get("usage")
-        .or_else(|| v.get("message").and_then(|m| m.get("usage")))?;
-    usage.get("output_tokens").and_then(|n| n.as_u64())
-}
-
-fn extract_session_id(line: &str) -> Option<String> {
-    if line.is_empty() {
-        return None;
-    }
-    let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    v.get("session_id").and_then(|s| s.as_str()).map(String::from)
 }
 

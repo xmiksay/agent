@@ -24,6 +24,12 @@ pub struct Model {
     pub pid: Option<i64>,
     #[sea_orm(column_type = "Text", nullable)]
     pub pending_message: Option<String>,
+    // Persisted agent event stream, flushed in batches from the live hub. Large
+    // and only needed by the dedicated /events endpoint — never inline it in the
+    // task list/detail JSON.
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    #[serde(skip_serializing)]
+    pub event_log: Option<Json>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -6,7 +6,6 @@ import type {
   Task,
   TaskDetail,
   TaskEdits,
-  TaskOutput,
 } from "../types/api";
 
 export const tasksApi = {
@@ -34,8 +33,8 @@ export const tasksApi = {
   remove(id: string): Promise<void> {
     return api(`/api/tasks/${id}`, { method: "DELETE" });
   },
-  output(id: string): Promise<TaskOutput> {
-    return api(`/api/tasks/${id}/output`);
+  events(id: string): Promise<{ events: unknown[] }> {
+    return api(`/api/tasks/${id}/events`);
   },
   pushMessage(id: string, body: string): Promise<void> {
     return api(`/api/tasks/${id}/message`, {

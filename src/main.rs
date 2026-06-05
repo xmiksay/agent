@@ -1,3 +1,4 @@
+mod agent;
 mod api;
 mod auth;
 mod config;
@@ -9,6 +10,7 @@ mod provider;
 mod spa;
 mod webhook;
 mod workspace;
+mod ws;
 
 use std::sync::Arc;
 
@@ -25,6 +27,7 @@ use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::git_service::GitServiceStore;
+use crate::jobs::hub::LiveSessions;
 use crate::jobs::output_log::TaskOutputLog;
 use crate::jobs::registry::RunningTasks;
 use crate::jobs::store::TaskStore;
@@ -72,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
     let auth_waiter = AuthWaiter::new();
     let output_log = TaskOutputLog::new();
     let running = RunningTasks::new();
+    let hub = LiveSessions::new(db.clone());
     let task_store = Arc::new(TaskStore::new(
         db,
         config.clone(),
@@ -80,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
         workspace.clone(),
         output_log,
         running,
+        hub,
     ));
 
     // Any task left running/pending in the DB was orphaned by a previous
@@ -119,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/{id}/continue", post(api::handlers::continue_task))
         .route("/api/tasks/{id}/message", post(api::handlers::push_message))
         .route("/api/tasks/{id}/diff", get(api::handlers::task_diff))
-        .route("/api/tasks/{id}/output", get(api::handlers::task_output))
+        .route("/api/tasks/{id}/events", get(api::handlers::task_events))
         .route("/api/projects", get(api::projects::list_projects))
         .route(
             "/api/projects/{id}",
@@ -172,6 +177,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/webhook/gitlab/{slug}", post(webhook::gitlab::handle))
         .route("/webhook/github/{slug}", post(webhook::github::handle))
         .route("/internal/authcheck", post(auth::handlers::authcheck))
+        // The live stream authorizes via a `?token=` query param inside the
+        // handler (browsers can't set headers on a WebSocket), so it sits
+        // outside the bearer middleware that guards `/api/*`.
+        .route("/ws/tasks/{id}", get(ws::task_stream))
         .merge(api_routes)
         .route("/health", get(health))
         .with_state(state)

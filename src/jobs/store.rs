@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::entity::{task_results, tasks};
+use crate::jobs::hub::LiveSessions;
 use crate::jobs::output_log::TaskOutputLog;
 use crate::jobs::registry::RunningTasks;
 use crate::jobs::runner::run_job;
@@ -28,6 +29,7 @@ pub struct TaskStore {
     workspace: Arc<Workspace>,
     output_log: TaskOutputLog,
     running: RunningTasks,
+    hub: LiveSessions,
 }
 
 impl TaskStore {
@@ -39,6 +41,7 @@ impl TaskStore {
         workspace: Arc<Workspace>,
         output_log: TaskOutputLog,
         running: RunningTasks,
+        hub: LiveSessions,
     ) -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_jobs)),
@@ -50,11 +53,16 @@ impl TaskStore {
             workspace,
             output_log,
             running,
+            hub,
         }
     }
 
     pub fn output_log(&self) -> &TaskOutputLog {
         &self.output_log
+    }
+
+    pub fn hub(&self) -> &LiveSessions {
+        &self.hub
     }
 
     pub fn db(&self) -> &DatabaseConnection {
@@ -104,6 +112,9 @@ impl TaskStore {
         if !self.running.abort(task_id).await {
             anyhow::bail!("task is not running");
         }
+        // The runner future was aborted before it could flush/close the live
+        // session — do it here so the stdin pump stops and the WS detaches.
+        self.hub.end(task_id).await;
         // Reflect the kill in the DB so the UI doesn't show "running" forever.
         let _ = self.finish_task(task_id, "killed").await;
         info!(%task_id, "aborted running task");
@@ -115,6 +126,7 @@ impl TaskStore {
         // the claude Child (kill_on_drop=true) → SIGKILL.
         let was_running = self.running.abort(task_id).await;
         if was_running {
+            self.hub.end(task_id).await;
             info!(%task_id, "aborted running task before delete");
         }
 
@@ -194,6 +206,7 @@ impl TaskStore {
         // Pause-if-running, then resume.
         let was_running = self.running.abort(task_id).await;
         if was_running {
+            self.hub.end(task_id).await;
             let _ = self.finish_task(task_id, "killed").await;
             info!(%task_id, "paused running task to deliver pushed message");
         }
@@ -447,6 +460,7 @@ impl TaskStore {
             session_id: Set(None),
             pid: Set(None),
             pending_message: Set(None),
+            event_log: Set(None),
         };
 
         tasks::Entity::insert(task)
@@ -626,6 +640,7 @@ impl TaskStore {
                 store.workspace.clone(),
                 store.project_store.clone(),
                 store.output_log.clone(),
+                store.hub.clone(),
                 resume_session_id,
                 prompt_override,
                 Some(pid_tx),
@@ -751,6 +766,19 @@ impl TaskStore {
             .all(&self.db)
             .await
             .context("failed to list tasks")
+    }
+
+    /// Persisted agent event history (`event_log`) in order; empty if none yet.
+    pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<serde_json::Value>> {
+        let task = tasks::Entity::find_by_id(task_id)
+            .one(&self.db)
+            .await
+            .context("db error")?
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
+        Ok(match task.event_log {
+            Some(serde_json::Value::Array(items)) => items,
+            _ => Vec::new(),
+        })
     }
 
     pub async fn get_task(

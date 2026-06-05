@@ -157,17 +157,26 @@ pub async fn kill_task(
     Ok(StatusCode::ACCEPTED)
 }
 
-pub async fn task_output(
+#[derive(Serialize)]
+pub struct EventsResponse {
+    /// Persisted agent events for the task, in order. The array index is the
+    /// event `seq`, so the SPA can dedupe these against live WebSocket frames.
+    pub events: Vec<serde_json::Value>,
+}
+
+/// Durable event history from `tasks.event_log`. Live events for an active task
+/// arrive over the WebSocket; this seeds the timeline (and is the only source
+/// once a task has finished and its in-memory session is gone).
+pub async fn task_events(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<crate::jobs::output_log::TaskOutput>, StatusCode> {
-    state
+) -> Result<Json<EventsResponse>, (StatusCode, String)> {
+    let events = state
         .task_store
-        .output_log()
-        .get(id)
+        .task_events(id)
         .await
-        .map(Json)
-        .ok_or(StatusCode::NOT_FOUND)
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(Json(EventsResponse { events }))
 }
 
 pub async fn delete_task(

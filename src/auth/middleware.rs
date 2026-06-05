@@ -9,7 +9,6 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
-use subtle::ConstantTimeEq;
 
 use crate::AppState;
 
@@ -19,17 +18,12 @@ pub async fn require_bearer(
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let Some(expected) = state.config.api_bearer_token.as_deref() else {
-        return Ok(next.run(req).await);
-    };
-
     let provided = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .and_then(|v| v.strip_prefix("Bearer "));
 
-    if expected.as_bytes().ct_eq(provided.as_bytes()).unwrap_u8() == 1 {
+    if crate::auth::token_ok(state.config.api_bearer_token.as_deref(), provided) {
         Ok(next.run(req).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)

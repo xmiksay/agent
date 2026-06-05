@@ -164,30 +164,30 @@ async function saveEdit(t: Task) {
     </div>
     <NewTaskModal :open="newTaskOpen" @close="newTaskOpen = false" @created="onCreated" />
     <div v-if="store.loading" class="text-gray-500">Loading…</div>
-    <table v-else class="min-w-full bg-white rounded shadow-sm">
-      <thead class="text-left text-xs uppercase text-gray-500 border-b">
+    <table v-else class="tbl">
+      <thead>
         <tr>
-          <th class="px-3 py-2">Created</th>
-          <th class="px-3 py-2">Provider</th>
-          <th class="px-3 py-2">Project</th>
-          <th class="px-3 py-2">Branch</th>
-          <th class="px-3 py-2">Trigger</th>
-          <th class="px-3 py-2">Status</th>
-          <th class="px-3 py-2">Spent</th>
-          <th class="px-3 py-2">PID</th>
-          <th class="px-3 py-2"></th>
+          <th>Created</th>
+          <th>Provider</th>
+          <th>Project</th>
+          <th>Branch</th>
+          <th>Trigger</th>
+          <th>Status</th>
+          <th>Spent</th>
+          <th>PID</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="t in store.tasks" :key="t.id" class="border-b last:border-0">
-          <td class="px-3 py-2 text-xs text-gray-500">
+        <tr v-for="t in store.tasks" :key="t.id">
+          <td class="text-xs text-gray-500 whitespace-nowrap">
             {{ new Date(t.created_at).toLocaleString() }}
           </td>
-          <td class="px-3 py-2"><ProviderBadge :provider="t.provider" /></td>
-          <td class="px-3 py-2">
+          <td><ProviderBadge :provider="t.provider" /></td>
+          <td>
             <RouterLink :to="`/tasks/${t.id}`">{{ t.project_path }}</RouterLink>
           </td>
-          <td class="px-3 py-2 text-sm text-gray-600">
+          <td class="text-sm text-gray-600">
             <div v-if="editingId === t.id" class="flex items-center gap-1">
               <input
                 v-model="editBranch"
@@ -224,7 +224,7 @@ async function saveEdit(t: Task) {
               </button>
             </span>
           </td>
-          <td class="px-3 py-2 text-sm">
+          <td class="text-sm">
             <a
               v-if="triggerUrl(t)"
               :href="triggerUrl(t) ?? undefined"
@@ -238,10 +238,10 @@ async function saveEdit(t: Task) {
             </a>
             <template v-else>{{ t.trigger_type }}</template>
           </td>
-          <td class="px-3 py-2"><StatusPill :status="t.status" /></td>
-          <td class="px-3 py-2 text-xs font-mono text-gray-700">{{ spent(t) }}</td>
-          <td class="px-3 py-2 font-mono text-xs text-gray-600">{{ t.pid ?? "—" }}</td>
-          <td class="px-3 py-2 text-right">
+          <td><StatusPill :status="t.status" /></td>
+          <td class="text-xs font-mono text-gray-700 whitespace-nowrap">{{ spent(t) }}</td>
+          <td class="font-mono text-xs text-gray-600">{{ t.pid ?? "—" }}</td>
+          <td class="text-right whitespace-nowrap">
             <div class="inline-flex gap-3 items-center">
               <button
                 v-if="t.status === 'pending'"

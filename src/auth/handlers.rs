@@ -119,6 +119,16 @@ pub async fn authcheck(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let notifier = state.auth_waiter.register(auth.id);
 
+    // Surface the pending approval on the task's live stream so the operator
+    // sees it immediately on the task page (the Auth queue still polls).
+    if let Ok(payload) = serde_json::to_value(&auth) {
+        state
+            .task_store
+            .hub()
+            .publish_aux(req.task_id, crate::jobs::hub::EnvelopeKind::AuthRequest, payload)
+            .await;
+    }
+
     info!(auth_id = %auth.id, task_id = %req.task_id, "awaiting operator approval");
 
     let wait = tokio::time::timeout(Duration::from_secs(OPERATOR_TIMEOUT_SECS), notifier.notified());

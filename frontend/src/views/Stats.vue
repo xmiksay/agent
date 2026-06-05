@@ -108,21 +108,21 @@ function quickRange(days: number) {
     <div v-if="loading" class="text-gray-500">Loading…</div>
     <div v-else-if="data">
       <p class="text-sm text-gray-600 mb-3">{{ totalLine }}</p>
-      <table class="min-w-full bg-white rounded shadow-sm">
-        <thead class="text-left text-xs uppercase text-gray-500 border-b">
+      <table class="tbl">
+        <thead>
           <tr>
-            <th class="px-3 py-2">{{ groupOptions.find((g) => g.value === groupBy)?.label }}</th>
-            <th class="px-3 py-2 text-right">Tasks</th>
-            <th class="px-3 py-2 text-right">Spent</th>
-            <th class="px-3 py-2 text-right">Share</th>
+            <th>{{ groupOptions.find((g) => g.value === groupBy)?.label }}</th>
+            <th class="text-right">Tasks</th>
+            <th class="text-right">Spent</th>
+            <th class="text-right">Share</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in data.rows" :key="row.key" class="border-b last:border-0">
-            <td class="px-3 py-2 text-sm">{{ row.label }}</td>
-            <td class="px-3 py-2 text-right font-mono text-sm">{{ row.task_count }}</td>
-            <td class="px-3 py-2 text-right font-mono text-sm">{{ formatSecs(row.total_secs) }}</td>
-            <td class="px-3 py-2 text-right font-mono text-xs text-gray-500">
+          <tr v-for="row in data.rows" :key="row.key">
+            <td class="text-sm">{{ row.label }}</td>
+            <td class="text-right font-mono text-sm">{{ row.task_count }}</td>
+            <td class="text-right font-mono text-sm">{{ formatSecs(row.total_secs) }}</td>
+            <td class="text-right font-mono text-xs text-gray-500">
               {{
                 data.total_secs > 0
                   ? Math.round((row.total_secs / data.total_secs) * 100) + "%"

@@ -1,12 +1,11 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { tasksApi } from "../api/tasks";
-import type { NewTaskBody, Task, TaskDetail, TaskEdits, TaskOutput } from "../types/api";
+import type { NewTaskBody, Task, TaskDetail, TaskEdits } from "../types/api";
 
 export const useTasksStore = defineStore("tasks", () => {
   const tasks = ref<Task[]>([]);
   const detail = ref<TaskDetail | null>(null);
-  const output = ref<TaskOutput | null>(null);
   const loading = ref(false);
 
   async function refresh(status?: string) {
@@ -20,14 +19,6 @@ export const useTasksStore = defineStore("tasks", () => {
 
   async function load(id: string) {
     detail.value = await tasksApi.get(id);
-  }
-
-  async function loadOutput(id: string) {
-    try {
-      output.value = await tasksApi.output(id);
-    } catch {
-      output.value = null;
-    }
   }
 
   async function confirm(id: string) {
@@ -69,11 +60,9 @@ export const useTasksStore = defineStore("tasks", () => {
   return {
     tasks,
     detail,
-    output,
     loading,
     refresh,
     load,
-    loadOutput,
     confirm,
     retry,
     create,
