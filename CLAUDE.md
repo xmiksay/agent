@@ -47,7 +47,7 @@ src/jobs/runner.rs                clone/fetch, write the backend's worktree
     │                             end push changes + post result via GitProvider
     │
     ├─ stdout events ──► src/jobs/hub.rs (LiveSessions): per-task broadcast +
-    │                    batch-persist to tasks.event_log; fan out over
+    │                    batch-persist to the task_events table; fan out over
     │                    GET /ws/tasks/{id} ◄──► Operator (SPA) chat/stop/redefine
     │
     │ PreToolUse hook (Bash/AskUserQuestion)
@@ -74,7 +74,7 @@ Operator (SPA)                    approves/denies via
 | `src/jobs/types.rs` | `TriggerReason`, `ClaudeOutput` |
 | `src/jobs/store.rs` | `TaskStore` — task CRUD, run loop, kill/continue/retry/push_message, branch_diff. **Over 500 lines — split before adding new methods.** |
 | `src/jobs/runner.rs` | `run_job` — spawns the agent backend as an interactive stream-json session, pumps operator messages into stdin, streams events to the hub, enforces token budget; at session end pushes commits + posts the result note |
-| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to `tasks.event_log`, and the `mpsc` back-channel to the running agent's stdin |
+| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to the `task_events` table, and the `mpsc` back-channel to the running agent's stdin |
 | `src/jobs/prompt.rs` | `build_prompt` — per-trigger prompt text (split out of runner) |
 | `src/jobs/stream.rs` | `stream_into_entry` — pumps a child pipe into the live log + publishes each stdout event to the hub, sniffing session id / output tokens via the backend |
 | `src/agent/mod.rs` | `AgentBackend` trait + `WorktreeFile` — abstracts the coding-agent CLI (invocation, stdin message encoding, config/hook files, output parsing). Sync methods; the runner does the fs writes |
@@ -110,8 +110,8 @@ PostgreSQL via SeaORM. Migrations live in `migration/src/` and run automatically
 
 Tables (current set, see migration files for canonical schemas):
 
-- `tasks` — one row per agent run; `status` is one of `pending|running|completed|failed|killed`. `event_log` (jsonb) is the durable agent event stream, appended in batches of 100 by the live hub; `pending_message` carries a queued follow-up for the resume path
-
+- `tasks` — one row per agent run; `status` is one of `pending|running|completed|failed|killed`. `pending_message` carries a queued follow-up for the resume path
+- `task_events` — durable agent event stream; one row per event, PK `(task_id, seq)`, append-only, batch-inserted (100 at a time) by the live hub, cascade-deleted with the task
 - `task_results` — final cost / turns / tokens / result text; one-to-one with tasks
 - `projects` — discovered repos, per-project `allowed_operations` glob list
 - `project_branches` — branches the agent has touched, with `issue_iid` / `pr_iid` linkage and status
@@ -138,7 +138,7 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 | `POST` | `/api/tasks/{id}/continue` | resume via `claude -r <session_id>` |
 | `POST` | `/api/tasks/{id}/message` | queue a follow-up prompt for the resume path (used when the task is **not** live; live chat goes over the WS) |
 | `GET` | `/api/tasks/{id}/diff` | `git diff origin/<default_branch>` of the task's worktree (+ untracked listing) |
-| `GET` | `/api/tasks/{id}/events` | persisted agent events from `event_log` (array index = `seq`); seeds the SPA timeline before the WS streams live frames |
+| `GET` | `/api/tasks/{id}/events` | persisted agent events from `task_events` ordered by `seq`; seeds the SPA timeline before the WS streams live frames |
 | `GET` | `/api/projects` / `GET /api/projects/{id}` / `PUT /api/projects/{id}/config` / `GET /api/projects/{id}/branches` | |
 | `GET`/`POST` | `/api/git_services` | tokens and webhook secrets are write-only on GET |
 | `GET`/`PUT`/`DELETE` | `/api/git_services/{id}` | |

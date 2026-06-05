@@ -460,7 +460,6 @@ impl TaskStore {
             session_id: Set(None),
             pid: Set(None),
             pending_message: Set(None),
-            event_log: Set(None),
         };
 
         tasks::Entity::insert(task)
@@ -768,17 +767,16 @@ impl TaskStore {
             .context("failed to list tasks")
     }
 
-    /// Persisted agent event history (`event_log`) in order; empty if none yet.
+    /// Persisted agent event history from `task_events`, ordered by `seq`.
     pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<serde_json::Value>> {
-        let task = tasks::Entity::find_by_id(task_id)
-            .one(&self.db)
+        use crate::entity::task_events;
+        let rows = task_events::Entity::find()
+            .filter(task_events::Column::TaskId.eq(task_id))
+            .order_by_asc(task_events::Column::Seq)
+            .all(&self.db)
             .await
-            .context("db error")?
-            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
-        Ok(match task.event_log {
-            Some(serde_json::Value::Array(items)) => items,
-            _ => Vec::new(),
-        })
+            .context("loading task events")?;
+        Ok(rows.into_iter().map(|r| r.payload).collect())
     }
 
     pub async fn get_task(

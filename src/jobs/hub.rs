@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, DbBackend};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -29,6 +31,7 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::agent::{AgentBackend, ClaudeCode};
+use crate::entity::task_events;
 
 /// Persist to `event_log` once this many unflushed events accumulate.
 const FLUSH_BATCH: usize = 100;
@@ -58,7 +61,9 @@ pub struct Envelope {
 }
 
 struct History {
-    items: Vec<Value>,
+    /// `(seq, payload)` for the whole active session; `flushed` counts how many
+    /// leading entries are already persisted in `task_events`.
+    items: Vec<(u64, Value)>,
     flushed: usize,
 }
 
@@ -143,9 +148,9 @@ impl LiveSessions {
         });
         let batch = {
             let mut h = ch.history.lock().await;
-            h.items.push(value);
+            h.items.push((seq, value));
             if h.items.len() - h.flushed >= FLUSH_BATCH {
-                let batch: Vec<Value> = h.items[h.flushed..].to_vec();
+                let batch = h.items[h.flushed..].to_vec();
                 h.flushed = h.items.len();
                 Some(batch)
             } else {
@@ -183,15 +188,13 @@ impl LiveSessions {
             .clone();
         let rx = ch.events.subscribe();
         let h = ch.history.lock().await;
-        let base = ch.next_seq.load(Ordering::SeqCst) - h.items.len() as u64;
         let snapshot = h
             .items
             .iter()
-            .enumerate()
-            .map(|(i, v)| Envelope {
+            .map(|(seq, v)| Envelope {
                 task_id,
                 agent: ch.agent(),
-                seq: base + i as u64,
+                seq: *seq,
                 kind: EnvelopeKind::Event,
                 payload: v.clone(),
             })
@@ -224,7 +227,7 @@ impl LiveSessions {
         if let Some(ch) = self.get(task_id) {
             let tail = {
                 let mut h = ch.history.lock().await;
-                let tail: Vec<Value> = h.items[h.flushed..].to_vec();
+                let tail = h.items[h.flushed..].to_vec();
                 h.flushed = h.items.len();
                 tail
             };
@@ -246,33 +249,36 @@ impl LiveSessions {
         }
     }
 
-    /// `jsonb_array_length(event_log)` — the seq seed for a (re)starting session.
+    /// Persisted event count for a task — the seq seed for a (re)starting
+    /// session, so live `seq`s continue past the durable history.
     async fn persisted_len(&self, task_id: Uuid) -> u64 {
-        let sql = "SELECT coalesce(jsonb_array_length(event_log), 0) AS len FROM tasks WHERE id = $1";
-        let stmt = Statement::from_sql_and_values(DbBackend::Postgres, sql, [task_id.into()]);
-        match self.db.query_one(stmt).await {
-            Ok(Some(row)) => row.try_get::<i64>("", "len").unwrap_or(0).max(0) as u64,
-            Ok(None) => 0,
-            Err(e) => {
-                warn!(%task_id, error = %e, "failed to read persisted event_log length");
+        task_events::Entity::find()
+            .filter(task_events::Column::TaskId.eq(task_id))
+            .count(&self.db)
+            .await
+            .unwrap_or_else(|e| {
+                warn!(%task_id, error = %e, "failed to count persisted task_events");
                 0
-            }
-        }
+            })
     }
 
-    /// Append a batch of events to `tasks.event_log` (jsonb concat, creating the
-    /// array if null). Best-effort: a failed flush is logged, and the events
-    /// remain available live — history just isn't durable for those.
-    async fn append_to_db(&self, task_id: Uuid, batch: &[Value]) {
-        let batch_json = Value::Array(batch.to_vec());
-        let sql = "UPDATE tasks SET event_log = coalesce(event_log, '[]'::jsonb) || $1::jsonb WHERE id = $2";
-        let stmt = Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            sql,
-            [batch_json.into(), task_id.into()],
-        );
-        if let Err(e) = self.db.execute(stmt).await {
-            error!(%task_id, error = %e, "failed to flush event batch to event_log");
+    /// Append a batch of events to `task_events` (one row per event). Best-effort:
+    /// a failed flush is logged, and the events remain available live — history
+    /// just isn't durable for those.
+    async fn append_to_db(&self, task_id: Uuid, batch: &[(u64, Value)]) {
+        if batch.is_empty() {
+            return;
+        }
+        let rows: Vec<task_events::ActiveModel> = batch
+            .iter()
+            .map(|(seq, payload)| task_events::ActiveModel {
+                task_id: Set(task_id),
+                seq: Set(*seq as i64),
+                payload: Set(payload.clone()),
+            })
+            .collect();
+        if let Err(e) = task_events::Entity::insert_many(rows).exec(&self.db).await {
+            error!(%task_id, error = %e, "failed to flush event batch to task_events");
         }
     }
 }

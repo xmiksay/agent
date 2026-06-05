@@ -68,8 +68,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, task_id: Uuid) {
                         break;
                     }
                 }
-                // Slow consumer fell behind — tell the client to refetch history.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                // Slow consumer fell behind: close so the client reconnects and
+                // refetches the full history (no silently-dropped frames).
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
                 // Channel closed: the session ended. Done streaming.
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             },
