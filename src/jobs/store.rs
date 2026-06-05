@@ -57,6 +57,10 @@ impl TaskStore {
         &self.output_log
     }
 
+    pub fn db(&self) -> &DatabaseConnection {
+        &self.db
+    }
+
     /// Called at startup. Any task left in `running` or `pending` belongs to a
     /// previous process — the claude child died with us. Flip them to `killed`
     /// (and clear pid) so the UI shows them as pauseable, and the operator can
@@ -428,6 +432,27 @@ impl TaskStore {
 
         if task.status != "pending" {
             bail!("task is not pending (status: {})", task.status);
+        }
+
+        // One agent per project: refuse to start while another task on the
+        // same project is already running. The workspace project lock would
+        // serialize them anyway, but blocking up-front gives the operator a
+        // clear error instead of a task that silently waits.
+        if let Some(pid) = task.project_id {
+            let other = tasks::Entity::find()
+                .filter(tasks::Column::ProjectId.eq(pid))
+                .filter(tasks::Column::Status.eq("running"))
+                .filter(tasks::Column::Id.ne(task_id))
+                .one(&self.db)
+                .await
+                .context("checking concurrent project task")?;
+            if let Some(other) = other {
+                bail!(
+                    "another task ({}) is already running on this project; \
+                     wait for it to finish or kill it first",
+                    other.id
+                );
+            }
         }
 
         let store = Arc::clone(self);

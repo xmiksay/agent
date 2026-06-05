@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { tasksApi } from "../api/tasks";
-import type { Task, TaskDetail, TaskOutput } from "../types/api";
+import type { NewTaskBody, Task, TaskDetail, TaskOutput } from "../types/api";
 
 export const useTasksStore = defineStore("tasks", () => {
   const tasks = ref<Task[]>([]);
@@ -40,6 +40,11 @@ export const useTasksStore = defineStore("tasks", () => {
     return task_id;
   }
 
+  async function create(body: NewTaskBody): Promise<string> {
+    const { task_id } = await tasksApi.create(body);
+    return task_id;
+  }
+
   async function continue_(id: string): Promise<string> {
     const { task_id } = await tasksApi.continue_(id);
     return task_id;
@@ -66,6 +71,7 @@ export const useTasksStore = defineStore("tasks", () => {
     loadOutput,
     confirm,
     retry,
+    create,
     continue_,
     kill,
     remove,

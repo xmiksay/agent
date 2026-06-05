@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 
 use crate::AppState;
 use crate::project::ProviderKind;
+use crate::provider::BOT_NOTE_MARKER;
 use crate::webhook::dispatch::dispatch;
 use crate::webhook::normalized::{EventKind, NoteTargetRef, NormalizedEvent, ProjectRef, ReviewState};
 use crate::webhook::types::*;
@@ -122,17 +123,16 @@ fn normalize_merge_request(e: &MergeRequestEvent) -> Option<NormalizedEvent> {
     let action = attrs.action.as_deref()?;
     let reviewers: Vec<String> = e.reviewers.iter().map(|r| r.username.clone()).collect();
     let kind = match action {
-        "approved" | "unapproval" | "approval" => EventKind::PrReviewSubmitted {
+        "approved" | "unapproved" | "approval" | "unapproval" => EventKind::PrReviewSubmitted {
             iid: attrs.iid,
             source_branch: attrs.source_branch.clone(),
             target_branch: attrs.target_branch.clone(),
             review_body: String::new(),
-            state: if action == "approved" {
-                ReviewState::Approved
-            } else if action == "unapproval" {
-                ReviewState::ChangesRequested
-            } else {
-                ReviewState::Other
+            state: match action {
+                "approved" | "approval" => ReviewState::Approved,
+                // "unapproved" fires when an MR drops below approval threshold
+                // (e.g. "Request changes"); "unapproval" fires per-reviewer.
+                _ => ReviewState::ChangesRequested,
             },
             url: attrs.url.clone(),
             reviewers,
@@ -164,6 +164,12 @@ fn normalize_merge_request(e: &MergeRequestEvent) -> Option<NormalizedEvent> {
 
 fn normalize_note(e: &NoteEvent) -> Option<NormalizedEvent> {
     let attrs = &e.object_attributes;
+    // The bot stamps every comment it posts with BOT_NOTE_MARKER. Drop those
+    // here so the bot doesn't react to itself (matters especially when the
+    // bot and operator share a GitLab account).
+    if attrs.note.contains(BOT_NOTE_MARKER) {
+        return None;
+    }
     let target = match attrs.noteable_type.as_str() {
         "MergeRequest" => {
             let mr = e.merge_request.as_ref()?;

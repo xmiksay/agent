@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted } from "vue";
 import { useAuthRequestsStore } from "../stores/authRequests";
 import StatusPill from "../components/StatusPill.vue";
+import AuthApprovalForm from "../components/AuthApprovalForm.vue";
 
 const store = useAuthRequestsStore();
-const replies = ref<Record<string, string>>({});
 let timer: number | null = null;
 
 async function reload() {
@@ -19,12 +19,6 @@ onMounted(() => {
 onUnmounted(() => {
   if (timer !== null) window.clearInterval(timer);
 });
-
-async function decide(id: string, decision: "approve" | "deny") {
-  await store.resolve(id, decision, replies.value[id] || undefined);
-  delete replies.value[id];
-  reload();
-}
 </script>
 
 <template>
@@ -40,26 +34,7 @@ async function decide(id: string, decision: "approve" | "deny") {
         </div>
         <pre class="bg-ink-50 rounded text-xs p-2 whitespace-pre-wrap">{{ r.requested_op }}</pre>
         <p class="text-sm text-gray-700">{{ r.prompt_to_operator }}</p>
-        <textarea
-          v-model="replies[r.id]"
-          rows="2"
-          placeholder="Optional reply forwarded to Claude…"
-          class="w-full border rounded p-2 text-sm"
-        />
-        <div class="flex gap-2">
-          <button
-            class="rounded bg-green-600 text-white px-3 py-1 hover:bg-green-700"
-            @click="decide(r.id, 'approve')"
-          >
-            Approve
-          </button>
-          <button
-            class="rounded bg-red-600 text-white px-3 py-1 hover:bg-red-700"
-            @click="decide(r.id, 'deny')"
-          >
-            Deny
-          </button>
-        </div>
+        <AuthApprovalForm :item="r" compact @resolved="reload" />
       </li>
       <li v-if="!store.list.length" class="text-gray-500 text-sm">No pending requests.</li>
     </ul>

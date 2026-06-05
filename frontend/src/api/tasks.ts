@@ -1,9 +1,19 @@
 import { api } from "./client";
-import type { Task, TaskDetail, TaskOutput } from "../types/api";
+import type {
+  NewTaskBody,
+  StatsQuery,
+  StatsResponse,
+  Task,
+  TaskDetail,
+  TaskOutput,
+} from "../types/api";
 
 export const tasksApi = {
   list(status?: string): Promise<Task[]> {
     return api("/api/tasks", { params: status ? { status } : undefined });
+  },
+  create(body: NewTaskBody): Promise<{ task_id: string }> {
+    return api("/api/tasks", { method: "POST", body });
   },
   get(id: string): Promise<TaskDetail> {
     return api(`/api/tasks/${id}`);
@@ -34,5 +44,12 @@ export const tasksApi = {
   },
   diff(id: string): Promise<{ diff: string }> {
     return api(`/api/tasks/${id}/diff`);
+  },
+  stats(query: StatsQuery): Promise<StatsResponse> {
+    const params: Record<string, string> = {};
+    if (query.from) params.from = query.from;
+    if (query.to) params.to = query.to;
+    if (query.group_by) params.group_by = query.group_by;
+    return api("/api/tasks/stats", { params });
   },
 };

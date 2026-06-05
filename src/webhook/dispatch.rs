@@ -194,12 +194,13 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
         } => {
             use crate::webhook::normalized::ReviewState;
             // FixReview is the "fix comments on my own MR" workflow, so the gate
-            // is "bot authored the MR". GitHub gives us the author directly;
-            // GitLab webhooks only expose `author_id` (numeric), so we fall back
-            // to assuming the MR is the bot's if the actor isn't the bot.
+            // is "bot authored the MR". GitHub gives us the author directly.
+            // GitLab webhooks only expose `author_id` (numeric); the bot doesn't
+            // submit reviews via post_note, so there's no echo to guard against
+            // and we trust an unknown author as the bot's MR.
             let is_my_mr = match author {
                 Some(a) => a == my_username,
-                None => ev.actor != my_username,
+                None => true,
             };
             if !is_my_mr {
                 info!(iid, bot = %my_username, author = ?author, actor = %ev.actor, "review event on PR not authored by bot, skipping");
@@ -243,11 +244,14 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
             match target {
                 NoteTargetRef::PullRequest { iid, source_branch, author, reviewers } => {
                     // Mentions always count. Otherwise only act if the bot owns
-                    // (authored) the MR or is a reviewer on it.
+                    // (authored) the MR or is a reviewer on it. The bot's own
+                    // posts are stamped with BOT_NOTE_MARKER and filtered at
+                    // source in normalize_note, so we don't need an actor-based
+                    // loop guard here — and we trust an unknown author as the
+                    // bot's MR (matters for shared-account GitLab setups).
                     let is_my_mr = match author {
                         Some(a) => a == my_username,
-                        // GitLab note payload lacks author; fall back to actor check.
-                        None => ev.actor != my_username,
+                        None => true,
                     };
                     let is_reviewer = reviewers.iter().any(|r| r == my_username);
                     if !mentioned && !is_my_mr && !is_reviewer {

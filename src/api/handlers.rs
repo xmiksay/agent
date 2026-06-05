@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::jobs::types::TriggerReason;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -16,6 +17,9 @@ pub struct TaskDetail {
     #[serde(flatten)]
     pub task: crate::entity::tasks::Model,
     pub result: Option<crate::entity::task_results::Model>,
+    /// Absolute path to this task's git worktree on the agent host.
+    /// `None` if the task's git_service can no longer be resolved.
+    pub work_dir: Option<String>,
 }
 
 pub async fn list_tasks(
@@ -35,17 +39,36 @@ pub async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TaskDetail>, StatusCode> {
-    let result = state
+    use crate::workspace::layout::slugify;
+
+    let (task, result) = state
         .task_store
         .get_task(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(TaskDetail {
-        task: result.0,
-        result: result.1,
-    }))
+    let work_dir = match task.git_service_id {
+        Some(sid) => state
+            .task_store
+            .providers()
+            .service(sid)
+            .await
+            .map(|svc| {
+                let project_slug = slugify(&task.project_path);
+                let branch = task.branch.clone().unwrap_or_else(|| task.default_branch.clone());
+                let branch_slug = slugify(&branch);
+                state
+                    .task_store
+                    .workspace()
+                    .branch_dir(&svc.slug, &project_slug, &branch_slug)
+                    .to_string_lossy()
+                    .into_owned()
+            }),
+        None => None,
+    };
+
+    Ok(Json(TaskDetail { task, result, work_dir }))
 }
 
 pub async fn confirm_task(
@@ -64,6 +87,48 @@ pub async fn confirm_task(
 #[derive(Serialize)]
 pub struct RetryResponse {
     pub task_id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct CreateTaskBody {
+    pub project_id: Uuid,
+    pub trigger: TriggerReason,
+}
+
+/// Operator-driven counterpart to the webhook dispatcher: pick a project,
+/// hand over a fully-formed TriggerReason, get a pending task. Useful when
+/// the webhook never arrived or was filtered out.
+pub async fn create_task(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateTaskBody>,
+) -> Result<(StatusCode, Json<RetryResponse>), (StatusCode, String)> {
+    let project = state
+        .project_store
+        .get_project_by_id(payload.project_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "project not found".to_string()))?;
+
+    let git_service_id = project.git_service_id.ok_or((
+        StatusCode::BAD_REQUEST,
+        "project has no git_service_id".to_string(),
+    ))?;
+
+    let id = state
+        .task_store
+        .create_task(
+            payload.trigger,
+            git_service_id,
+            project.provider,
+            Some(project.id),
+            project.full_name,
+            project.ssh_url,
+            project.default_branch,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok((StatusCode::CREATED, Json(RetryResponse { task_id: id })))
 }
 
 pub async fn retry_task(

@@ -66,7 +66,7 @@ Operator (SPA)                    approves/denies via
 | `src/jobs/runner.rs` | `run_job` — actually spawns `claude`, streams stdout, enforces token budget, pushes commits, posts the result note. **Over 500 lines.** |
 | `src/jobs/registry.rs` | `RunningTasks` — abort handles by task id |
 | `src/jobs/output_log.rs` | in-memory stdout/stderr ring (lost on restart by design) |
-| `src/workspace/mod.rs` | filesystem layout: `<base>/<service_slug>/<project_slug>/branches/<branch_slug>/` |
+| `src/workspace/mod.rs` | filesystem layout: `<base>/<service_slug>/<project_slug>/<branch_slug>/` |
 | `src/workspace/git.rs` | `clone_or_fetch` |
 | `src/workspace/lock.rs` | per-project advisory file lock |
 | `src/workspace/layout.rs` | `slugify` |
@@ -110,6 +110,8 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 | `POST` | `/webhook/github/{slug}` | `X-Hub-Signature-256` HMAC-SHA256 |
 | `POST` | `/internal/authcheck` | loopback only; called by the PreToolUse hook |
 | `GET` | `/api/tasks` | optional `?status=` |
+| `POST` | `/api/tasks` | operator-driven dispatch: `{ project_id, trigger: TriggerReason }` → pending task (use when the webhook missed/was filtered) |
+| `GET` | `/api/tasks/stats` | time spent per `?group_by=project\|service\|branch\|trigger_type` within `?from=`/`?to=` (default last 30d). Running tasks counted as `now - started_at`. |
 | `GET`/`DELETE` | `/api/tasks/{id}` | detail + result; DELETE force-kills if running |
 | `POST` | `/api/tasks/{id}/confirm` | pending → running |
 | `POST` | `/api/tasks/{id}/retry` | clone the task as a new row |
@@ -134,15 +136,16 @@ $REPO_BASE_PATH/
 │   └── authcheck.sh                     # rewritten at every startup
 └── <service_slug>/
     └── <project_slug>/
-        └── branches/
-            ├── .lock                    # advisory file lock per project
-            ├── <branch_slug>/           # one git worktree per branch
-            │   ├── .git/
-            │   └── .claude/settings.local.json   # bypassPermissions + PreToolUse hook
-            └── …
+        ├── .lock                        # advisory file lock per project
+        ├── <branch_slug>/               # one git worktree per branch
+        │   ├── .git/
+        │   └── .claude/settings.local.json   # bypassPermissions + PreToolUse hook
+        └── …
 ```
 
 `slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone or fetch+reset), writes `settings.local.json`, then runs `claude -p ... [--resume <sid>] --output-format stream-json --verbose`.
+
+The spawned `claude` inherits `CLAUDE_TASK_ID`, `AGENT_PORT`, and a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services.
 
 ### How an operator approval works
 
@@ -192,6 +195,7 @@ After Rust changes: `cargo check`. After frontend changes: `npm run typecheck`.
 - **Concurrency:** Tokio. Per-project work uses `Workspace::lock_project` (in-process `Mutex` + cross-process advisory file lock); per-task work is just owned values.
 - **SeaORM:** entity Model is the read shape; mutations go through `ActiveModel` + `Set(...)`. Cross-row consistency relies on individual statements being short — no explicit transactions today.
 - **Idempotence:** dedupe at the event level via `seen_events: HashSet<String>` in `TaskStore`, keyed by `TriggerReason::event_id`. The set is in-memory; restarts re-deliver, but `created_at + trigger_data` makes duplicates easy to spot.
+- **Bot-comment marker:** every comment posted via `GitProvider::post_note` gets `BOT_NOTE_MARKER` (`<!-- agent -->`) appended. The provider-side webhook normalizers drop incoming notes that contain the marker, so the bot never reacts to its own posts. This is the loop guard — the dispatcher no longer compares actor to `bot_username`, which means a same-account operator/bot setup still works.
 - **Comments:** rule above; current code follows it inconsistently — bring new edits into line, don't write new "what" comments.
 
 ## Memory rules (for future Claude sessions)

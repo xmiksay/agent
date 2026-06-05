@@ -4,7 +4,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::project::ProviderKind;
-use crate::provider::{GitProvider, NoteTarget};
+use crate::provider::{BOT_NOTE_MARKER, GitProvider, NoteTarget};
 
 #[derive(Clone)]
 pub struct GitHubClient {
@@ -54,13 +54,14 @@ impl GitProvider for GitHubClient {
             self.api_base,
         );
         info!(%url, "posting comment to GitHub");
+        let stamped = format!("{body}\n\n{BOT_NOTE_MARKER}");
         let resp = self
             .client
             .post(&url)
             .bearer_auth(&self.token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
-            .json(&serde_json::json!({ "body": body }))
+            .json(&serde_json::json!({ "body": stamped }))
             .send()
             .await
             .context("posting GitHub comment")?;

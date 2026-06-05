@@ -33,6 +33,7 @@ const showGate = computed(() => session.validated === false);
           <RouterLink to="/projects" class="hover:text-blue-700">Projects</RouterLink>
           <RouterLink to="/git_services" class="hover:text-blue-700">Services</RouterLink>
           <RouterLink to="/auth_requests" class="hover:text-blue-700">Auth queue</RouterLink>
+          <RouterLink to="/stats" class="hover:text-blue-700">Stats</RouterLink>
         </nav>
         <button
           v-if="session.hasToken"

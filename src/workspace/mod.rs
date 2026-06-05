@@ -34,17 +34,13 @@ impl Workspace {
         self.base.join(service_slug).join(project_slug)
     }
 
-    pub fn branches_root(&self, service_slug: &str, project_slug: &str) -> PathBuf {
-        self.project_root(service_slug, project_slug).join("branches")
-    }
-
     pub fn branch_dir(
         &self,
         service_slug: &str,
         project_slug: &str,
         branch_slug: &str,
     ) -> PathBuf {
-        self.branches_root(service_slug, project_slug).join(branch_slug)
+        self.project_root(service_slug, project_slug).join(branch_slug)
     }
 
     /// Stable path for hooks shared across every project worktree. Lives
@@ -87,7 +83,7 @@ impl Workspace {
     }
 
     /// Acquire both the in-process mutex and the cross-process advisory lock
-    /// guarding mutations of `<project>/branches/`.
+    /// guarding mutations of the project's branch worktrees.
     pub async fn lock_project(
         &self,
         service_slug: &str,
@@ -101,11 +97,11 @@ impl Workspace {
             .clone();
         let _in_proc = mutex.lock_owned().await;
 
-        let branches_root = self.branches_root(service_slug, project_slug);
-        tokio::fs::create_dir_all(&branches_root)
+        let project_root = self.project_root(service_slug, project_slug);
+        tokio::fs::create_dir_all(&project_root)
             .await
-            .with_context(|| format!("creating {}", branches_root.display()))?;
-        let lock_path = branches_root.join(".lock");
+            .with_context(|| format!("creating {}", project_root.display()))?;
+        let lock_path = project_root.join(".lock");
 
         let file_lock = tokio::task::spawn_blocking(move || AdvisoryFileLock::acquire(&lock_path))
             .await

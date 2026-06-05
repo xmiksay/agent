@@ -239,6 +239,10 @@ async function toggleDiff() {
         <dt class="text-xs text-gray-500">Claude session</dt>
         <dd class="font-mono text-xs">{{ store.detail.session_id }}</dd>
       </div>
+      <div v-if="store.detail.work_dir" class="col-span-2">
+        <dt class="text-xs text-gray-500">Worktree</dt>
+        <dd class="font-mono text-xs break-all">{{ store.detail.work_dir }}</dd>
+      </div>
     </dl>
 
     <div class="flex flex-wrap gap-2">

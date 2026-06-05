@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::git_service::GitService;
 use crate::jobs::output_log::{LiveEntry, TaskOutputLog};
 use crate::jobs::types::{ClaudeOutput, TriggerReason};
-use crate::project::{BranchStatus, NewBranchEntry, ProjectStore};
+use crate::project::{BranchStatus, NewBranchEntry, ProjectStore, ProviderKind};
 use crate::provider::GitProvider;
 use crate::workspace::Workspace;
 use crate::workspace::layout::slugify;
@@ -119,11 +119,19 @@ pub async fn run_job(
         output_log.start(task_id, command_line.clone()).await
     };
 
+    // So `gh`/`glab` inside the worktree authenticate against the same PAT the
+    // agent uses to clone and post notes — picked by provider kind.
+    let (provider_token_var, provider_token_value) = match service.kind {
+        ProviderKind::Github => ("GH_TOKEN", service.token.clone()),
+        ProviderKind::Gitlab => ("GITLAB_TOKEN", service.token.clone()),
+    };
+
     let mut child = Command::new("claude")
         .args(&claude_args)
         .current_dir(&work_dir)
         .env("CLAUDE_TASK_ID", task_id.to_string())
         .env("AGENT_PORT", agent_port)
+        .env(provider_token_var, provider_token_value)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)

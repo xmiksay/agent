@@ -45,6 +45,7 @@ export interface TaskResult {
 
 export interface TaskDetail extends Task {
   result: TaskResult | null;
+  work_dir: string | null;
 }
 
 export interface ProjectConfig {
@@ -126,6 +127,64 @@ export interface AuthQuestion {
 
 export interface AuthRequestMetadata {
   questions?: AuthQuestion[];
+}
+
+export type TriggerReason =
+  | { type: "issue"; iid: number; title: string; description: string; url: string }
+  | {
+      type: "review_mr";
+      iid: number;
+      title: string;
+      source_branch: string;
+      target_branch: string;
+      url: string;
+    }
+  | {
+      type: "fix_review";
+      iid: number;
+      title: string;
+      source_branch: string;
+      url: string;
+      review_body: string;
+    }
+  | {
+      type: "mr_comment";
+      mr_iid: number;
+      comment: string;
+      source_branch: string;
+      url: string;
+    }
+  | { type: "issue_comment"; issue_iid: number; comment: string; url: string };
+
+export type TriggerKind = TriggerReason["type"];
+
+export interface NewTaskBody {
+  project_id: string;
+  trigger: TriggerReason;
+}
+
+export type StatsGroupBy = "project" | "service" | "branch" | "trigger_type";
+
+export interface StatsRow {
+  key: string;
+  label: string;
+  task_count: number;
+  total_secs: number;
+}
+
+export interface StatsResponse {
+  from: string;
+  to: string;
+  group_by: StatsGroupBy;
+  total_tasks: number;
+  total_secs: number;
+  rows: StatsRow[];
+}
+
+export interface StatsQuery {
+  from?: string;
+  to?: string;
+  group_by?: StatsGroupBy;
 }
 
 export interface AuthRequest {

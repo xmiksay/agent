@@ -10,6 +10,13 @@ pub use registry::ProviderRegistry;
 
 use crate::project::ProviderKind;
 
+/// Appended to every comment the agent posts via `GitProvider::post_note`.
+/// `normalize_note` drops incoming webhooks whose body contains this marker,
+/// so the bot never reacts to its own posts. Rendered as nothing by GitLab
+/// and GitHub markdown, but preserved verbatim in the webhook `body`/`note`
+/// field.
+pub const BOT_NOTE_MARKER: &str = "<!-- agent -->";
+
 /// Where a comment should be posted.
 #[derive(Copy, Clone, Debug)]
 pub enum NoteTarget {

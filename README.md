@@ -13,7 +13,7 @@ Copy `.env.example` to `.env` and set:
 | Var | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | — (required) | Postgres connection string |
-| `REPO_BASE_PATH` | `/tmp/claude-jobs` | working-tree base: `<base>/<service_slug>/<project_slug>/branches/<branch>` |
+| `REPO_BASE_PATH` | `/tmp/claude-jobs` | working-tree base: `<base>/<service_slug>/<project_slug>/<branch>` |
 | `LISTEN_ADDR` | `0.0.0.0:3000` | bind address |
 | `MAX_CONCURRENT_JOBS` | `3` | parallel `claude` processes |
 | `TASK_TOKEN_BUDGET` | `1000000` | per-task soft output-token budget; runner pauses claude at 50 % so the operator can Resume after the 5 h rate-limit window |
@@ -118,6 +118,7 @@ All routes under `/api/*` require `Authorization: Bearer $API_BEARER_TOKEN` if t
 ### Tasks
 
 - `GET /api/tasks` *(optional `?status=`)*
+- `POST /api/tasks` — manual dispatch when the webhook didn't fire; body is `{ project_id, trigger }` where `trigger` is a `TriggerReason`. Resulting task is created `pending`, same as webhook-driven ones.
 - `GET /api/tasks/{id}` / `DELETE /api/tasks/{id}` *(DELETE force-kills if running)*
 - `POST /api/tasks/{id}/confirm` — move `pending` → `running`
 - `POST /api/tasks/{id}/retry` — clone the task into a new row

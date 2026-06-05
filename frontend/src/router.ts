@@ -4,6 +4,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", name: "tasks", component: () => import("./views/TasksList.vue") },
+    { path: "/stats", name: "stats", component: () => import("./views/Stats.vue") },
     {
       path: "/tasks/:id",
       name: "task-detail",

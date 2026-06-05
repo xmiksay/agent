@@ -4,7 +4,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::project::ProviderKind;
-use crate::provider::{GitProvider, NoteTarget};
+use crate::provider::{BOT_NOTE_MARKER, GitProvider, NoteTarget};
 
 #[derive(Clone)]
 pub struct GitLabClient {
@@ -39,11 +39,12 @@ impl GitLabClient {
 
         info!(%url, "posting note to GitLab");
 
+        let stamped = format!("{body}\n\n{BOT_NOTE_MARKER}");
         let resp = self
             .client
             .post(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&serde_json::json!({ "body": body }))
+            .json(&serde_json::json!({ "body": stamped }))
             .send()
             .await
             .context("failed to post note")?;

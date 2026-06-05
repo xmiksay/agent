@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::AppState;
 use crate::project::ProviderKind;
+use crate::provider::BOT_NOTE_MARKER;
 use crate::provider::github::payload::*;
 use crate::webhook::dispatch::dispatch;
 use crate::webhook::gitlab::WebhookResponse;
@@ -201,6 +202,11 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
                 return Ok(None);
             }
             let body = ev.comment.body.unwrap_or_default();
+            // The bot stamps every comment it posts with BOT_NOTE_MARKER;
+            // skip those so it doesn't react to its own posts.
+            if body.contains(BOT_NOTE_MARKER) {
+                return Ok(None);
+            }
             let assignees: Vec<String> =
                 ev.issue.assignees.iter().map(|u| u.login.clone()).collect();
             // GitHub uses the same payload for PR comments — distinguished by
