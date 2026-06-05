@@ -1,6 +1,6 @@
-# gitlab-claude-agent
+# agent
 
-A Rust/Axum service that listens for GitLab and GitHub webhooks, runs the `claude` CLI against the affected repo, and posts the result back as an issue/MR/PR comment. A Vue 3 SPA on the same port shows live task status, branch diff, captured stdout, and pending operator approvals.
+A Rust/Axum service that listens for git-forge webhooks, runs the `claude` CLI against the affected repo, and posts the result back as an issue/MR/PR comment. Supports **GitLab** and **GitHub** today; **Codeberg** (Forgejo) is planned. A Vue 3 SPA on the same port shows live task status, branch diff, captured stdout, and pending operator approvals.
 
 Engineering rules and the full architecture map live in [`CLAUDE.md`](./CLAUDE.md). Read that first if you're going to modify the code.
 
@@ -18,11 +18,11 @@ Copy `.env.example` to `.env` and set:
 | `MAX_CONCURRENT_JOBS` | `3` | parallel `claude` processes |
 | `TASK_TOKEN_BUDGET` | `1000000` | per-task soft output-token budget; runner pauses claude at 50 % so the operator can Resume after the 5 h rate-limit window |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*` and the SPA; paste it into the SPA on first load |
-| `RUST_LOG` | `gitlab_claude_agent=info` | tracing filter |
+| `RUST_LOG` | `agent=info` | tracing filter |
 
 The Vue SPA is baked into the release binary by `rust-embed` — no runtime path override.
 
-GitLab/GitHub credentials are **not** in `.env` — they live in the `git_services` table and are managed via the admin UI.
+Forge credentials (GitLab, GitHub, …) are **not** in `.env` — they live in the `git_services` table and are managed via the admin UI.
 
 ### 2. Run
 
@@ -47,7 +47,7 @@ Go to **Services → Add service** and fill in:
 | Personal token   | `glpat-…` (PAT with `api`, `read_repository`, `write_repository`) |
 | Webhook secret   | a random string                       |
 
-After saving, the service detail page shows the **Webhook URL** to paste into GitLab/GitHub.
+After saving, the service detail page shows the **Webhook URL** to paste into the forge.
 
 ## Webhook endpoints
 

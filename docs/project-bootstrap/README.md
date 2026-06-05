@@ -1,9 +1,9 @@
 # Project bootstrap
 
 Files in this directory are **templates** for a repository that you want the
-gitlab-claude-agent to operate on. None of them are loaded by the agent at
-runtime — they're copied into a target repo once, during setup, and then live
-under that repo's source control.
+agent to operate on. None of them are loaded by the agent at runtime — they're
+copied into a target repo once, during setup, and then live under that repo's
+source control.
 
 ## What the agent does for you automatically
 

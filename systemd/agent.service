@@ -1,12 +1,12 @@
 [Unit]
-Description=GitLab Claude Agent
+Description=Claude Agent
 After=network.target
 
 [Service]
 Type=simple
 User=claude-agent
-EnvironmentFile=/etc/gitlab-claude-agent/env
-ExecStart=/usr/local/bin/gitlab-claude-agent
+EnvironmentFile=/etc/agent/env
+ExecStart=/usr/local/bin/agent
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal

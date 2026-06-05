@@ -20,7 +20,7 @@ impl GitHubClient {
         Self {
             service_id,
             client: reqwest::Client::builder()
-                .user_agent("gitlab-claude-agent")
+                .user_agent("claude-agent")
                 .build()
                 .expect("reqwest client"),
             api_base: api_base.trim_end_matches('/').to_string(),

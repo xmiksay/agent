@@ -1,4 +1,4 @@
-# GitLab Claude Agent — Implementační plán
+# Claude Agent — Implementační plán
 
 ## Přehled projektu
 

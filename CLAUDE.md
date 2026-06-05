@@ -164,7 +164,7 @@ Read by `src/config.rs::from_env`. Defaults in parentheses.
 | `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size |
 | `TASK_TOKEN_BUDGET` | `1_000_000` | soft cap; runner kills `claude` when cumulative `output_tokens ≥ budget/2` and the operator can Resume |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*`; SPA prompts and stores in `localStorage` |
-| `RUST_LOG` | `gitlab_claude_agent=info` | `tracing-subscriber` filter |
+| `RUST_LOG` | `agent=info` | `tracing-subscriber` filter |
 
 The Vue SPA is baked into the binary by `rust-embed` (`src/spa.rs`) at compile time. There is no runtime path override — to swap the bundle, rebuild.
 
