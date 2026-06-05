@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { tasksApi } from "../api/tasks";
-import type { NewTaskBody, Task, TaskDetail, TaskOutput } from "../types/api";
+import type { NewTaskBody, Task, TaskDetail, TaskEdits, TaskOutput } from "../types/api";
 
 export const useTasksStore = defineStore("tasks", () => {
   const tasks = ref<Task[]>([]);
@@ -55,6 +55,11 @@ export const useTasksStore = defineStore("tasks", () => {
     await load(id);
   }
 
+  async function update(id: string, edits: TaskEdits) {
+    await tasksApi.update(id, edits);
+    await load(id);
+  }
+
   async function remove(id: string) {
     await tasksApi.remove(id);
     tasks.value = tasks.value.filter((t) => t.id !== id);
@@ -74,6 +79,7 @@ export const useTasksStore = defineStore("tasks", () => {
     create,
     continue_,
     kill,
+    update,
     remove,
   };
 });

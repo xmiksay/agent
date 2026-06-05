@@ -5,6 +5,7 @@ import type {
   StatsResponse,
   Task,
   TaskDetail,
+  TaskEdits,
   TaskOutput,
 } from "../types/api";
 
@@ -40,6 +41,12 @@ export const tasksApi = {
     return api(`/api/tasks/${id}/message`, {
       method: "POST",
       body: { body },
+    });
+  },
+  update(id: string, edits: TaskEdits): Promise<void> {
+    return api(`/api/tasks/${id}`, {
+      method: "PATCH",
+      body: edits,
     });
   },
   diff(id: string): Promise<{ diff: string }> {

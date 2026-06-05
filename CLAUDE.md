@@ -14,7 +14,9 @@ Single-operator deployment by design — there is no multi-tenancy. Bearer-token
 
 - **KISS.** Prefer the most direct expression. No premature abstraction, no future-proofing scaffolds, no DI-flavored indirection where a plain function works. Three similar lines beats a clever helper.
 - **DRY.** If the same logic is starting to appear in two places, extract it — but only after the second occurrence, not before.
-- **File size cap: 500 lines.** When a `.rs`/`.vue`/`.ts` file crosses 500 lines, split it along a natural seam (per-route handlers, per-trigger workflows, per-component slot). `src/jobs/store.rs` (682) and `src/jobs/runner.rs` (544) currently violate this — they should be split as soon as a non-trivial change lands on them. Don't grow them further.
+- **File size cap: 400 lines.** When a `.rs`/`.vue`/`.ts` file crosses 400 lines, split it along a natural seam (per-route handlers, per-trigger workflows, per-component slot). `src/jobs/store.rs` and `src/jobs/runner.rs` already exceed this by a wide margin — split them as soon as a non-trivial change lands; never grow a file that's already over.
+- **Git workflow.** Rebase onto the latest `master` before starting work and never commit to `master` (derive a branch from the issue if none is given). Integrate fast-forward only — no merge commits. Commit/task messages use the **What / Why / How** format. Never add a `Co-Authored-By` trailer. See the `git` agent (`.claude/agents/git.md`).
+- **Specialized agents.** `.claude/agents/` holds the subagents for working in this repo: `backend` (Rust, with unit + integration tests), `frontend` (Vue/TS), `git` (workflow above), and `review` (security + performance). Delegate stack-specific work to them.
 - **Auto-update this file when architecture changes.** If a change adds/removes/renames a module, route, entity, environment variable, or the way two modules talk to each other, edit the relevant section of `CLAUDE.md` in the same PR. The architecture sections below should always describe the current code, not an aspirational shape.
 - **Verify before declaring done.** `cargo check` after Rust changes, `npm run typecheck` (in `frontend/`) after TS/Vue changes. UI changes ideally exercised in a browser.
 - **Comments: WHY, not WHAT.** Only write a comment when removing it would confuse a future reader (subtle invariant, surprising behavior, deliberate workaround). Don't narrate code.
@@ -68,7 +70,7 @@ Operator (SPA)                    approves/denies via
 | `src/jobs/output_log.rs` | in-memory stdout/stderr ring (lost on restart by design) |
 | `src/workspace/mod.rs` | filesystem layout: `<base>/<service_slug>/<project_slug>/<branch_slug>/` |
 | `src/workspace/git.rs` | `clone_or_fetch` |
-| `src/workspace/lock.rs` | per-project advisory file lock |
+| `src/workspace/lock.rs` | per-branch advisory file lock |
 | `src/workspace/layout.rs` | `slugify` |
 | `src/provider/mod.rs` | `GitProvider` trait + `NoteTarget` |
 | `src/provider/registry.rs` | `ProviderRegistry` — per-service `Arc<dyn GitProvider>` cache, kept in sync with `git_services` table |
@@ -112,7 +114,7 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 | `GET` | `/api/tasks` | optional `?status=` |
 | `POST` | `/api/tasks` | operator-driven dispatch: `{ project_id, trigger: TriggerReason }` → pending task (use when the webhook missed/was filtered) |
 | `GET` | `/api/tasks/stats` | time spent per `?group_by=project\|service\|branch\|trigger_type` within `?from=`/`?to=` (default last 30d). Running tasks counted as `now - started_at`. |
-| `GET`/`DELETE` | `/api/tasks/{id}` | detail + result; DELETE force-kills if running |
+| `GET`/`PATCH`/`DELETE` | `/api/tasks/{id}` | detail + result; PATCH edits a **pending** task's input fields (`branch`, `default_branch`) — run-managed fields are not editable and the branch may not equal the default branch; DELETE force-kills if running |
 | `POST` | `/api/tasks/{id}/confirm` | pending → running |
 | `POST` | `/api/tasks/{id}/retry` | clone the task as a new row |
 | `POST` | `/api/tasks/{id}/kill` | SIGKILL; preserves session_id for Resume |
@@ -136,7 +138,7 @@ $REPO_BASE_PATH/
 │   └── authcheck.sh                     # rewritten at every startup
 └── <service_slug>/
     └── <project_slug>/
-        ├── .lock                        # advisory file lock per project
+        ├── <branch_slug>.lock           # advisory file lock per branch
         ├── <branch_slug>/               # one git worktree per branch
         │   ├── .git/
         │   └── .claude/settings.local.json   # bypassPermissions + PreToolUse hook
@@ -144,6 +146,8 @@ $REPO_BASE_PATH/
 ```
 
 `slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone or fetch+reset), writes `settings.local.json`, then runs `claude -p ... [--resume <sid>] --output-format stream-json --verbose`.
+
+**Branch selection (a task never runs on the default branch).** `TaskStore::create_task` derives and persists `tasks.branch`: MR triggers reuse the MR's `source_branch`; an `Issue` trigger derives `<iid>-<slug(title)>` (e.g. `42-fix-login-button`); an `IssueComment` reuses the branch the original issue task recorded (`find_branch_for_issue`), falling back to bare `<iid>`. `workspace::git::clone_or_fetch(path, url, branch, default_branch)` checks out `origin/<branch>` if it exists remotely, otherwise creates the branch from `origin/<default_branch>` (`git checkout -f -B`); `push_changes` uses `git push -u origin HEAD` so a fresh branch gets its upstream. `run_job` hard-`bail!`s if the resolved branch equals the default branch.
 
 The spawned `claude` inherits `CLAUDE_TASK_ID`, `AGENT_PORT`, and a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services.
 
@@ -192,7 +196,7 @@ After Rust changes: `cargo check`. After frontend changes: `npm run typecheck`.
 
 - **Errors:** `anyhow::Result` everywhere except where typed errors leave the binary (HTTP response codes). `.context("…")` on every I/O boundary.
 - **Logging:** `tracing` — `info!` for state transitions, `warn!`/`error!` for things that survived but shouldn't have. Spans not currently used.
-- **Concurrency:** Tokio. Per-project work uses `Workspace::lock_project` (in-process `Mutex` + cross-process advisory file lock); per-task work is just owned values.
+- **Concurrency:** Tokio. Per-branch worktree setup uses `Workspace::lock_branch` (in-process `Mutex` + cross-process advisory file lock); tasks on different branches of the same project run concurrently. `confirm_task` blocks only when another task on the **same project+branch** is already running. Per-task work is just owned values.
 - **SeaORM:** entity Model is the read shape; mutations go through `ActiveModel` + `Set(...)`. Cross-row consistency relies on individual statements being short — no explicit transactions today.
 - **Idempotence:** dedupe at the event level via `seen_events: HashSet<String>` in `TaskStore`, keyed by `TriggerReason::event_id`. The set is in-memory; restarts re-deliver, but `created_at + trigger_data` makes duplicates easy to spot.
 - **Bot-comment marker:** every comment posted via `GitProvider::post_note` gets `BOT_NOTE_MARKER` (`<!-- agent -->`) appended. The provider-side webhook normalizers drop incoming notes that contain the marker, so the bot never reacts to its own posts. This is the loop guard — the dispatcher no longer compares actor to `bot_username`, which means a same-account operator/bot setup still works.

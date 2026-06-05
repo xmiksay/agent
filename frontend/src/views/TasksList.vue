@@ -115,6 +115,30 @@ function canResume(t: Task) {
     ["failed", "completed", "killed"].includes(t.status)
   );
 }
+
+// --- Inline branch edit (pending tasks only) ---------------------------------
+const editingId = ref<string | null>(null);
+const editBranch = ref("");
+
+function startEdit(t: Task) {
+  editingId.value = t.id;
+  editBranch.value = t.branch ?? "";
+}
+function cancelEdit() {
+  editingId.value = null;
+}
+async function saveEdit(t: Task) {
+  setBusy(t.id, "edit");
+  try {
+    await store.update(t.id, { branch: editBranch.value.trim() || undefined });
+    editingId.value = null;
+    await reload();
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e));
+  } finally {
+    clearBusy();
+  }
+}
 </script>
 
 <template>
@@ -163,7 +187,43 @@ function canResume(t: Task) {
           <td class="px-3 py-2">
             <RouterLink :to="`/tasks/${t.id}`">{{ t.project_path }}</RouterLink>
           </td>
-          <td class="px-3 py-2 text-sm text-gray-600">{{ t.branch ?? "—" }}</td>
+          <td class="px-3 py-2 text-sm text-gray-600">
+            <div v-if="editingId === t.id" class="flex items-center gap-1">
+              <input
+                v-model="editBranch"
+                :disabled="busyOn(t.id, 'edit')"
+                class="w-40 text-xs font-mono border border-gray-300 rounded px-1.5 py-1 disabled:opacity-60"
+                placeholder="branch"
+                @keyup.enter="saveEdit(t)"
+                @keyup.esc="cancelEdit"
+              />
+              <button
+                :disabled="busyOn(t.id, 'edit')"
+                class="text-xs text-blue-700 hover:underline disabled:opacity-60"
+                @click="saveEdit(t)"
+              >
+                {{ busyOn(t.id, "edit") ? "…" : "save" }}
+              </button>
+              <button
+                :disabled="busyOn(t.id, 'edit')"
+                class="text-xs text-gray-500 hover:underline disabled:opacity-60"
+                @click="cancelEdit"
+              >
+                cancel
+              </button>
+            </div>
+            <span v-else class="inline-flex items-center gap-1.5">
+              <span class="font-mono">{{ t.branch ?? "—" }}</span>
+              <button
+                v-if="t.status === 'pending'"
+                class="text-xs text-blue-700 hover:underline"
+                title="Edit branch"
+                @click="startEdit(t)"
+              >
+                edit
+              </button>
+            </span>
+          </td>
           <td class="px-3 py-2 text-sm">
             <a
               v-if="triggerUrl(t)"

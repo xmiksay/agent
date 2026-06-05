@@ -97,7 +97,10 @@ async fn release_for_issue(
         debug!(issue_iid, "no checked-out branch bound to this issue, nothing to release");
         return Ok(());
     };
-    let _g = state.workspace.lock_project(service_slug, project_slug).await?;
+    let _g = state
+        .workspace
+        .lock_branch(service_slug, project_slug, &branch.branch_slug)
+        .await?;
     state
         .workspace
         .remove_branch_dir(service_slug, project_slug, &branch.branch_slug)
@@ -126,7 +129,10 @@ async fn release_for_branch(
         debug!(branch = branch_name, "branch not tracked, nothing to release");
         return Ok(());
     };
-    let _g = state.workspace.lock_project(service_slug, project_slug).await?;
+    let _g = state
+        .workspace
+        .lock_branch(service_slug, project_slug, &branch_slug)
+        .await?;
     if let Err(e) = state
         .workspace
         .remove_branch_dir(service_slug, project_slug, &branch_slug)

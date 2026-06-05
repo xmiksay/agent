@@ -163,6 +163,12 @@ export interface NewTaskBody {
   trigger: TriggerReason;
 }
 
+/** Editable fields of a pending task. Only provided keys are changed. */
+export interface TaskEdits {
+  branch?: string;
+  default_branch?: string;
+}
+
 export type StatsGroupBy = "project" | "service" | "branch" | "trigger_type";
 
 export interface StatsRow {

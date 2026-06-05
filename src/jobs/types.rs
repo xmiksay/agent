@@ -68,15 +68,6 @@ impl TriggerReason {
         }
     }
 
-    pub fn branch(&self) -> Option<&str> {
-        match self {
-            Self::ReviewMR { source_branch, .. }
-            | Self::FixReview { source_branch, .. }
-            | Self::MRComment { source_branch, .. } => Some(source_branch),
-            _ => None,
-        }
-    }
-
     pub fn issue_iid(&self) -> Option<u64> {
         match self {
             Self::Issue { iid, .. } | Self::IssueComment { issue_iid: iid, .. } => Some(*iid),

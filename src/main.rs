@@ -109,7 +109,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/stats", get(api::stats::task_stats))
         .route(
             "/api/tasks/{id}",
-            get(api::handlers::get_task).delete(api::handlers::delete_task),
+            get(api::handlers::get_task)
+                .patch(api::handlers::edit_task)
+                .delete(api::handlers::delete_task),
         )
         .route("/api/tasks/{id}/confirm", post(api::handlers::confirm_task))
         .route("/api/tasks/{id}/retry", post(api::handlers::retry_task))

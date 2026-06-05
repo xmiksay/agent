@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::jobs::store::TaskEdits;
 use crate::jobs::types::TriggerReason;
 
 #[derive(Deserialize)]
@@ -206,6 +207,19 @@ pub async fn push_message(
     state
         .task_store
         .push_message(id, payload.body)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub async fn edit_task(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<TaskEdits>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .task_store
+        .update_task(id, payload)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(StatusCode::ACCEPTED)

@@ -36,11 +36,13 @@ pub async fn run_job(
     session_tx: Option<tokio::sync::oneshot::Sender<String>>,
 ) -> Result<ClaudeOutput> {
     let project_slug = slugify(&project_path);
-    let branch = branch_override
-        .as_deref()
-        .or_else(|| trigger.branch())
-        .unwrap_or(&default_branch)
-        .to_string();
+    // The branch is derived and persisted at task-creation time (TaskStore::
+    // create_task), so it's always present here. Guard against ever operating
+    // on the project default branch — no trigger type legitimately targets it.
+    let branch = branch_override.ok_or_else(|| anyhow::anyhow!("task has no branch"))?;
+    if branch == default_branch {
+        bail!("refusing to run task on default branch '{default_branch}'");
+    }
     let branch_slug = slugify(&branch);
 
     let work_dir = workspace.branch_dir(&service.slug, &project_slug, &branch_slug);
@@ -54,14 +56,14 @@ pub async fn run_job(
     );
 
     let _guard = workspace
-        .lock_project(&service.slug, &project_slug)
+        .lock_branch(&service.slug, &project_slug, &branch_slug)
         .await
-        .context("locking project workspace")?;
+        .context("locking branch workspace")?;
 
     // git_url is the SSH URL (git@host:path.git) populated by the webhook
     // normalizers. The agent host has SSH keys configured for the bot user, so
     // we clone/fetch directly — no token injection.
-    workspace.clone_or_fetch(&work_dir, &git_url, &branch).await?;
+    workspace.clone_or_fetch(&work_dir, &git_url, &branch, &default_branch).await?;
     write_settings_local(&work_dir, &workspace.authcheck_hook_path())
         .await
         .context("writing .claude/settings.local.json")?;
@@ -88,7 +90,7 @@ pub async fn run_job(
 
     let prompt = match prompt_override {
         Some(p) if !p.trim().is_empty() => p,
-        _ => build_prompt(&trigger),
+        _ => build_prompt(&trigger, &branch),
     };
     info!(%prompt, "running claude");
 
@@ -261,7 +263,7 @@ pub async fn run_job(
     Ok(claude_result)
 }
 
-fn build_prompt(trigger: &TriggerReason) -> String {
+fn build_prompt(trigger: &TriggerReason, branch: &str) -> String {
     match trigger {
         TriggerReason::Issue { iid, title, description, url, .. } => {
             format!(
@@ -269,9 +271,12 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  Description:\n{description}\n\n\
                  URL: {url}\n\n\
                  Instructions:\n\
+                 - You are already on branch `{branch}`, checked out from the default \
+                   branch. Do NOT create or switch branches.\n\
                  - Implement the issue\n\
-                 - Create a new branch and commit your changes\n\
-                 - Create a merge request using `glab mr create`"
+                 - Commit your changes\n\
+                 - Push with `git push -u origin HEAD`\n\
+                 - Open a merge request with `glab mr create --source-branch {branch} --fill`"
             )
         }
         TriggerReason::ReviewMR { iid, title, source_branch, target_branch, url, .. } => {
@@ -322,10 +327,14 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  Comment: {comment}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
+                 - You are already on branch `{branch}` (the existing feature branch for \
+                   this issue). Do NOT create or switch branches.\n\
                  - Re-read the issue and any prior conversation to recover context\n\
                  - Treat the comment as additional guidance or a follow-up request\n\
                  - Rework or extend the implementation as needed\n\
-                 - Commit and push any code changes\n\
+                 - Commit and push any code changes with `git push -u origin HEAD`\n\
+                 - If no merge request exists yet for `{branch}`, open one with \
+                   `glab mr create --source-branch {branch} --fill`\n\
                  - Reply to the comment using `glab issue note {issue_iid}` summarising what changed"
             )
         }
@@ -389,8 +398,11 @@ async fn push_changes(work_dir: &str) -> Result<()> {
     }
 
     info!("pushing changes");
+    // `-u origin HEAD` pushes the current branch to a same-named remote branch
+    // and sets upstream — required for a freshly created issue branch that has
+    // no upstream yet; idempotent for branches that already track a remote.
     let push = Command::new("git")
-        .args(["push"])
+        .args(["push", "-u", "origin", "HEAD"])
         .current_dir(work_dir)
         .status()
         .await

@@ -99,6 +99,34 @@ const canContinue = computed(() =>
   store.detail?.session_id && canRetry.value,
 );
 const isRunning = computed(() => store.detail?.status === "running");
+const isPending = computed(() => store.detail?.status === "pending");
+
+// --- Edit task (pending only) ------------------------------------------------
+const editing = ref(false);
+const editBranch = ref("");
+const editDefaultBranch = ref("");
+const savingEdit = ref(false);
+
+function startEdit() {
+  editBranch.value = store.detail?.branch ?? "";
+  editDefaultBranch.value = store.detail?.default_branch ?? "";
+  editing.value = true;
+}
+
+async function saveEdit() {
+  savingEdit.value = true;
+  try {
+    await store.update(props.id, {
+      branch: editBranch.value.trim() || undefined,
+      default_branch: editDefaultBranch.value.trim() || undefined,
+    });
+    editing.value = false;
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e));
+  } finally {
+    savingEdit.value = false;
+  }
+}
 
 async function withBusy(label: string, fn: () => Promise<void>) {
   busy.value = label;
@@ -244,6 +272,58 @@ async function toggleDiff() {
         <dd class="font-mono text-xs break-all">{{ store.detail.work_dir }}</dd>
       </div>
     </dl>
+
+    <section v-if="isPending" class="bg-white p-4 rounded shadow-sm space-y-2">
+      <div class="flex items-center justify-between">
+        <h2 class="font-medium text-sm">Edit task</h2>
+        <button
+          v-if="!editing"
+          class="text-xs text-blue-700 hover:underline"
+          @click="startEdit"
+        >
+          Edit
+        </button>
+      </div>
+      <template v-if="editing">
+        <label class="block text-xs text-gray-500">
+          Branch
+          <input
+            v-model="editBranch"
+            :disabled="savingEdit"
+            class="mt-1 w-full text-sm font-mono border border-gray-300 rounded p-2 disabled:opacity-60"
+            placeholder="feature-branch"
+          />
+        </label>
+        <label class="block text-xs text-gray-500">
+          Default branch (diff / MR base)
+          <input
+            v-model="editDefaultBranch"
+            :disabled="savingEdit"
+            class="mt-1 w-full text-sm font-mono border border-gray-300 rounded p-2 disabled:opacity-60"
+          />
+        </label>
+        <div class="flex justify-end gap-2">
+          <button
+            class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-60"
+            :disabled="savingEdit"
+            @click="editing = false"
+          >
+            Cancel
+          </button>
+          <button
+            class="rounded bg-blue-600 text-white px-3 py-1.5 text-sm hover:bg-blue-700 disabled:opacity-60"
+            :disabled="savingEdit"
+            @click="saveEdit"
+          >
+            {{ savingEdit ? "Saving…" : "Save" }}
+          </button>
+        </div>
+      </template>
+      <p v-else class="text-xs text-gray-500">
+        Change the branch this task runs on before confirming. It can't be the
+        default branch.
+      </p>
+    </section>
 
     <div class="flex flex-wrap gap-2">
       <button
