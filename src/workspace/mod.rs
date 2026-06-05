@@ -83,13 +83,16 @@ impl Workspace {
     }
 
     /// Acquire both the in-process mutex and the cross-process advisory lock
-    /// guarding mutations of the project's branch worktrees.
-    pub async fn lock_project(
+    /// guarding mutations of a single branch worktree. Scoped per branch (not
+    /// per project) so tasks on different branches of the same project — each
+    /// of which has its own independent clone — can set up concurrently.
+    pub async fn lock_branch(
         &self,
         service_slug: &str,
         project_slug: &str,
-    ) -> Result<ProjectLockGuard> {
-        let key = format!("{service_slug}/{project_slug}");
+        branch_slug: &str,
+    ) -> Result<BranchLockGuard> {
+        let key = format!("{service_slug}/{project_slug}/{branch_slug}");
         let mutex = self
             .in_proc_locks
             .entry(key)
@@ -101,13 +104,15 @@ impl Workspace {
         tokio::fs::create_dir_all(&project_root)
             .await
             .with_context(|| format!("creating {}", project_root.display()))?;
-        let lock_path = project_root.join(".lock");
+        // Sibling file of the branch worktree dir, so removing the worktree
+        // doesn't disturb a held lock.
+        let lock_path = project_root.join(format!("{branch_slug}.lock"));
 
         let file_lock = tokio::task::spawn_blocking(move || AdvisoryFileLock::acquire(&lock_path))
             .await
             .context("spawn_blocking failed")??;
 
-        Ok(ProjectLockGuard {
+        Ok(BranchLockGuard {
             _in_proc,
             _file: file_lock,
         })
@@ -119,8 +124,9 @@ impl Workspace {
         path: &Path,
         auth_url: &str,
         branch: &str,
+        default_branch: &str,
     ) -> Result<()> {
-        git::clone_or_fetch(path, auth_url, branch).await
+        git::clone_or_fetch(path, auth_url, branch, default_branch).await
     }
 
     /// Remove only this branch's working tree (NOT any sibling branches).
@@ -141,7 +147,7 @@ impl Workspace {
     }
 }
 
-pub struct ProjectLockGuard {
+pub struct BranchLockGuard {
     _in_proc: tokio::sync::OwnedMutexGuard<()>,
     _file: AdvisoryFileLock,
 }

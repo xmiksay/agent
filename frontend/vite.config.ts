@@ -9,6 +9,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": { target: BACKEND, changeOrigin: true },
+      "/ws": { target: BACKEND, changeOrigin: true, ws: true },
       "/webhook": { target: BACKEND, changeOrigin: true },
       "/internal": { target: BACKEND, changeOrigin: true },
       "/health": { target: BACKEND, changeOrigin: true },

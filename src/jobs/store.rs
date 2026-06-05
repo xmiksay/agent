@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::entity::{task_results, tasks};
+use crate::jobs::hub::LiveSessions;
 use crate::jobs::output_log::TaskOutputLog;
 use crate::jobs::registry::RunningTasks;
 use crate::jobs::runner::run_job;
@@ -28,6 +29,7 @@ pub struct TaskStore {
     workspace: Arc<Workspace>,
     output_log: TaskOutputLog,
     running: RunningTasks,
+    hub: LiveSessions,
 }
 
 impl TaskStore {
@@ -39,6 +41,7 @@ impl TaskStore {
         workspace: Arc<Workspace>,
         output_log: TaskOutputLog,
         running: RunningTasks,
+        hub: LiveSessions,
     ) -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_jobs)),
@@ -50,11 +53,16 @@ impl TaskStore {
             workspace,
             output_log,
             running,
+            hub,
         }
     }
 
     pub fn output_log(&self) -> &TaskOutputLog {
         &self.output_log
+    }
+
+    pub fn hub(&self) -> &LiveSessions {
+        &self.hub
     }
 
     pub fn db(&self) -> &DatabaseConnection {
@@ -104,6 +112,9 @@ impl TaskStore {
         if !self.running.abort(task_id).await {
             anyhow::bail!("task is not running");
         }
+        // The runner future was aborted before it could flush/close the live
+        // session — do it here so the stdin pump stops and the WS detaches.
+        self.hub.end(task_id).await;
         // Reflect the kill in the DB so the UI doesn't show "running" forever.
         let _ = self.finish_task(task_id, "killed").await;
         info!(%task_id, "aborted running task");
@@ -115,6 +126,7 @@ impl TaskStore {
         // the claude Child (kill_on_drop=true) → SIGKILL.
         let was_running = self.running.abort(task_id).await;
         if was_running {
+            self.hub.end(task_id).await;
             info!(%task_id, "aborted running task before delete");
         }
 
@@ -194,6 +206,7 @@ impl TaskStore {
         // Pause-if-running, then resume.
         let was_running = self.running.abort(task_id).await;
         if was_running {
+            self.hub.end(task_id).await;
             let _ = self.finish_task(task_id, "killed").await;
             info!(%task_id, "paused running task to deliver pushed message");
         }
@@ -307,6 +320,52 @@ impl TaskStore {
         Ok(())
     }
 
+    /// Edit a pending task's input fields. Run-managed fields (status,
+    /// timestamps, session_id, pid, pending_message) are deliberately not
+    /// editable — they're owned by the run loop. Only allowed before the task
+    /// starts; once running, the worktree is already checked out. The resulting
+    /// branch may never equal the default branch, so the "never run on default"
+    /// rule holds.
+    pub async fn update_task(&self, task_id: Uuid, edits: TaskEdits) -> Result<()> {
+        let task = tasks::Entity::find_by_id(task_id)
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
+        if task.status != "pending" {
+            bail!(
+                "can only edit a task while it is pending (status: {})",
+                task.status
+            );
+        }
+
+        // Effective post-edit values, used for the cross-field branch guard.
+        let default_branch = edits
+            .default_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&task.default_branch)
+            .to_string();
+        let branch = match edits.branch.as_deref().map(str::trim) {
+            Some(b) => {
+                if b.is_empty() {
+                    bail!("branch must not be empty");
+                }
+                b.to_string()
+            }
+            None => task.branch.clone().unwrap_or_else(|| default_branch.clone()),
+        };
+        if branch == default_branch {
+            bail!("refusing to set task branch to the default branch '{default_branch}'");
+        }
+
+        let mut active: tasks::ActiveModel = task.into();
+        active.branch = Set(Some(branch));
+        active.default_branch = Set(default_branch);
+        active.update(&self.db).await?;
+        Ok(())
+    }
+
     pub async fn set_session_id_pub(&self, task_id: Uuid, session_id: &str) -> Result<()> {
         self.set_session_id(task_id, session_id).await
     }
@@ -361,7 +420,28 @@ impl TaskStore {
         let trigger_data = serde_json::to_value(&trigger)
             .context("failed to serialize trigger")?;
 
-        let branch = trigger.branch().map(|s| s.to_string());
+        // Every task runs on a non-default branch. MR triggers reuse the MR's
+        // source branch; issue triggers derive `<iid>-<title-slug>`. A follow-up
+        // comment carries no title, so it reuses the branch the original issue
+        // task recorded (falling back to a bare `<iid>` if none exists yet).
+        let branch = Some(match &trigger {
+            TriggerReason::ReviewMR { source_branch, .. }
+            | TriggerReason::FixReview { source_branch, .. }
+            | TriggerReason::MRComment { source_branch, .. } => source_branch.clone(),
+            TriggerReason::Issue { iid, title, .. } => issue_branch_name(*iid, title),
+            TriggerReason::IssueComment { issue_iid, .. } => {
+                let existing = match project_id {
+                    Some(pid) => self
+                        .project_store
+                        .find_branch_for_issue(pid, *issue_iid as i64)
+                        .await
+                        .context("looking up issue branch")?
+                        .map(|b| b.branch_name),
+                    None => None,
+                };
+                existing.unwrap_or_else(|| issue_branch_name(*issue_iid, ""))
+            }
+        });
         let task = tasks::ActiveModel {
             id: Set(id),
             status: Set("pending".to_string()),
@@ -380,6 +460,7 @@ impl TaskStore {
             session_id: Set(None),
             pid: Set(None),
             pending_message: Set(None),
+            event_log: Set(None),
         };
 
         tasks::Entity::insert(task)
@@ -434,21 +515,24 @@ impl TaskStore {
             bail!("task is not pending (status: {})", task.status);
         }
 
-        // One agent per project: refuse to start while another task on the
-        // same project is already running. The workspace project lock would
-        // serialize them anyway, but blocking up-front gives the operator a
-        // clear error instead of a task that silently waits.
-        if let Some(pid) = task.project_id {
+        // One agent per branch: refuse to start while another task on the same
+        // project *and branch* is already running — that's the real conflict,
+        // since both would share one worktree. Different branches each have
+        // their own clone and run concurrently. The branch lock serializes
+        // setup anyway, but blocking up-front gives the operator a clear error
+        // instead of a task that silently waits.
+        if let (Some(pid), Some(branch)) = (task.project_id, task.branch.clone()) {
             let other = tasks::Entity::find()
                 .filter(tasks::Column::ProjectId.eq(pid))
+                .filter(tasks::Column::Branch.eq(branch.clone()))
                 .filter(tasks::Column::Status.eq("running"))
                 .filter(tasks::Column::Id.ne(task_id))
                 .one(&self.db)
                 .await
-                .context("checking concurrent project task")?;
+                .context("checking concurrent branch task")?;
             if let Some(other) = other {
                 bail!(
-                    "another task ({}) is already running on this project; \
+                    "another task ({}) is already running on branch '{branch}'; \
                      wait for it to finish or kill it first",
                     other.id
                 );
@@ -556,6 +640,7 @@ impl TaskStore {
                 store.workspace.clone(),
                 store.project_store.clone(),
                 store.output_log.clone(),
+                store.hub.clone(),
                 resume_session_id,
                 prompt_override,
                 Some(pid_tx),
@@ -683,6 +768,19 @@ impl TaskStore {
             .context("failed to list tasks")
     }
 
+    /// Persisted agent event history (`event_log`) in order; empty if none yet.
+    pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<serde_json::Value>> {
+        let task = tasks::Entity::find_by_id(task_id)
+            .one(&self.db)
+            .await
+            .context("db error")?
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
+        Ok(match task.event_log {
+            Some(serde_json::Value::Array(items)) => items,
+            _ => Vec::new(),
+        })
+    }
+
     pub async fn get_task(
         &self,
         task_id: Uuid,
@@ -703,5 +801,30 @@ impl TaskStore {
             .context("db error")?;
 
         Ok(Some((task, result)))
+    }
+}
+
+/// Operator-editable fields of a pending task. Only fields present (`Some`)
+/// are changed; run-managed state is not represented here on purpose.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct TaskEdits {
+    pub branch: Option<String>,
+    pub default_branch: Option<String>,
+}
+
+/// `<iid>-<slug(title)>`, e.g. `42-fix-login-button`. Falls back to a bare
+/// `<iid>` when the title slug is empty. The slug is capped so branch names
+/// stay sane for long issue titles.
+fn issue_branch_name(iid: u64, title: &str) -> String {
+    use crate::workspace::layout::slugify;
+    let mut slug = slugify(title);
+    slug.truncate(50);
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        iid.to_string()
+    } else {
+        format!("{iid}-{slug}")
     }
 }

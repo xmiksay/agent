@@ -21,15 +21,24 @@ export interface Task {
   pid: number | null;
 }
 
-export interface TaskOutput {
+/** One frame on the task live stream (see src/ws/mod.rs `Envelope`). */
+export type EnvelopeKind = "event" | "auth_request" | "status";
+
+export interface StreamEnvelope {
   task_id: string;
-  command: string;
-  exit_code: number | null;
-  stdout: string;
-  stderr: string;
-  captured_at: string;
-  finished: boolean;
+  agent: string;
+  /** Monotonic per-task sequence. Only `event` frames carry a meaningful seq;
+   *  it lines up with the index in the persisted /events history for dedupe. */
+  seq: number;
+  kind: EnvelopeKind;
+  payload: unknown;
 }
+
+/** Operator → agent messages sent back over the same socket. */
+export type InboundMessage =
+  | { kind: "chat"; text: string }
+  | { kind: "redefine"; text: string }
+  | { kind: "stop" };
 
 export interface TaskResult {
   id: string;
@@ -161,6 +170,12 @@ export type TriggerKind = TriggerReason["type"];
 export interface NewTaskBody {
   project_id: string;
   trigger: TriggerReason;
+}
+
+/** Editable fields of a pending task. Only provided keys are changed. */
+export interface TaskEdits {
+  branch?: string;
+  default_branch?: string;
 }
 
 export type StatsGroupBy = "project" | "service" | "branch" | "trigger_type";

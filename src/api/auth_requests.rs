@@ -76,5 +76,14 @@ pub async fn resolve_auth_request(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     state.auth_waiter.notify(id);
+    // Push the resolution to the task's live stream so the inline approval card
+    // clears without waiting for the next poll.
+    if let Ok(payload) = serde_json::to_value(&resolved) {
+        state
+            .task_store
+            .hub()
+            .publish_aux(resolved.task_id, crate::jobs::hub::EnvelopeKind::AuthRequest, payload)
+            .await;
+    }
     Ok(Json(ResolveResponse { request: resolved }))
 }
