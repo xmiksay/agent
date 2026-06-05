@@ -164,6 +164,134 @@ impl TaskStore {
         Ok(task_id)
     }
 
+    /// Queue an operator-supplied message to be used as the prompt on the
+    /// next claude run for this task. If the task is currently running, we
+    /// pause it (preserving session_id) and immediately resume so the message
+    /// gets picked up. If it's already in a resumable state, just resume.
+    pub async fn push_message(self: &Arc<Self>, task_id: Uuid, message: String) -> Result<()> {
+        if message.trim().is_empty() {
+            anyhow::bail!("message is empty");
+        }
+        let task = tasks::Entity::find_by_id(task_id)
+            .one(&self.db)
+            .await
+            .context("db error")?
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
+        if task.session_id.is_none() {
+            anyhow::bail!("task has no session_id; cannot push a follow-up");
+        }
+
+        // Persist the message first so a crash between kill and resume still
+        // delivers it on the next manual resume.
+        let mut active: tasks::ActiveModel = task.clone().into();
+        active.pending_message = Set(Some(message));
+        active.update(&self.db).await?;
+
+        // Pause-if-running, then resume.
+        let was_running = self.running.abort(task_id).await;
+        if was_running {
+            let _ = self.finish_task(task_id, "killed").await;
+            info!(%task_id, "paused running task to deliver pushed message");
+        }
+
+        if task.status == "pending" {
+            // Already pending; confirm will pick up pending_message.
+            self.confirm_task(task_id).await?;
+        } else {
+            // continue_task resets to pending → confirm.
+            self.continue_task(task_id).await?;
+        }
+        Ok(())
+    }
+
+    async fn clear_pending_message(&self, task_id: Uuid) -> Result<()> {
+        let mut active: tasks::ActiveModel = tasks::Entity::find_by_id(task_id)
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?
+            .into();
+        active.pending_message = Set(None);
+        active.update(&self.db).await?;
+        Ok(())
+    }
+
+    /// Diff the task's working tree against `origin/<default_branch>`.
+    /// Two-dot (not merge-base) so the result captures everything the operator
+    /// would expect to see for an in-flight task: branch commits, staged
+    /// edits, and unstaged edits. Untracked files are appended as a trailing
+    /// `Untracked files:` listing — they don't show up in `git diff` but are
+    /// part of "what's in this worktree right now".
+    pub async fn branch_diff(&self, task_id: Uuid) -> Result<String> {
+        use crate::workspace::layout::slugify;
+        use tokio::process::Command;
+
+        let task = tasks::Entity::find_by_id(task_id)
+            .one(&self.db)
+            .await
+            .context("db error")?
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
+
+        let Some(service_id) = task.git_service_id else {
+            anyhow::bail!("task has no git_service_id");
+        };
+        let service = self
+            .providers
+            .service(service_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("git_service not loaded"))?;
+
+        let project_slug = slugify(&task.project_path);
+        let branch = task.branch.unwrap_or_else(|| task.default_branch.clone());
+        let branch_slug = slugify(&branch);
+        let work_dir = self
+            .workspace
+            .branch_dir(&service.slug, &project_slug, &branch_slug);
+
+        if tokio::fs::metadata(&work_dir).await.is_err() {
+            anyhow::bail!("branch checkout missing at {}", work_dir.display());
+        }
+
+        let base = format!("origin/{}", task.default_branch);
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&work_dir)
+            .arg("diff")
+            .arg(&base)
+            .output()
+            .await
+            .context("spawning git diff")?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            anyhow::bail!("git diff failed: {stderr}");
+        }
+        let mut diff = String::from_utf8_lossy(&out.stdout).into_owned();
+
+        let untracked = Command::new("git")
+            .arg("-C")
+            .arg(&work_dir)
+            .args(["ls-files", "--others", "--exclude-standard"])
+            .output()
+            .await
+            .context("spawning git ls-files")?;
+        if untracked.status.success() {
+            let list = String::from_utf8_lossy(&untracked.stdout);
+            let list = list.trim();
+            if !list.is_empty() {
+                if !diff.is_empty() && !diff.ends_with('\n') {
+                    diff.push('\n');
+                }
+                diff.push_str("\nUntracked files:\n");
+                for line in list.lines() {
+                    diff.push_str("  ");
+                    diff.push_str(line);
+                    diff.push('\n');
+                }
+            }
+        }
+
+        Ok(diff)
+    }
+
     pub async fn set_pid(&self, task_id: Uuid, pid: Option<u32>) -> Result<()> {
         let mut active: tasks::ActiveModel = tasks::Entity::find_by_id(task_id)
             .one(&self.db)
@@ -247,6 +375,7 @@ impl TaskStore {
             git_service_id: Set(Some(git_service_id)),
             session_id: Set(None),
             pid: Set(None),
+            pending_message: Set(None),
         };
 
         tasks::Entity::insert(task)
@@ -355,6 +484,15 @@ impl TaskStore {
             info!(%task_id, "job starting");
 
             let resume_session_id = task.session_id.clone();
+            // Consume pending_message: clear the column before spawn so a
+            // crash doesn't replay the same message on the next retry, and
+            // pass it to run_job as a prompt override.
+            let prompt_override = task.pending_message.clone();
+            if prompt_override.is_some() {
+                if let Err(e) = store.clear_pending_message(task_id).await {
+                    error!(%task_id, error = %e, "failed to clear pending_message");
+                }
+            }
             let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<u32>();
             let pid_writer = {
                 let store = store.clone();
@@ -394,6 +532,7 @@ impl TaskStore {
                 store.project_store.clone(),
                 store.output_log.clone(),
                 resume_session_id,
+                prompt_override,
                 Some(pid_tx),
                 Some(session_tx),
             )

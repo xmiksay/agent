@@ -2,7 +2,7 @@
 members = [".", "migration"]
 
 [package]
-name = "gitlab-claude-agent"
+name = "agent"
 version = "0.1.0"
 edition = "2024"
 
@@ -31,4 +31,5 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 subtle = "2"
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
+rust-embed = "8"

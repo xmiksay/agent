@@ -127,3 +127,38 @@ pub async fn continue_task(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(RetryResponse { task_id: new_id }))
 }
+
+#[derive(Deserialize)]
+pub struct PushMessageBody {
+    pub body: String,
+}
+
+pub async fn push_message(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<PushMessageBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .task_store
+        .push_message(id, payload.body)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Serialize)]
+pub struct DiffResponse {
+    pub diff: String,
+}
+
+pub async fn task_diff(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DiffResponse>, (StatusCode, String)> {
+    let diff = state
+        .task_store
+        .branch_diff(id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(DiffResponse { diff }))
+}

@@ -120,6 +120,7 @@ fn normalize_issue(e: &IssueEvent) -> Option<NormalizedEvent> {
 fn normalize_merge_request(e: &MergeRequestEvent) -> Option<NormalizedEvent> {
     let attrs = &e.object_attributes;
     let action = attrs.action.as_deref()?;
+    let reviewers: Vec<String> = e.reviewers.iter().map(|r| r.username.clone()).collect();
     let kind = match action {
         "approved" | "unapproval" | "approval" => EventKind::PrReviewSubmitted {
             iid: attrs.iid,
@@ -134,6 +135,17 @@ fn normalize_merge_request(e: &MergeRequestEvent) -> Option<NormalizedEvent> {
                 ReviewState::Other
             },
             url: attrs.url.clone(),
+            reviewers,
+            // GitLab webhook only gives author_id (numeric), not username.
+            author: None,
+        },
+        "open" | "update" | "reopen" => EventKind::ReviewRequested {
+            iid: attrs.iid,
+            source_branch: attrs.source_branch.clone(),
+            target_branch: attrs.target_branch.clone(),
+            url: attrs.url.clone(),
+            reviewers,
+            title: attrs.title.clone(),
         },
         "close" | "merge" => EventKind::PrClosed {
             iid: attrs.iid,
@@ -158,6 +170,10 @@ fn normalize_note(e: &NoteEvent) -> Option<NormalizedEvent> {
             NoteTargetRef::PullRequest {
                 iid: mr.iid,
                 source_branch: mr.source_branch.clone(),
+                // GitLab note payload doesn't carry MR author/reviewers; the
+                // dispatcher falls back to the actor check.
+                author: None,
+                reviewers: Vec::new(),
             }
         }
         "Issue" => {
@@ -165,6 +181,9 @@ fn normalize_note(e: &NoteEvent) -> Option<NormalizedEvent> {
             NoteTargetRef::Issue {
                 iid: issue.iid,
                 source_branch: None,
+                // GitLab Issue payload only exposes assignee_ids (numeric); we
+                // can't resolve usernames from the webhook alone.
+                assignees: Vec::new(),
             }
         }
         _ => return None,

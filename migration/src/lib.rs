@@ -11,6 +11,7 @@ mod m20260601_000008_add_git_service_to_tasks;
 mod m20260601_000009_add_task_session_id;
 mod m20260601_000010_add_task_pid;
 mod m20260601_000011_add_auth_request_metadata;
+mod m20260605_000012_add_task_pending_message;
 
 pub struct Migrator;
 
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260601_000009_add_task_session_id::Migration),
             Box::new(m20260601_000010_add_task_pid::Migration),
             Box::new(m20260601_000011_add_auth_request_metadata::Migration),
+            Box::new(m20260605_000012_add_task_pending_message::Migration),
         ]
     }
 }

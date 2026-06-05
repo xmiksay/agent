@@ -6,6 +6,7 @@ mod git_service;
 mod jobs;
 mod project;
 mod provider;
+mod spa;
 mod webhook;
 mod workspace;
 
@@ -18,8 +19,7 @@ use axum::Router;
 use anyhow::Context;
 use migration::MigratorTrait;
 use sea_orm::Database;
-use tower_http::services::{ServeDir, ServeFile};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
@@ -111,6 +111,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/{id}/retry", post(api::handlers::retry_task))
         .route("/api/tasks/{id}/kill", post(api::handlers::kill_task))
         .route("/api/tasks/{id}/continue", post(api::handlers::continue_task))
+        .route("/api/tasks/{id}/message", post(api::handlers::push_message))
+        .route("/api/tasks/{id}/diff", get(api::handlers::task_diff))
         .route("/api/tasks/{id}/output", get(api::handlers::task_output))
         .route("/api/projects", get(api::projects::list_projects))
         .route(
@@ -160,30 +162,14 @@ async fn main() -> anyhow::Result<()> {
             )),
         );
 
-    let spa_root = std::env::var("FRONTEND_DIST")
-        .unwrap_or_else(|_| "frontend/dist".to_string());
-    let index = std::path::PathBuf::from(&spa_root).join("index.html");
-    let spa_service = if index.exists() {
-        Some(
-            ServeDir::new(&spa_root)
-                .not_found_service(ServeFile::new(index)),
-        )
-    } else {
-        warn!(spa = %spa_root, "SPA dist not found; only JSON API will be served");
-        None
-    };
-
-    let mut app = Router::new()
+    let app = Router::new()
         .route("/webhook/gitlab/{slug}", post(webhook::gitlab::handle))
         .route("/webhook/github/{slug}", post(webhook::github::handle))
         .route("/internal/authcheck", post(auth::handlers::authcheck))
         .merge(api_routes)
         .route("/health", get(health))
-        .with_state(state);
-
-    if let Some(svc) = spa_service {
-        app = app.fallback_service(svc);
-    }
+        .with_state(state)
+        .fallback(spa::handler);
 
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     info!(addr = %config.listen_addr, "server starting");

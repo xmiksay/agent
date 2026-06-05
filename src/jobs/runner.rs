@@ -31,6 +31,7 @@ pub async fn run_job(
     project_store: Arc<ProjectStore>,
     output_log: TaskOutputLog,
     resume_session_id: Option<String>,
+    prompt_override: Option<String>,
     mut pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
     session_tx: Option<tokio::sync::oneshot::Sender<String>>,
 ) -> Result<ClaudeOutput> {
@@ -85,7 +86,10 @@ pub async fn run_job(
 
     drop(_guard);
 
-    let prompt = build_prompt(&trigger);
+    let prompt = match prompt_override {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => build_prompt(&trigger),
+    };
     info!(%prompt, "running claude");
 
     let agent_port = config
@@ -234,10 +238,13 @@ pub async fn run_job(
     // Post result back to provider
     post_result(&trigger, &claude_result, &project_path, provider.as_ref()).await?;
 
-    // Push any changes for issue/fix workflows
+    // Push any changes for workflows that produce code edits.
     if matches!(
         trigger,
-        TriggerReason::Issue { .. } | TriggerReason::FixReview { .. }
+        TriggerReason::Issue { .. }
+            | TriggerReason::FixReview { .. }
+            | TriggerReason::MRComment { .. }
+            | TriggerReason::IssueComment { .. }
     ) {
         push_changes(work_dir.to_string_lossy().as_ref()).await?;
     }
@@ -271,11 +278,17 @@ fn build_prompt(trigger: &TriggerReason) -> String {
                  - If everything looks good, approve with `glab mr approve {iid}`"
             )
         }
-        TriggerReason::FixReview { iid, title, source_branch, url, .. } => {
+        TriggerReason::FixReview { iid, title, source_branch, url, review_body, .. } => {
+            let review_section = if review_body.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\nReview body:\n{review_body}\n")
+            };
             format!(
                 "Fix review comments on MR !{iid}: {title}\n\
                  Branch: {source_branch}\n\
-                 URL: {url}\n\n\
+                 URL: {url}\n\
+                 {review_section}\n\
                  Instructions:\n\
                  - Check review comments: `glab mr view {iid} --comments`\n\
                  - Address each comment\n\
@@ -284,22 +297,28 @@ fn build_prompt(trigger: &TriggerReason) -> String {
         }
         TriggerReason::MRComment { mr_iid, comment, url, .. } => {
             format!(
-                "Respond to comment on MR !{mr_iid}\n\
+                "A reviewer commented on MR !{mr_iid}\n\
                  Comment: {comment}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Address the request in the comment\n\
-                 - Reply using `glab mr note {mr_iid}`"
+                 - Treat the comment as a change request against this branch\n\
+                 - Make the requested code changes\n\
+                 - Commit the changes with a message that references the comment\n\
+                 - Push so the MR picks up the new commit\n\
+                 - Reply on the thread with `glab mr note {mr_iid}` summarising what changed"
             )
         }
         TriggerReason::IssueComment { issue_iid, comment, url, .. } => {
             format!(
-                "Respond to comment on issue #{issue_iid}\n\
+                "A new comment was posted on issue #{issue_iid} (assigned to the bot)\n\
                  Comment: {comment}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Address the request in the comment\n\
-                 - Reply using `glab issue note {issue_iid}`"
+                 - Re-read the issue and any prior conversation to recover context\n\
+                 - Treat the comment as additional guidance or a follow-up request\n\
+                 - Rework or extend the implementation as needed\n\
+                 - Commit and push any code changes\n\
+                 - Reply to the comment using `glab issue note {issue_iid}` summarising what changed"
             )
         }
     }
@@ -388,7 +407,14 @@ async fn write_settings_local(
 ) -> anyhow::Result<()> {
     let claude_dir = work_dir.join(".claude");
     tokio::fs::create_dir_all(&claude_dir).await?;
+    // `bypassPermissions` skips Claude Code's interactive permission prompts
+    // (which can't be answered in headless `-p` mode). The Bash + AskUserQuestion
+    // PreToolUse hooks still fire — they're the actual policy layer — so this
+    // only unblocks Edit/Write/MultiEdit/Read/etc., which are not gated here.
     let body = serde_json::json!({
+        "permissions": {
+            "defaultMode": "bypassPermissions"
+        },
         "hooks": {
             "PreToolUse": [
                 {

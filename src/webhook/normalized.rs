@@ -30,8 +30,20 @@ pub enum ReviewState {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NoteTargetRef {
-    Issue { iid: u64, source_branch: Option<String> },
-    PullRequest { iid: u64, source_branch: String },
+    Issue {
+        iid: u64,
+        source_branch: Option<String>,
+        #[serde(default)]
+        assignees: Vec<String>,
+    },
+    PullRequest {
+        iid: u64,
+        source_branch: String,
+        #[serde(default)]
+        author: Option<String>,
+        #[serde(default)]
+        reviewers: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +74,16 @@ pub enum EventKind {
         review_body: String,
         state: ReviewState,
         url: String,
+        reviewers: Vec<String>,
+        author: Option<String>,
+    },
+    ReviewRequested {
+        iid: u64,
+        source_branch: String,
+        target_branch: String,
+        url: String,
+        reviewers: Vec<String>,
+        title: String,
     },
     PrClosed {
         iid: u64,
@@ -75,29 +97,3 @@ pub enum EventKind {
     },
 }
 
-impl EventKind {
-    /// Stable string for dedup keys.
-    pub fn dedup_key(&self) -> String {
-        match self {
-            EventKind::IssueAssigned { iid, .. } => format!("issue-assigned-{iid}"),
-            EventKind::IssueUpdated { iid, .. } => format!("issue-updated-{iid}"),
-            EventKind::IssueClosed { iid, .. } => format!("issue-closed-{iid}"),
-            EventKind::PrReviewSubmitted { iid, .. } => format!("pr-review-{iid}"),
-            EventKind::PrClosed { iid, .. } => format!("pr-closed-{iid}"),
-            EventKind::NoteAdded { target, body, .. } => {
-                let h = hash_str(body);
-                match target {
-                    NoteTargetRef::Issue { iid, .. } => format!("note-issue-{iid}-{h}"),
-                    NoteTargetRef::PullRequest { iid, .. } => format!("note-pr-{iid}-{h}"),
-                }
-            }
-        }
-    }
-}
-
-fn hash_str(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    h.finish()
-}

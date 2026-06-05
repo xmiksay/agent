@@ -41,25 +41,6 @@ pub async fn clone_or_fetch(path: &Path, auth_url: &str, branch: &str) -> Result
     Ok(())
 }
 
-pub async fn has_changes(path: &Path) -> Result<bool> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("status")
-        .arg("--porcelain")
-        .output()
-        .await
-        .context("spawning git status")?;
-    if !output.status.success() {
-        bail!("git status failed");
-    }
-    Ok(!output.stdout.is_empty())
-}
-
-pub async fn push(path: &Path, branch: &str) -> Result<()> {
-    run_git(path, &["push", "origin", branch]).await
-}
-
 async fn run_git(path: &Path, args: &[&str]) -> Result<()> {
     debug!(path = %path.display(), ?args, "git");
     let output = Command::new("git")

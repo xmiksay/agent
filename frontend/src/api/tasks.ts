@@ -26,4 +26,13 @@ export const tasksApi = {
   output(id: string): Promise<TaskOutput> {
     return api(`/api/tasks/${id}/output`);
   },
+  pushMessage(id: string, body: string): Promise<void> {
+    return api(`/api/tasks/${id}/message`, {
+      method: "POST",
+      body: { body },
+    });
+  },
+  diff(id: string): Promise<{ diff: string }> {
+    return api(`/api/tasks/${id}/diff`);
+  },
 };

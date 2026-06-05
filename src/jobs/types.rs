@@ -21,6 +21,8 @@ pub enum TriggerReason {
         title: String,
         source_branch: String,
         url: String,
+        #[serde(default)]
+        review_body: String,
     },
     MRComment {
         mr_iid: u64,
@@ -44,7 +46,9 @@ impl TriggerReason {
                 format!("issue-{iid}-{}", hash_str(&format!("{title}\n{description}")))
             }
             Self::ReviewMR { iid, .. } => format!("review-mr-{iid}"),
-            Self::FixReview { iid, .. } => format!("fix-review-{iid}"),
+            Self::FixReview { iid, review_body, .. } => {
+                format!("fix-review-{iid}-{}", hash_str(review_body))
+            }
             Self::MRComment { mr_iid, comment, .. } => {
                 format!("mr-comment-{mr_iid}-{}", hash_str(comment))
             }

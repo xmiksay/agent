@@ -32,6 +32,9 @@ pub struct PullRequest {
     pub html_url: String,
     pub head: PrRef,
     pub base: PrRef,
+    pub user: User,
+    #[serde(default)]
+    pub requested_reviewers: Vec<User>,
 }
 
 #[derive(Debug, Deserialize)]

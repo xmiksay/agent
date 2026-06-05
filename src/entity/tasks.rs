@@ -22,6 +22,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub session_id: Option<String>,
     pub pid: Option<i64>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub pending_message: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

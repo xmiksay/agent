@@ -132,11 +132,25 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
         }
         "pull_request" => {
             let ev: PullRequestEvent = serde_json::from_slice(body)?;
+            let reviewers: Vec<String> = ev
+                .pull_request
+                .requested_reviewers
+                .iter()
+                .map(|u| u.login.clone())
+                .collect();
             let kind = match ev.action.as_str() {
                 "closed" => EventKind::PrClosed {
                     iid: ev.pull_request.number,
                     source_branch: ev.pull_request.head.branch,
                     url: ev.pull_request.html_url,
+                },
+                "review_requested" | "opened" | "reopened" => EventKind::ReviewRequested {
+                    iid: ev.pull_request.number,
+                    source_branch: ev.pull_request.head.branch,
+                    target_branch: ev.pull_request.base.branch,
+                    url: ev.pull_request.html_url,
+                    reviewers,
+                    title: ev.pull_request.title,
                 },
                 _ => return Ok(None),
             };
@@ -158,6 +172,12 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
                 "commented" => ReviewState::Commented,
                 _ => ReviewState::Other,
             };
+            let reviewers: Vec<String> = ev
+                .pull_request
+                .requested_reviewers
+                .iter()
+                .map(|u| u.login.clone())
+                .collect();
             let kind = EventKind::PrReviewSubmitted {
                 iid: ev.pull_request.number,
                 source_branch: ev.pull_request.head.branch,
@@ -165,6 +185,8 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
                 review_body: ev.review.body.unwrap_or_default(),
                 state,
                 url: ev.review.html_url,
+                reviewers,
+                author: Some(ev.pull_request.user.login),
             };
             Some(NormalizedEvent {
                 provider: ProviderKind::Github,
@@ -179,17 +201,22 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
                 return Ok(None);
             }
             let body = ev.comment.body.unwrap_or_default();
+            let assignees: Vec<String> =
+                ev.issue.assignees.iter().map(|u| u.login.clone()).collect();
             // GitHub uses the same payload for PR comments — distinguished by
             // the presence of `pull_request` field on the issue.
             let target = if ev.pull_request.is_some() {
                 NoteTargetRef::PullRequest {
                     iid: ev.issue.number,
                     source_branch: String::new(), // not in this payload; runner will look up
+                    author: None,                 // PR object isn't in this payload
+                    reviewers: Vec::new(),
                 }
             } else {
                 NoteTargetRef::Issue {
                     iid: ev.issue.number,
                     source_branch: None,
+                    assignees,
                 }
             };
             Some(NormalizedEvent {

@@ -26,8 +26,6 @@ pub struct MergeRequestEvent {
     pub project: Project,
     pub object_attributes: MergeRequestAttributes,
     #[serde(default)]
-    pub assignees: Vec<Assignee>,
-    #[serde(default)]
     pub reviewers: Vec<Reviewer>,
 }
 
@@ -47,47 +45,34 @@ pub struct User {
 
 #[derive(Debug, Deserialize)]
 pub struct Project {
-    pub id: u64,
     pub path_with_namespace: String,
-    pub git_http_url: String,
     pub git_ssh_url: String,
     pub default_branch: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct IssueAttributes {
-    pub id: u64,
     pub iid: u64,
     pub title: String,
     pub description: Option<String>,
     pub action: Option<String>,
-    pub labels: Option<Vec<Label>>,
     pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct MergeRequestAttributes {
-    pub id: u64,
     pub iid: u64,
     pub title: String,
-    pub description: Option<String>,
     pub action: Option<String>,
     pub source_branch: String,
     pub target_branch: String,
-    pub author_id: u64,
     pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct NoteAttributes {
-    pub id: u64,
     pub note: String,
     pub noteable_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Label {
-    pub title: String,
 }
 
 #[derive(Debug, Deserialize)]

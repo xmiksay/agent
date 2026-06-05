@@ -186,35 +186,73 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
         EventKind::PrReviewSubmitted {
             iid,
             source_branch,
-            target_branch,
             state,
+            review_body,
             url,
+            author,
             ..
         } => {
             use crate::webhook::normalized::ReviewState;
-            match state {
-                ReviewState::ChangesRequested => Some(TriggerReason::FixReview {
-                    iid: *iid,
-                    title: String::new(),
-                    source_branch: source_branch.clone(),
-                    url: url.clone(),
-                }),
-                _ => Some(TriggerReason::ReviewMR {
-                    iid: *iid,
-                    title: String::new(),
-                    source_branch: source_branch.clone(),
-                    target_branch: target_branch.clone(),
-                    url: url.clone(),
-                }),
+            // FixReview is the "fix comments on my own MR" workflow, so the gate
+            // is "bot authored the MR". GitHub gives us the author directly;
+            // GitLab webhooks only expose `author_id` (numeric), so we fall back
+            // to assuming the MR is the bot's if the actor isn't the bot.
+            let is_my_mr = match author {
+                Some(a) => a == my_username,
+                None => ev.actor != my_username,
+            };
+            if !is_my_mr {
+                info!(iid, bot = %my_username, author = ?author, actor = %ev.actor, "review event on PR not authored by bot, skipping");
+                return None;
             }
+            // A bare approval with no body has nothing to address.
+            if matches!(state, ReviewState::Approved) && review_body.trim().is_empty() {
+                return None;
+            }
+            Some(TriggerReason::FixReview {
+                iid: *iid,
+                title: String::new(),
+                source_branch: source_branch.clone(),
+                url: url.clone(),
+                review_body: review_body.clone(),
+            })
+        }
+        EventKind::ReviewRequested {
+            iid,
+            source_branch,
+            target_branch,
+            url,
+            reviewers,
+            title,
+        } => {
+            if !reviewers.iter().any(|r| r == my_username) {
+                return None;
+            }
+            Some(TriggerReason::ReviewMR {
+                iid: *iid,
+                title: title.clone(),
+                source_branch: source_branch.clone(),
+                target_branch: target_branch.clone(),
+                url: url.clone(),
+            })
         }
         EventKind::PrClosed { .. } => None, // lifecycle in Phase 7
         EventKind::NoteAdded { target, body, url } => {
-            if !body.contains("@claude") {
-                return None;
-            }
+            let mention = format!("@{my_username}");
+            let mentioned = body.contains(&mention);
             match target {
-                NoteTargetRef::PullRequest { iid, source_branch } => {
+                NoteTargetRef::PullRequest { iid, source_branch, author, reviewers } => {
+                    // Mentions always count. Otherwise only act if the bot owns
+                    // (authored) the MR or is a reviewer on it.
+                    let is_my_mr = match author {
+                        Some(a) => a == my_username,
+                        // GitLab note payload lacks author; fall back to actor check.
+                        None => ev.actor != my_username,
+                    };
+                    let is_reviewer = reviewers.iter().any(|r| r == my_username);
+                    if !mentioned && !is_my_mr && !is_reviewer {
+                        return None;
+                    }
                     Some(TriggerReason::MRComment {
                         mr_iid: *iid,
                         comment: body.clone(),
@@ -222,11 +260,20 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
                         url: url.clone(),
                     })
                 }
-                NoteTargetRef::Issue { iid, .. } => Some(TriggerReason::IssueComment {
-                    issue_iid: *iid,
-                    comment: body.clone(),
-                    url: url.clone(),
-                }),
+                NoteTargetRef::Issue { iid, assignees, .. } => {
+                    // Bot reacts to comments on issues it is assigned to.
+                    // GitLab can't expose assignee usernames in the note payload;
+                    // there we still require an @-mention of the bot.
+                    let is_my_issue = assignees.iter().any(|a| a == my_username);
+                    if !mentioned && !is_my_issue {
+                        return None;
+                    }
+                    Some(TriggerReason::IssueComment {
+                        issue_iid: *iid,
+                        comment: body.clone(),
+                        url: url.clone(),
+                    })
+                }
             }
         }
     }

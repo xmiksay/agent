@@ -7,7 +7,9 @@ import ProviderBadge from "../components/ProviderBadge.vue";
 import ClaudeStream from "../components/ClaudeStream.vue";
 import TriggerView from "../components/TriggerView.vue";
 import MarkdownView from "../components/MarkdownView.vue";
+import DiffView from "../components/DiffView.vue";
 import { authApi } from "../api/auth";
+import { tasksApi } from "../api/tasks";
 import type { AuthRequest } from "../types/api";
 
 const props = defineProps<{ id: string }>();
@@ -150,6 +152,53 @@ async function toggleOutput() {
 }
 
 const showRaw = ref(false);
+
+// --- Push-message-to-loop ----------------------------------------------------
+const message = ref("");
+const pushingMessage = ref(false);
+const canPushMessage = computed(() => !!store.detail?.session_id);
+
+async function pushMessage() {
+  const body = message.value.trim();
+  if (!body) return;
+  pushingMessage.value = true;
+  try {
+    await tasksApi.pushMessage(props.id, body);
+    message.value = "";
+    await reload();
+    if (store.detail?.status === "running" || store.detail?.status === "pending") {
+      startPolling();
+    }
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e));
+  } finally {
+    pushingMessage.value = false;
+  }
+}
+
+// --- Branch diff -------------------------------------------------------------
+const showDiff = ref(false);
+const diffText = ref<string | null>(null);
+const diffError = ref<string | null>(null);
+const diffLoading = ref(false);
+
+async function loadDiff() {
+  diffLoading.value = true;
+  diffError.value = null;
+  try {
+    const res = await tasksApi.diff(props.id);
+    diffText.value = res.diff;
+  } catch (e) {
+    diffError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    diffLoading.value = false;
+  }
+}
+
+async function toggleDiff() {
+  showDiff.value = !showDiff.value;
+  if (showDiff.value && diffText.value === null) await loadDiff();
+}
 </script>
 
 <template>
@@ -242,6 +291,62 @@ const showRaw = ref(false);
         }}
       </button>
     </div>
+
+    <section
+      v-if="canPushMessage"
+      class="bg-white p-4 rounded shadow-sm space-y-2"
+    >
+      <h2 class="font-medium text-sm">Push message to loop</h2>
+      <p class="text-xs text-gray-500">
+        Queue an instruction for Claude. If the task is running it will be
+        paused and immediately resumed with this message as the prompt;
+        otherwise the message is delivered on resume.
+      </p>
+      <textarea
+        v-model="message"
+        rows="3"
+        :disabled="pushingMessage"
+        class="w-full text-sm font-mono border border-gray-300 rounded p-2 disabled:opacity-60"
+        placeholder="e.g. Also update the README to describe the new flag."
+      ></textarea>
+      <div class="flex justify-end">
+        <button
+          :disabled="pushingMessage || !message.trim()"
+          class="rounded bg-blue-600 text-white px-4 py-2 hover:bg-blue-700 disabled:opacity-60"
+          @click="pushMessage"
+        >
+          {{ pushingMessage ? "Sending…" : "Send" }}
+        </button>
+      </div>
+    </section>
+
+    <section class="bg-white p-4 rounded shadow-sm space-y-2">
+      <button
+        class="text-sm font-medium hover:text-blue-700"
+        @click="toggleDiff"
+      >
+        {{ showDiff ? "▾" : "▸" }} Branch diff
+        <span class="text-xs text-gray-500 ml-2">
+          vs origin/{{ store.detail.default_branch }}
+        </span>
+      </button>
+      <div v-if="showDiff" class="space-y-2">
+        <div class="flex items-center gap-2 text-xs text-gray-500">
+          <button
+            class="hover:text-gray-800 disabled:opacity-60"
+            :disabled="diffLoading"
+            @click="loadDiff"
+          >
+            {{ diffLoading ? "Loading…" : "Refresh" }}
+          </button>
+        </div>
+        <p v-if="diffError" class="text-xs text-red-700">{{ diffError }}</p>
+        <p v-else-if="diffText === ''" class="text-sm text-gray-500">
+          No changes against origin/{{ store.detail.default_branch }} yet.
+        </p>
+        <DiffView v-else-if="diffText !== null" :source="diffText" />
+      </div>
+    </section>
 
     <section v-if="store.detail.result" class="bg-white p-4 rounded shadow-sm space-y-2">
       <h2 class="font-medium">Result</h2>
