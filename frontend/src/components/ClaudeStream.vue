@@ -20,6 +20,7 @@
 import { computed } from "vue";
 import type { AuthRequest } from "../types/api";
 import AuthApprovalForm from "./AuthApprovalForm.vue";
+import MarkdownView from "./MarkdownView.vue";
 
 const props = defineProps<{
   text: string;
@@ -269,7 +270,8 @@ function clamp(s: string, n: number): string {
           <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
             {{ b.role }}
           </div>
-          <pre class="whitespace-pre-wrap font-sans text-sm leading-snug">{{ b.body }}</pre>
+          <MarkdownView v-if="b.role === 'assistant'" :source="b.body" />
+          <pre v-else class="whitespace-pre-wrap font-sans text-sm leading-snug">{{ b.body }}</pre>
         </div>
       </template>
 
