@@ -159,7 +159,7 @@ $REPO_BASE_PATH/
         ├── <branch_slug>.lock           # advisory file lock per branch
         ├── <branch_slug>/               # one git worktree per branch
         │   ├── .git/
-        │   └── .claude/settings.local.json   # bypassPermissions + PreToolUse hook
+        │   └── .claude/settings.local.json   # permission mode "auto" + PreToolUse hook
         └── …
 ```
 

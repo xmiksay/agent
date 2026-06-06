@@ -63,16 +63,17 @@ impl AgentBackend for ClaudeCode {
 
     fn worktree_files(&self, authcheck_hook: &Path) -> Vec<WorktreeFile> {
         let hook = authcheck_hook.to_string_lossy();
-        // `bypassPermissions` skips Claude Code's interactive permission prompts
-        // (which can't be answered in headless `-p` mode). The Bash +
-        // AskUserQuestion PreToolUse hooks still fire — they're the actual
-        // policy layer — so this only unblocks Edit/Write/Read/etc.
+        // `auto` runs Claude Code autonomously — it accepts routine actions
+        // (edits, reads) without prompting, which is required in headless mode
+        // where an interactive permission prompt can't be answered. The Bash +
+        // AskUserQuestion PreToolUse hooks still fire regardless of mode — they
+        // are the actual operator-approval policy layer.
         //
         // `settings.local.json` is the conventional per-machine override file
         // (typically gitignored), so it doesn't need to be committed by the
         // project.
         let body = serde_json::json!({
-            "permissions": { "defaultMode": "bypassPermissions" },
+            "permissions": { "defaultMode": "auto" },
             "hooks": {
                 "PreToolUse": [
                     { "matcher": "Bash", "hooks": [{ "type": "command", "command": hook }] },
@@ -208,12 +209,12 @@ mod tests {
     }
 
     #[test]
-    fn worktree_files_emits_settings_with_hook_and_bypass() {
+    fn worktree_files_emits_settings_with_hook_and_auto_mode() {
         let files = ClaudeCode.worktree_files(Path::new("/hooks/authcheck.sh"));
         assert_eq!(files.len(), 1);
         let f = &files[0];
         assert_eq!(f.rel_path, Path::new(".claude/settings.local.json"));
-        assert!(f.contents.contains("bypassPermissions"));
+        assert!(f.contents.contains("\"auto\""));
         assert!(f.contents.contains("/hooks/authcheck.sh"));
         assert!(f.contents.contains("AskUserQuestion"));
     }
