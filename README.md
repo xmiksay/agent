@@ -4,6 +4,16 @@ A Rust/Axum service that listens for git-forge webhooks, runs the `claude` CLI a
 
 Engineering rules and the full architecture map live in [`CLAUDE.md`](./CLAUDE.md). Read that first if you're going to modify the code.
 
+## Screenshots
+
+The Tasks dashboard — every agent run across all connected repos, with provider, branch, trigger, status, and spend:
+
+![Tasks dashboard](docs/screenshots/tasks.png)
+
+The Stats view — time spent by the agent, grouped and windowed:
+
+![Stats view](docs/screenshots/stats.png)
+
 ## Setup
 
 ### 1. Configure the host
