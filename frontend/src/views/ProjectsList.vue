@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { useProjectsStore } from "../stores/projects";
 import ProviderBadge from "../components/ProviderBadge.vue";
 
 const store = useProjectsStore();
+const router = useRouter();
+
+function open(id: string) {
+  router.push(`/projects/${id}`);
+}
 
 onMounted(() => store.refresh());
 </script>
@@ -19,7 +25,7 @@ onMounted(() => store.refresh());
     <div v-else-if="!store.list.length" class="card p-10 text-center text-faint">
       No projects yet — they appear after the first webhook event.
     </div>
-    <div v-else class="card overflow-x-auto">
+    <div v-else class="card overflow-hidden">
       <table class="tbl">
         <thead>
           <tr>
@@ -30,10 +36,14 @@ onMounted(() => store.refresh());
           </tr>
         </thead>
         <tbody>
-          <tr v-for="p in store.list" :key="p.id">
+          <tr v-for="p in store.list" :key="p.id" class="cursor-pointer" @click="open(p.id)">
             <td><ProviderBadge :provider="p.provider" /></td>
             <td>
-              <RouterLink :to="`/projects/${p.id}`" class="font-medium text-ink hover:text-accent">
+              <RouterLink
+                :to="`/projects/${p.id}`"
+                class="font-medium text-ink hover:text-accent"
+                @click.stop
+              >
                 {{ p.full_name }}
               </RouterLink>
             </td>

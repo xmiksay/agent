@@ -295,11 +295,11 @@ function questionList(input: unknown): AuthQuestion[] | null {
             <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-muted">{{ JSON.stringify(b.input, null, 2) }}</pre>
           </details>
 
-          <!-- Highlight the shell command behind a Bash call, terminal-style. -->
-          <div v-if="bashCommand(b)" class="overflow-hidden rounded border border-signal-live/30">
-            <div class="bg-signal-live/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-label text-signal-live">bash</div>
-            <pre class="overflow-x-auto bg-canvas px-3 py-2 font-mono text-[11px] leading-snug text-signal-live">{{ bashCommand(b) }}</pre>
-          </div>
+          <!-- Shell command behind a Bash call, highlighted terminal-style (no box). -->
+          <pre
+            v-if="bashCommand(b)"
+            class="overflow-x-auto whitespace-pre-wrap font-mono text-[11px] leading-snug text-signal-live"
+          ><span class="select-none text-signal-live/50">$ </span>{{ bashCommand(b) }}</pre>
 
           <!-- AskUserQuestion: show each question + its options (interactive form
                below when this call is awaiting approval). -->

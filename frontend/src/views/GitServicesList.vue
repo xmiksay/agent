@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { useGitServicesStore } from "../stores/git_services";
 import ProviderBadge from "../components/ProviderBadge.vue";
 import type { NewGitService, ProviderKind } from "../types/api";
 
 const store = useGitServicesStore();
+const router = useRouter();
+
+function open(id: string) {
+  router.push(`/git_services/${id}`);
+}
 
 const showForm = ref(false);
 const form = ref<NewGitService>(blank());
@@ -167,7 +173,7 @@ onMounted(() => store.refresh());
     <div v-else-if="!store.list.length" class="card p-10 text-center text-faint">
       No git services configured. Add one to start receiving webhooks.
     </div>
-    <div v-else class="card overflow-x-auto">
+    <div v-else class="card overflow-hidden">
       <table class="tbl">
         <thead>
           <tr>
@@ -179,17 +185,24 @@ onMounted(() => store.refresh());
           </tr>
         </thead>
         <tbody>
-          <tr v-for="s in store.list" :key="s.id">
+          <tr v-for="s in store.list" :key="s.id" class="cursor-pointer" @click="open(s.id)">
             <td><ProviderBadge :provider="s.kind" /></td>
             <td>
-              <RouterLink :to="`/git_services/${s.id}`" class="font-medium text-ink hover:text-accent">
+              <RouterLink
+                :to="`/git_services/${s.id}`"
+                class="font-medium text-ink hover:text-accent"
+                @click.stop
+              >
                 {{ s.display_name }}
               </RouterLink>
             </td>
             <td class="font-mono text-xs text-muted">{{ s.slug }}</td>
-            <td class="truncate font-mono text-xs text-faint">{{ s.base_url }}</td>
+            <td class="max-w-[260px] truncate font-mono text-xs text-faint">{{ s.base_url }}</td>
             <td class="text-right">
-              <button class="text-xs text-signal-danger hover:underline" @click="remove(s.id, s.slug)">
+              <button
+                class="text-xs text-signal-danger hover:underline"
+                @click.stop="remove(s.id, s.slug)"
+              >
                 delete
               </button>
             </td>

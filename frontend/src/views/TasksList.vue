@@ -21,6 +21,18 @@ function spent(t: Task): string {
   return formatSecs(taskSpentSecs(t, now.value));
 }
 
+// Compact, fixed-footprint timestamp so the column never forces the table wide.
+function created(t: Task): string {
+  const d = new Date(t.created_at);
+  const day = d.toLocaleDateString([], { month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${day} ${time}`;
+}
+
+function openTask(t: Task) {
+  router.push({ name: "task-detail", params: { id: t.id } });
+}
+
 // trigger_data is a serialized TriggerReason; every variant carries `url`.
 function triggerUrl(t: Task): string | null {
   const d = t.trigger_data;
@@ -164,7 +176,7 @@ async function saveEdit(t: Task) {
     <NewTaskModal :open="newTaskOpen" @close="newTaskOpen = false" @created="onCreated" />
 
     <div v-if="store.loading" class="card px-4 py-10 text-center text-muted">Loading…</div>
-    <div v-else class="card overflow-x-auto">
+    <div v-else class="card overflow-hidden">
       <table class="tbl">
         <thead>
           <tr>
@@ -180,16 +192,31 @@ async function saveEdit(t: Task) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="t in store.tasks" :key="t.id">
+          <tr
+            v-for="t in store.tasks"
+            :key="t.id"
+            class="cursor-pointer"
+            @click="openTask(t)"
+          >
             <td class="whitespace-nowrap text-xs text-faint">
-              {{ new Date(t.created_at).toLocaleString() }}
+              {{ created(t) }}
             </td>
             <td><ProviderBadge :provider="t.provider" /></td>
-            <td>
-              <RouterLink :to="`/tasks/${t.id}`" class="font-medium text-ink hover:text-accent">{{ t.project_path }}</RouterLink>
+            <td class="max-w-[220px]">
+              <RouterLink
+                v-if="t.project_id"
+                :to="`/projects/${t.project_id}`"
+                class="block truncate font-medium text-ink hover:text-accent"
+                :title="t.project_path"
+                @click.stop
+                >{{ t.project_path }}</RouterLink
+              >
+              <span v-else class="block truncate font-medium text-ink" :title="t.project_path">{{
+                t.project_path
+              }}</span>
             </td>
-            <td>
-              <div v-if="editingId === t.id" class="flex items-center gap-1.5">
+            <td class="max-w-[200px]">
+              <div v-if="editingId === t.id" class="flex items-center gap-1.5" @click.stop>
                 <input
                   v-model="editBranch"
                   :disabled="busyOn(t.id, 'edit')"
@@ -213,13 +240,15 @@ async function saveEdit(t: Task) {
                   cancel
                 </button>
               </div>
-              <span v-else class="inline-flex items-center gap-1.5">
-                <span class="font-mono text-xs text-muted">{{ t.branch ?? "—" }}</span>
+              <span v-else class="flex items-center gap-1.5">
+                <span class="truncate font-mono text-xs text-muted" :title="t.branch ?? ''">{{
+                  t.branch ?? "—"
+                }}</span>
                 <button
                   v-if="t.status === 'pending'"
-                  class="btn btn-subtle btn-sm text-accent"
+                  class="btn btn-subtle btn-sm shrink-0 text-accent"
                   title="Edit branch"
-                  @click="startEdit(t)"
+                  @click.stop="startEdit(t)"
                 >
                   edit
                 </button>
@@ -243,7 +272,7 @@ async function saveEdit(t: Task) {
             <td class="whitespace-nowrap text-right font-mono text-xs text-muted">{{ spent(t) }}</td>
             <td class="text-right font-mono text-xs text-faint">{{ t.pid ?? "—" }}</td>
             <td class="whitespace-nowrap text-right">
-              <div class="inline-flex items-center gap-1.5">
+              <div class="inline-flex items-center gap-1.5" @click.stop>
                 <button
                   v-if="t.status === 'pending'"
                   :disabled="busyOn(t.id)"
