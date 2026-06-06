@@ -6,13 +6,16 @@ use tracing::{debug, info};
 
 /// Ensure `path` is a checkout of `branch`:
 /// - clone the default branch if the repo is missing,
-/// - fetch (pruning deleted remotes), then force-checkout `branch` from
-///   `origin/<branch>` if it exists remotely, otherwise create it fresh from
-///   `origin/<default_branch>`.
+/// - fetch (pruning deleted remotes),
+/// - if the worktree is **already on `branch`**, leave it untouched — local
+///   commits and uncommitted work are preserved across runs (this is what makes
+///   resume-on-message safe),
+/// - otherwise check it out from `origin/<branch>` if it exists remotely, else
+///   create it fresh from `origin/<default_branch>`.
 ///
-/// `checkout -f -B` resets both the branch pointer and the worktree to the
-/// start ref in one step, so a reused (possibly dirty/stale) worktree always
-/// ends up deterministic.
+/// We deliberately do **not** force-reset a reused worktree: a per-branch
+/// worktree is owned by its task line, so a hard reset would silently discard
+/// the agent's in-progress work.
 pub async fn clone_or_fetch(
     path: &Path,
     auth_url: &str,
@@ -20,7 +23,8 @@ pub async fn clone_or_fetch(
     default_branch: &str,
 ) -> Result<()> {
     let git_dir = path.join(".git");
-    if tokio::fs::metadata(&git_dir).await.is_err() {
+    let fresh = tokio::fs::metadata(&git_dir).await.is_err();
+    if fresh {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -48,6 +52,15 @@ pub async fn clone_or_fetch(
     info!(path = %path.display(), branch, "fetching");
     run_git(path, &["fetch", "origin", "--prune"]).await?;
 
+    // Already on the target branch → keep the worktree exactly as it is.
+    if !fresh && current_branch(path).await?.as_deref() == Some(branch) {
+        debug!(path = %path.display(), branch, "worktree already on branch; keeping as-is");
+        return Ok(());
+    }
+
+    // Switch to / create the branch. No `-f`: we only get here on a clean fresh
+    // clone or a worktree that isn't on the branch, so there is no in-progress
+    // work to clobber (and if there somehow is, failing beats destroying it).
     let remote_branch = format!("origin/{branch}");
     let start_ref = if git_ref_exists(path, &remote_branch).await? {
         remote_branch
@@ -55,8 +68,28 @@ pub async fn clone_or_fetch(
         format!("origin/{default_branch}")
     };
 
-    run_git(path, &["checkout", "-f", "-B", branch, &start_ref]).await?;
+    run_git(path, &["checkout", "-B", branch, &start_ref]).await?;
     Ok(())
+}
+
+/// The currently checked-out branch name, or `None` if detached / unknown.
+async fn current_branch(path: &Path) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .await
+        .context("spawning git rev-parse --abbrev-ref HEAD")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() || name == "HEAD" {
+        Ok(None)
+    } else {
+        Ok(Some(name))
+    }
 }
 
 /// True if `refname` resolves (e.g. `origin/feature`). A non-zero exit means
