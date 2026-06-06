@@ -73,25 +73,26 @@ function isQuestion(prompt: string): boolean {
 </script>
 
 <template>
-  <section v-if="items.length > 0" class="border border-amber-300 bg-amber-50 rounded p-4 space-y-3">
+  <section v-if="items.length > 0" class="space-y-3 rounded-lg border border-accent/50 bg-accent/5 p-4">
     <header class="flex items-center gap-2">
-      <span class="text-amber-900 font-medium">⚠ {{ heading }}</span>
+      <span class="led led-pulse text-accent" />
+      <span class="font-medium text-accent">{{ heading }}</span>
     </header>
-    <p v-if="error" class="text-sm text-red-700">{{ error }}</p>
+    <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>
     <article
       v-for="item in items"
       :key="item.id"
-      class="bg-white border border-amber-200 rounded p-3 space-y-2"
+      class="space-y-2 rounded-md border border-line bg-panel p-3"
     >
-      <pre class="whitespace-pre-wrap font-sans text-sm leading-snug">{{ item.prompt_to_operator }}</pre>
+      <pre class="whitespace-pre-wrap font-sans text-sm leading-snug text-ink">{{ item.prompt_to_operator }}</pre>
       <div>
-        <label class="block text-xs text-gray-500 mb-1">
+        <label class="label">
           {{ isQuestion(item.prompt_to_operator) ? "Your answer" : "Optional reply" }}
         </label>
         <textarea
           v-model="replies[item.id]"
           rows="2"
-          class="w-full border rounded p-2 text-sm font-mono"
+          class="textarea font-mono"
           :placeholder="
             isQuestion(item.prompt_to_operator)
               ? 'Required — this text is fed back to claude as the tool result.'
@@ -99,22 +100,14 @@ function isQuestion(prompt: string): boolean {
           "
         />
       </div>
-      <div class="flex gap-2">
-        <button
-          :disabled="!!busy[item.id]"
-          class="rounded bg-emerald-600 text-white px-3 py-1.5 text-sm hover:bg-emerald-700 disabled:opacity-60"
-          @click="resolve(item, 'approve')"
-        >
+      <div class="flex items-center gap-2">
+        <button :disabled="!!busy[item.id]" class="btn btn-primary btn-sm" @click="resolve(item, 'approve')">
           {{ busy[item.id] === "approve" ? "Approving…" : "Approve" }}
         </button>
-        <button
-          :disabled="!!busy[item.id]"
-          class="rounded border border-red-300 text-red-700 px-3 py-1.5 text-sm hover:bg-red-50 disabled:opacity-60"
-          @click="resolve(item, 'deny')"
-        >
+        <button :disabled="!!busy[item.id]" class="btn btn-danger btn-sm" @click="resolve(item, 'deny')">
           {{ busy[item.id] === "deny" ? "Denying…" : "Deny" }}
         </button>
-        <span class="ml-auto text-[11px] text-gray-500 self-center">
+        <span class="ml-auto self-center font-mono text-[11px] text-faint">
           {{ new Date(item.created_at).toLocaleString() }}
         </span>
       </div>

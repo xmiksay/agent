@@ -34,6 +34,23 @@ export function useTaskDetail(idRef: Ref<string>) {
   const eventCount = computed(() => stream.eventsFor(idRef.value)?.size ?? 0);
   const hasEvents = computed(() => eventCount.value > 0);
 
+  // Cumulative output tokens spent this run, summed from each event's usage —
+  // mirrors the backend's per-chunk accounting (src/jobs/stream.rs). Thinking
+  // tokens are hidden from the timeline but still counted here, so the operator
+  // sees the real spend behind the chat box.
+  const tokensSpent = computed(() => {
+    const m = stream.eventsFor(idRef.value);
+    if (!m) return 0;
+    let total = 0;
+    for (const ev of m.values()) {
+      const e = ev as Record<string, any>;
+      const out =
+        e?.usage?.output_tokens ?? e?.message?.usage?.output_tokens ?? null;
+      if (typeof out === "number") total += out;
+    }
+    return total;
+  });
+
   // Pending approvals for this task, sliced from the shared live set.
   const pendingApprovals = computed(() =>
     [...stream.approvals.values()].filter((a) => a.task_id === idRef.value),
@@ -243,6 +260,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     eventText,
     eventCount,
     hasEvents,
+    tokensSpent,
     wsConnected,
     isLive,
     isRunning,

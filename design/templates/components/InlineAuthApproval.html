@@ -1,0 +1,49 @@
+<template>
+  <section v-if="items.length > 0" class="border border-amber-300 bg-amber-50 rounded p-4 space-y-3">
+    <header class="flex items-center gap-2">
+      <span class="text-amber-900 font-medium">⚠ {{ heading }}</span>
+    </header>
+    <p v-if="error" class="text-sm text-red-700">{{ error }}</p>
+    <article
+      v-for="item in items"
+      :key="item.id"
+      class="bg-white border border-amber-200 rounded p-3 space-y-2"
+    >
+      <pre class="whitespace-pre-wrap font-sans text-sm leading-snug">{{ item.prompt_to_operator }}</pre>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">
+          {{ isQuestion(item.prompt_to_operator) ? "Your answer" : "Optional reply" }}
+        </label>
+        <textarea
+          v-model="replies[item.id]"
+          rows="2"
+          class="w-full border rounded p-2 text-sm font-mono"
+          :placeholder="
+            isQuestion(item.prompt_to_operator)
+              ? 'Required — this text is fed back to claude as the tool result.'
+              : 'Optional note attached to your decision.'
+          "
+        />
+      </div>
+      <div class="flex gap-2">
+        <button
+          :disabled="!!busy[item.id]"
+          class="rounded bg-emerald-600 text-white px-3 py-1.5 text-sm hover:bg-emerald-700 disabled:opacity-60"
+          @click="resolve(item, 'approve')"
+        >
+          {{ busy[item.id] === "approve" ? "Approving…" : "Approve" }}
+        </button>
+        <button
+          :disabled="!!busy[item.id]"
+          class="rounded border border-red-300 text-red-700 px-3 py-1.5 text-sm hover:bg-red-50 disabled:opacity-60"
+          @click="resolve(item, 'deny')"
+        >
+          {{ busy[item.id] === "deny" ? "Denying…" : "Deny" }}
+        </button>
+        <span class="ml-auto text-[11px] text-gray-500 self-center">
+          {{ new Date(item.created_at).toLocaleString() }}
+        </span>
+      </div>
+    </article>
+  </section>
+</template>

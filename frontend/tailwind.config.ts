@@ -1,15 +1,51 @@
 import type { Config } from "tailwindcss";
 
+// Colors resolve from CSS variables (RGB channel triples in src/style.css) so the
+// same utilities drive both the dark default and the `.theme-light` variant, and
+// opacity utilities (bg-panel/40, ring-accent/15…) keep working — see src/theme.ts.
+const v = (name: string) => `rgb(var(${name}) / <alpha-value>)`;
+
 export default {
   content: ["./index.html", "./src/**/*.{vue,ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        ink: {
-          50: "#f5f6f7",
-          900: "#0f172a",
+        canvas: v("--c-canvas"),
+        panel: v("--c-panel"),
+        "panel-2": v("--c-panel-2"),
+        "panel-3": v("--c-panel-3"),
+        line: v("--c-line"),
+        "line-2": v("--c-line-2"),
+        ink: v("--c-ink"),
+        muted: v("--c-muted"),
+        faint: v("--c-faint"),
+        accent: {
+          DEFAULT: v("--c-accent"),
+          deep: v("--c-accent-deep"),
+          soft: v("--c-accent-soft"),
+          ink: v("--c-accent-ink"),
+        },
+        signal: {
+          live: v("--c-live"),
+          ok: v("--c-ok"),
+          danger: v("--c-danger"),
+          auth: v("--c-auth"),
+          release: v("--c-release"),
         },
       },
+      fontFamily: {
+        display: ['"Bricolage Grotesque"', "system-ui", "sans-serif"],
+        sans: ['"Archivo"', "system-ui", "sans-serif"],
+        mono: ['"IBM Plex Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+      },
+      borderRadius: {
+        sm: "3px",
+        DEFAULT: "5px",
+        md: "6px",
+        lg: "8px",
+        xl: "12px",
+      },
+      letterSpacing: { label: "0.14em" },
     },
   },
 } satisfies Config;

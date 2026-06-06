@@ -108,16 +108,10 @@ async function resolve(decision: "approve" | "deny") {
   <div class="space-y-3">
     <!-- AskUserQuestion: structured controls -->
     <template v-if="questions">
-      <div
-        v-for="(q, qi) in questions"
-        :key="qi"
-        class="space-y-1.5 border-l-2 border-amber-300 pl-3"
-      >
-        <div class="text-xs font-medium text-gray-800">
+      <div v-for="(q, qi) in questions" :key="qi" class="space-y-1.5 border-l-2 border-signal-auth/60 pl-3">
+        <div class="text-xs font-medium text-ink">
           {{ q.question }}
-          <span v-if="q.multiSelect" class="text-[10px] uppercase text-gray-400 ml-1">
-            multi
-          </span>
+          <span v-if="q.multiSelect" class="ml-1 text-[10px] uppercase tracking-label text-faint">multi</span>
         </div>
         <div class="flex flex-wrap gap-1.5">
           <template v-if="q.multiSelect">
@@ -126,19 +120,13 @@ async function resolve(decision: "approve" | "deny") {
               :key="opt.label"
               type="button"
               :disabled="!!busy || useCustom"
-              class="px-2 py-1 text-xs rounded border transition"
-              :class="
-                isPickedMulti(qi, opt.label)
-                  ? 'bg-amber-600 border-amber-700 text-white'
-                  : 'bg-white border-gray-300 text-gray-800 hover:bg-amber-50'
-              "
+              class="rounded border px-2 py-1 text-xs transition-colors"
+              :class="isPickedMulti(qi, opt.label) ? 'border-accent bg-accent text-accent-ink' : 'border-line-2 bg-panel text-ink hover:border-accent/60'"
               :title="opt.description"
               @click="toggleMulti(qi, opt.label)"
             >
               <span class="font-medium">{{ opt.label }}</span>
-              <span v-if="opt.description" class="text-[10px] opacity-75 ml-1">
-                — {{ opt.description }}
-              </span>
+              <span v-if="opt.description" class="ml-1 text-[10px] opacity-75">— {{ opt.description }}</span>
             </button>
           </template>
           <template v-else>
@@ -147,26 +135,20 @@ async function resolve(decision: "approve" | "deny") {
               :key="opt.label"
               type="button"
               :disabled="!!busy || useCustom"
-              class="px-2 py-1 text-xs rounded border transition"
-              :class="
-                isPickedSingle(qi, opt.label)
-                  ? 'bg-amber-600 border-amber-700 text-white'
-                  : 'bg-white border-gray-300 text-gray-800 hover:bg-amber-50'
-              "
+              class="rounded border px-2 py-1 text-xs transition-colors"
+              :class="isPickedSingle(qi, opt.label) ? 'border-accent bg-accent text-accent-ink' : 'border-line-2 bg-panel text-ink hover:border-accent/60'"
               :title="opt.description"
               @click="pickSingle(qi, opt.label)"
             >
               <span class="font-medium">{{ opt.label }}</span>
-              <span v-if="opt.description" class="text-[10px] opacity-75 ml-1">
-                — {{ opt.description }}
-              </span>
+              <span v-if="opt.description" class="ml-1 text-[10px] opacity-75">— {{ opt.description }}</span>
             </button>
           </template>
         </div>
       </div>
 
       <div class="space-y-1">
-        <label class="flex items-center gap-1.5 text-[11px] text-gray-600">
+        <label class="flex items-center gap-1.5 text-[11px] text-muted">
           <input v-model="useCustom" type="checkbox" class="rounded" />
           Custom reply instead
         </label>
@@ -174,7 +156,7 @@ async function resolve(decision: "approve" | "deny") {
           v-if="useCustom"
           v-model="customReply"
           :rows="props.compact ? 2 : 3"
-          class="w-full border rounded p-2 text-xs font-mono"
+          class="textarea font-mono text-xs"
           placeholder="Type a free-form answer — sent to claude as the tool result."
         />
       </div>
@@ -183,34 +165,24 @@ async function resolve(decision: "approve" | "deny") {
     <!-- Non-question: plain reply -->
     <template v-else>
       <div>
-        <label class="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">
-          Optional reply
-        </label>
+        <label class="label">Optional reply</label>
         <textarea
           v-model="reply"
           :rows="props.compact ? 1 : 2"
-          class="w-full border rounded p-2 text-xs font-mono"
+          class="textarea font-mono text-xs"
           placeholder="Optional note attached to your decision."
         />
       </div>
     </template>
 
     <div class="flex gap-2">
-      <button
-        :disabled="!!busy || !canApprove"
-        class="rounded bg-emerald-600 text-white px-3 py-1 text-xs hover:bg-emerald-700 disabled:opacity-60"
-        @click="resolve('approve')"
-      >
+      <button :disabled="!!busy || !canApprove" class="btn btn-primary btn-sm" @click="resolve('approve')">
         {{ busy === "approve" ? "Approving…" : "Approve" }}
       </button>
-      <button
-        :disabled="!!busy"
-        class="rounded border border-red-300 text-red-700 px-3 py-1 text-xs hover:bg-red-50 disabled:opacity-60"
-        @click="resolve('deny')"
-      >
+      <button :disabled="!!busy" class="btn btn-danger btn-sm" @click="resolve('deny')">
         {{ busy === "deny" ? "Denying…" : "Deny" }}
       </button>
     </div>
-    <p v-if="error" class="text-xs text-red-700">{{ error }}</p>
+    <p v-if="error" class="text-xs text-signal-danger">{{ error }}</p>
   </div>
 </template>

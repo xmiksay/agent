@@ -1,0 +1,25 @@
+<template>
+  <div v-if="t" class="space-y-3">
+    <h3 class="font-medium">{{ headline }}</h3>
+
+    <dl v-if="meta.length" class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
+      <template v-for="m in meta" :key="m.label">
+        <dt class="text-gray-500">{{ m.label }}</dt>
+        <dd :class="m.mono ? 'font-mono' : ''">
+          <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="text-blue-700 hover:underline">
+            {{ m.value }}
+          </a>
+          <template v-else>{{ m.value }}</template>
+        </dd>
+      </template>
+    </dl>
+
+    <div v-if="body" class="bg-gray-50 rounded p-3">
+      <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+        {{ variant === "issue" ? "Description" : "Comment" }}
+      </div>
+      <MarkdownView :source="body" />
+    </div>
+  </div>
+  <pre v-else class="text-xs whitespace-pre-wrap font-mono">{{ JSON.stringify(props.data, null, 2) }}</pre>
+</template>

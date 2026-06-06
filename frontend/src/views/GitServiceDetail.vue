@@ -90,104 +90,78 @@ function extractMessage(e: unknown): string {
 
 <template>
   <section v-if="detail" class="space-y-6">
+    <RouterLink to="/git_services" class="inline-block text-sm text-muted hover:text-accent">← Services</RouterLink>
+
     <header class="flex items-center gap-3">
       <ProviderBadge :provider="detail.kind" />
-      <h1 class="text-xl font-semibold">{{ detail.display_name }}</h1>
-      <span class="text-sm text-gray-500 font-mono">{{ detail.slug }}</span>
-      <button
-        class="ml-auto text-xs text-red-600 hover:underline"
-        @click="remove"
-      >
-        delete service
-      </button>
+      <h1 class="font-display text-2xl font-bold tracking-tight">{{ detail.display_name }}</h1>
+      <span class="font-mono text-sm text-faint">{{ detail.slug }}</span>
+      <button class="btn btn-danger btn-sm ml-auto" @click="remove">Delete service</button>
     </header>
 
-    <section class="bg-white p-4 rounded shadow-sm space-y-2">
-      <h2 class="font-medium text-sm">Webhook URL</h2>
-      <p class="text-xs text-gray-500">
+    <section class="card space-y-2 p-5">
+      <h2 class="text-sm font-semibold">Webhook URL</h2>
+      <p class="text-xs text-muted">
         Paste this into the {{ detail.kind === "github" ? "GitHub" : "GitLab" }}
         webhook settings, alongside the secret you saved.
       </p>
       <div class="flex gap-2">
-        <input
-          readonly
-          :value="fullWebhookUrl"
-          class="flex-1 border rounded p-2 font-mono text-xs bg-gray-50"
-        />
-        <button
-          type="button"
-          class="rounded border px-3 py-1.5 text-sm hover:bg-gray-50"
-          @click="copyWebhook"
-        >
+        <input readonly :value="fullWebhookUrl" class="input flex-1 font-mono text-xs" />
+        <button type="button" class="btn btn-ghost" @click="copyWebhook">
           {{ copied ? "Copied" : "Copy" }}
         </button>
       </div>
     </section>
 
-    <form class="bg-white p-4 rounded shadow-sm space-y-3" @submit.prevent="save">
-      <h2 class="font-medium text-sm">Settings</h2>
-      <div class="grid grid-cols-2 gap-3 text-sm">
-        <label class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">Display name</span>
-          <input v-model="draft.display_name" class="border rounded p-2" />
-        </label>
-        <label class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">Base URL</span>
-          <input v-model="draft.base_url" type="url" class="border rounded p-2 font-mono" />
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">Bot username</span>
-          <input v-model="draft.bot_username" class="border rounded p-2 font-mono" />
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">
-            Personal access token
-            <span class="text-gray-400">(leave blank to keep)</span>
-          </span>
+    <form class="card space-y-3 p-5" @submit.prevent="save">
+      <h2 class="text-sm font-semibold">Settings</h2>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2">
+          <label class="label">Display name</label>
+          <input v-model="draft.display_name" class="input" />
+        </div>
+        <div class="col-span-2">
+          <label class="label">Base URL</label>
+          <input v-model="draft.base_url" type="url" class="input font-mono" />
+        </div>
+        <div>
+          <label class="label">Bot username</label>
+          <input v-model="draft.bot_username" class="input font-mono" />
+        </div>
+        <div>
+          <label class="label">Personal access token <span class="text-faint">(leave blank to keep)</span></label>
           <input
             v-model="tokenDraft"
             type="password"
             autocomplete="new-password"
-            class="border rounded p-2 font-mono"
+            class="input font-mono"
           />
-        </label>
-        <label class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">
-            Webhook secret
-            <span class="text-gray-400">(leave blank to keep)</span>
-          </span>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Webhook secret <span class="text-faint">(leave blank to keep)</span></label>
           <input
             v-model="webhookSecretDraft"
             type="password"
             autocomplete="new-password"
-            class="border rounded p-2 font-mono"
+            class="input font-mono"
           />
-        </label>
+        </div>
       </div>
 
-      <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+      <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>
 
       <div class="flex gap-2">
-        <button
-          type="submit"
-          :disabled="saving"
-          class="rounded bg-blue-600 text-white px-4 py-2 hover:bg-blue-700 disabled:opacity-60"
-        >
+        <button type="submit" :disabled="saving" class="btn btn-primary">
           {{ saving ? "Saving…" : "Save" }}
         </button>
-        <RouterLink
-          :to="{ name: 'git-services' }"
-          class="rounded border px-4 py-2 hover:bg-gray-50"
-        >
-          Back
-        </RouterLink>
+        <RouterLink :to="{ name: 'git-services' }" class="btn btn-ghost">Back</RouterLink>
       </div>
     </form>
 
-    <p class="text-xs text-gray-400">
+    <p class="font-mono text-xs text-faint">
       Updated {{ new Date(detail.updated_at).toLocaleString() }} ·
       created {{ new Date(detail.created_at).toLocaleString() }}
     </p>
   </section>
-  <p v-else class="text-gray-500">Loading…</p>
+  <p v-else class="text-faint">Loading…</p>
 </template>

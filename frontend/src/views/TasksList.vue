@@ -143,153 +143,155 @@ async function saveEdit(t: Task) {
 
 <template>
   <section>
-    <div class="flex items-center justify-between mb-4">
-      <h1 class="text-2xl font-semibold">Tasks</h1>
+    <div class="mb-6 flex items-center justify-between">
+      <div>
+        <h1 class="font-display text-2xl font-bold tracking-tight">Tasks</h1>
+        <p class="mt-1 text-sm text-muted">Agent runs across every connected repo.</p>
+      </div>
       <div class="flex items-center gap-2">
-        <button
-          class="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700"
-          @click="newTaskOpen = true"
-        >
-          New task
-        </button>
-        <select v-model="status" class="border rounded px-2 py-1 text-sm">
-          <option value="">All</option>
+        <select v-model="status" class="select w-40">
+          <option value="">All statuses</option>
           <option value="pending">Pending</option>
           <option value="awaiting_auth">Awaiting auth</option>
           <option value="running">Running</option>
           <option value="completed">Completed</option>
           <option value="failed">Failed</option>
         </select>
+        <button class="btn btn-primary" @click="newTaskOpen = true">+ New task</button>
       </div>
     </div>
+
     <NewTaskModal :open="newTaskOpen" @close="newTaskOpen = false" @created="onCreated" />
-    <div v-if="store.loading" class="text-gray-500">Loading…</div>
-    <table v-else class="tbl">
-      <thead>
-        <tr>
-          <th>Created</th>
-          <th>Provider</th>
-          <th>Project</th>
-          <th>Branch</th>
-          <th>Trigger</th>
-          <th>Status</th>
-          <th>Spent</th>
-          <th>PID</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="t in store.tasks" :key="t.id">
-          <td class="text-xs text-gray-500 whitespace-nowrap">
-            {{ new Date(t.created_at).toLocaleString() }}
-          </td>
-          <td><ProviderBadge :provider="t.provider" /></td>
-          <td>
-            <RouterLink :to="`/tasks/${t.id}`">{{ t.project_path }}</RouterLink>
-          </td>
-          <td class="text-sm text-gray-600">
-            <div v-if="editingId === t.id" class="flex items-center gap-1">
-              <input
-                v-model="editBranch"
-                :disabled="busyOn(t.id, 'edit')"
-                class="w-40 text-xs font-mono border border-gray-300 rounded px-1.5 py-1 disabled:opacity-60"
-                placeholder="branch"
-                @keyup.enter="saveEdit(t)"
-                @keyup.esc="cancelEdit"
-              />
-              <button
-                :disabled="busyOn(t.id, 'edit')"
-                class="text-xs text-blue-700 hover:underline disabled:opacity-60"
-                @click="saveEdit(t)"
+
+    <div v-if="store.loading" class="card px-4 py-10 text-center text-muted">Loading…</div>
+    <div v-else class="card overflow-x-auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Provider</th>
+            <th>Project</th>
+            <th>Branch</th>
+            <th>Trigger</th>
+            <th>Status</th>
+            <th class="text-right">Spent</th>
+            <th class="text-right">PID</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="t in store.tasks" :key="t.id">
+            <td class="whitespace-nowrap text-xs text-faint">
+              {{ new Date(t.created_at).toLocaleString() }}
+            </td>
+            <td><ProviderBadge :provider="t.provider" /></td>
+            <td>
+              <RouterLink :to="`/tasks/${t.id}`" class="font-medium text-ink hover:text-accent">{{ t.project_path }}</RouterLink>
+            </td>
+            <td>
+              <div v-if="editingId === t.id" class="flex items-center gap-1.5">
+                <input
+                  v-model="editBranch"
+                  :disabled="busyOn(t.id, 'edit')"
+                  class="input w-40 px-2 py-1 font-mono text-xs"
+                  placeholder="branch"
+                  @keyup.enter="saveEdit(t)"
+                  @keyup.esc="cancelEdit"
+                />
+                <button
+                  :disabled="busyOn(t.id, 'edit')"
+                  class="btn btn-subtle btn-sm text-accent"
+                  @click="saveEdit(t)"
+                >
+                  {{ busyOn(t.id, "edit") ? "…" : "save" }}
+                </button>
+                <button
+                  :disabled="busyOn(t.id, 'edit')"
+                  class="btn btn-subtle btn-sm"
+                  @click="cancelEdit"
+                >
+                  cancel
+                </button>
+              </div>
+              <span v-else class="inline-flex items-center gap-1.5">
+                <span class="font-mono text-xs text-muted">{{ t.branch ?? "—" }}</span>
+                <button
+                  v-if="t.status === 'pending'"
+                  class="btn btn-subtle btn-sm text-accent"
+                  title="Edit branch"
+                  @click="startEdit(t)"
+                >
+                  edit
+                </button>
+              </span>
+            </td>
+            <td class="text-xs">
+              <a
+                v-if="triggerUrl(t)"
+                :href="triggerUrl(t) ?? undefined"
+                target="_blank"
+                rel="noopener"
+                class="text-accent hover:underline"
+                :title="triggerUrl(t) ?? ''"
+                @click.stop
               >
-                {{ busyOn(t.id, "edit") ? "…" : "save" }}
-              </button>
-              <button
-                :disabled="busyOn(t.id, 'edit')"
-                class="text-xs text-gray-500 hover:underline disabled:opacity-60"
-                @click="cancelEdit"
-              >
-                cancel
-              </button>
-            </div>
-            <span v-else class="inline-flex items-center gap-1.5">
-              <span class="font-mono">{{ t.branch ?? "—" }}</span>
-              <button
-                v-if="t.status === 'pending'"
-                class="text-xs text-blue-700 hover:underline"
-                title="Edit branch"
-                @click="startEdit(t)"
-              >
-                edit
-              </button>
-            </span>
-          </td>
-          <td class="text-sm">
-            <a
-              v-if="triggerUrl(t)"
-              :href="triggerUrl(t) ?? undefined"
-              target="_blank"
-              rel="noopener"
-              class="text-blue-700 hover:underline"
-              :title="triggerUrl(t) ?? ''"
-              @click.stop
-            >
-              {{ t.trigger_type }} ↗
-            </a>
-            <template v-else>{{ t.trigger_type }}</template>
-          </td>
-          <td><StatusPill :status="t.status" /></td>
-          <td class="text-xs font-mono text-gray-700 whitespace-nowrap">{{ spent(t) }}</td>
-          <td class="font-mono text-xs text-gray-600">{{ t.pid ?? "—" }}</td>
-          <td class="text-right whitespace-nowrap">
-            <div class="inline-flex gap-3 items-center">
-              <button
-                v-if="t.status === 'pending'"
-                :disabled="busyOn(t.id)"
-                class="text-xs text-blue-700 hover:underline disabled:opacity-60"
-                @click="confirmRun(t)"
-              >
-                {{ busyOn(t.id, "confirm") ? "starting…" : "run" }}
-              </button>
-              <button
-                v-if="t.status === 'running'"
-                :disabled="busyOn(t.id)"
-                class="text-xs text-amber-700 hover:underline disabled:opacity-60"
-                title="Pause: kill claude but keep session id for Resume"
-                @click="pause(t)"
-              >
-                {{ busyOn(t.id, "pause") ? "pausing…" : "pause" }}
-              </button>
-              <button
-                v-if="canResume(t)"
-                :disabled="busyOn(t.id)"
-                class="text-xs text-emerald-700 hover:underline disabled:opacity-60"
-                title="Resume claude using its prior session id"
-                @click="resume(t)"
-              >
-                {{ busyOn(t.id, "resume") ? "resuming…" : "resume" }}
-              </button>
-              <button
-                :disabled="busyOn(t.id)"
-                class="text-xs text-red-600 hover:underline disabled:opacity-60"
-                :title="t.status === 'running' ? 'Force-kill claude and delete' : 'Delete'"
-                @click="remove(t)"
-              >
-                {{
-                  busyOn(t.id, "delete")
-                    ? "deleting…"
-                    : t.status === "running"
-                      ? "kill & delete"
-                      : "delete"
-                }}
-              </button>
-            </div>
-          </td>
-        </tr>
-        <tr v-if="!store.tasks.length">
-          <td colspan="9" class="px-3 py-6 text-center text-gray-500">No tasks yet.</td>
-        </tr>
-      </tbody>
-    </table>
+                {{ t.trigger_type }} ↗
+              </a>
+              <span v-else class="text-muted">{{ t.trigger_type }}</span>
+            </td>
+            <td><StatusPill :status="t.status" /></td>
+            <td class="whitespace-nowrap text-right font-mono text-xs text-muted">{{ spent(t) }}</td>
+            <td class="text-right font-mono text-xs text-faint">{{ t.pid ?? "—" }}</td>
+            <td class="whitespace-nowrap text-right">
+              <div class="inline-flex items-center gap-1.5">
+                <button
+                  v-if="t.status === 'pending'"
+                  :disabled="busyOn(t.id)"
+                  class="btn btn-subtle btn-sm text-accent"
+                  @click="confirmRun(t)"
+                >
+                  {{ busyOn(t.id, "confirm") ? "starting…" : "run" }}
+                </button>
+                <button
+                  v-if="t.status === 'running'"
+                  :disabled="busyOn(t.id)"
+                  class="btn btn-subtle btn-sm text-signal-release"
+                  title="Pause: kill claude but keep session id for Resume"
+                  @click="pause(t)"
+                >
+                  {{ busyOn(t.id, "pause") ? "pausing…" : "pause" }}
+                </button>
+                <button
+                  v-if="canResume(t)"
+                  :disabled="busyOn(t.id)"
+                  class="btn btn-subtle btn-sm text-signal-ok"
+                  title="Resume claude using its prior session id"
+                  @click="resume(t)"
+                >
+                  {{ busyOn(t.id, "resume") ? "resuming…" : "resume" }}
+                </button>
+                <button
+                  :disabled="busyOn(t.id)"
+                  class="btn btn-subtle btn-sm text-signal-danger"
+                  :title="t.status === 'running' ? 'Force-kill claude and delete' : 'Delete'"
+                  @click="remove(t)"
+                >
+                  {{
+                    busyOn(t.id, "delete")
+                      ? "deleting…"
+                      : t.status === "running"
+                        ? "kill & delete"
+                        : "delete"
+                  }}
+                </button>
+              </div>
+            </td>
+          </tr>
+          <tr v-if="!store.tasks.length">
+            <td colspan="9" class="py-10 text-center text-faint">No tasks yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </template>

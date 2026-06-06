@@ -8,12 +8,13 @@ import MarkdownView from "../components/MarkdownView.vue";
 import DiffView from "../components/DiffView.vue";
 import Accordion from "../components/Accordion.vue";
 import AuthApprovalForm from "../components/AuthApprovalForm.vue";
+import AnimatedNumber from "../components/AnimatedNumber.vue";
 import { useTaskDetail } from "../composables/useTaskDetail";
 
 const props = defineProps<{ id: string }>();
 
 const {
-  store, busy, pendingApprovals, eventText, eventCount, hasEvents, wsConnected,
+  store, busy, pendingApprovals, eventText, eventCount, hasEvents, wsConnected, tokensSpent,
   isLive, isRunning, isPending, canRetry, canContinue, canKill, canChat,
   onApprovalResolved, diffText, diffError, diffLoading, loadDiff,
   editing, editBranch, editDefaultBranch, savingEdit, startEdit, saveEdit,
@@ -46,20 +47,20 @@ watch(pendingApprovals, (p) => {
 </script>
 
 <template>
-  <section v-if="store.detail" class="space-y-3">
+  <section v-if="store.detail" class="space-y-4">
     <!-- Header: identity, status, link to origin, and the primary controls. -->
-    <header class="bg-white rounded shadow-sm p-4 space-y-3">
-      <div class="flex items-center gap-3 flex-wrap">
+    <header class="card space-y-3 p-5">
+      <div class="flex flex-wrap items-center gap-3">
         <ProviderBadge :provider="store.detail.provider" />
-        <h1 class="text-lg font-semibold">{{ store.detail.project_path }}</h1>
+        <h1 class="font-display text-xl font-bold">{{ store.detail.project_path }}</h1>
         <StatusPill :status="store.detail.status" />
         <span
           v-if="isLive"
-          class="inline-flex items-center gap-1 text-xs"
-          :class="wsConnected ? 'text-emerald-600' : 'text-gray-400'"
+          class="inline-flex items-center gap-1.5 text-xs"
+          :class="wsConnected ? 'text-signal-live' : 'text-faint'"
           :title="wsConnected ? 'Live stream connected' : 'Reconnecting…'"
         >
-          <span class="w-1.5 h-1.5 rounded-full" :class="wsConnected ? 'bg-emerald-500' : 'bg-gray-300'" />
+          <span class="led" :class="wsConnected ? 'led-pulse text-signal-live' : 'text-faint'" />
           {{ wsConnected ? "live" : "offline" }}
         </span>
         <a
@@ -67,35 +68,25 @@ watch(pendingApprovals, (p) => {
           :href="originUrl"
           target="_blank"
           rel="noopener"
-          class="text-sm text-blue-700 hover:underline"
+          class="text-sm text-accent hover:underline"
           :title="originUrl"
         >
           {{ store.detail.trigger_type }} ↗
         </a>
-        <span v-else class="text-sm text-gray-500">{{ store.detail.trigger_type }}</span>
+        <span v-else class="text-sm text-muted">{{ store.detail.trigger_type }}</span>
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <button
-          v-if="isPending"
-          :disabled="!!busy"
-          class="rounded bg-blue-600 text-white px-3 py-1.5 text-sm hover:bg-blue-700 disabled:opacity-60"
-          @click="confirmRun"
-        >
+        <button v-if="isPending" :disabled="!!busy" class="btn btn-primary btn-sm" @click="confirmRun">
           {{ busy === "confirm" ? "Starting…" : "Confirm & run" }}
         </button>
-        <button
-          v-if="canRetry"
-          :disabled="!!busy"
-          class="rounded bg-blue-600 text-white px-3 py-1.5 text-sm hover:bg-blue-700 disabled:opacity-60"
-          @click="retry"
-        >
+        <button v-if="canRetry" :disabled="!!busy" class="btn btn-ghost btn-sm" @click="retry">
           {{ busy === "retry" ? "Retrying…" : "Retry" }}
         </button>
         <button
           v-if="canContinue"
           :disabled="!!busy"
-          class="rounded bg-emerald-600 text-white px-3 py-1.5 text-sm hover:bg-emerald-700 disabled:opacity-60"
+          class="btn btn-primary btn-sm"
           title="Resume the claude session that produced this task"
           @click="resume"
         >
@@ -103,7 +94,7 @@ watch(pendingApprovals, (p) => {
         </button>
         <button
           v-if="wsConnected"
-          class="rounded bg-amber-600 text-white px-3 py-1.5 text-sm hover:bg-amber-700"
+          class="btn btn-primary btn-sm"
           title="Graceful stop: the agent finishes the current turn, then wraps up"
           @click="stopAgent"
         >
@@ -112,7 +103,7 @@ watch(pendingApprovals, (p) => {
         <button
           v-if="canKill"
           :disabled="!!busy"
-          class="rounded border border-amber-300 text-amber-700 px-3 py-1.5 text-sm hover:bg-amber-50 disabled:opacity-60"
+          class="btn btn-ghost btn-sm"
           title="Hard pause: SIGKILL claude. Session id is preserved so you can Resume later."
           @click="pause"
         >
@@ -120,7 +111,7 @@ watch(pendingApprovals, (p) => {
         </button>
         <button
           :disabled="!!busy"
-          class="rounded border border-red-300 text-red-700 px-3 py-1.5 text-sm hover:bg-red-50 disabled:opacity-60 ml-auto"
+          class="btn btn-danger btn-sm ml-auto"
           :title="isRunning ? 'Force-kill claude and delete' : 'Delete'"
           @click="remove"
         >
@@ -128,32 +119,32 @@ watch(pendingApprovals, (p) => {
         </button>
       </div>
 
-      <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-sm border-t border-gray-100 pt-3">
+      <dl class="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-line pt-3 text-sm md:grid-cols-4">
         <div>
-          <dt class="text-[11px] uppercase text-gray-400">Branch</dt>
-          <dd class="font-mono text-xs truncate">{{ store.detail.branch ?? store.detail.default_branch }}</dd>
+          <dt class="label mb-0.5">Branch</dt>
+          <dd class="truncate font-mono text-xs text-muted">{{ store.detail.branch ?? store.detail.default_branch }}</dd>
         </div>
         <div>
-          <dt class="text-[11px] uppercase text-gray-400">Created</dt>
-          <dd class="text-xs">{{ new Date(store.detail.created_at).toLocaleString() }}</dd>
+          <dt class="label mb-0.5">Created</dt>
+          <dd class="text-xs text-muted">{{ new Date(store.detail.created_at).toLocaleString() }}</dd>
         </div>
         <div>
-          <dt class="text-[11px] uppercase text-gray-400">Finished</dt>
-          <dd class="text-xs">
+          <dt class="label mb-0.5">Finished</dt>
+          <dd class="text-xs text-muted">
             {{ store.detail.finished_at ? new Date(store.detail.finished_at).toLocaleString() : "—" }}
           </dd>
         </div>
         <div v-if="store.detail.pid !== null">
-          <dt class="text-[11px] uppercase text-gray-400">PID</dt>
-          <dd class="font-mono text-xs">{{ store.detail.pid }}</dd>
+          <dt class="label mb-0.5">PID</dt>
+          <dd class="font-mono text-xs text-muted">{{ store.detail.pid }}</dd>
         </div>
         <div v-if="store.detail.session_id" class="col-span-2 md:col-span-4">
-          <dt class="text-[11px] uppercase text-gray-400">Claude session</dt>
-          <dd class="font-mono text-xs break-all">{{ store.detail.session_id }}</dd>
+          <dt class="label mb-0.5">Claude session</dt>
+          <dd class="break-all font-mono text-xs text-muted">{{ store.detail.session_id }}</dd>
         </div>
         <div v-if="store.detail.work_dir" class="col-span-2 md:col-span-4">
-          <dt class="text-[11px] uppercase text-gray-400">Worktree</dt>
-          <dd class="font-mono text-xs break-all">{{ store.detail.work_dir }}</dd>
+          <dt class="label mb-0.5">Worktree</dt>
+          <dd class="break-all font-mono text-xs text-muted">{{ store.detail.work_dir }}</dd>
         </div>
       </dl>
     </header>
@@ -161,37 +152,23 @@ watch(pendingApprovals, (p) => {
     <!-- Edit (pending only). -->
     <Accordion v-if="isPending" v-model:open="editing" title="Edit task" @update:open="(v) => v && startEdit()">
       <div class="space-y-2 pt-3">
-        <label class="block text-xs text-gray-500">
-          Branch
+        <div>
+          <label class="label">Branch</label>
           <input
             v-model="editBranch"
             :disabled="savingEdit"
-            class="mt-1 w-full text-sm font-mono border border-gray-300 rounded p-2 disabled:opacity-60"
+            class="input font-mono"
             placeholder="feature-branch"
           />
-        </label>
-        <label class="block text-xs text-gray-500">
-          Default branch (diff / MR base)
-          <input
-            v-model="editDefaultBranch"
-            :disabled="savingEdit"
-            class="mt-1 w-full text-sm font-mono border border-gray-300 rounded p-2 disabled:opacity-60"
-          />
-        </label>
-        <p class="text-xs text-gray-500">The branch can't equal the default branch.</p>
+        </div>
+        <div>
+          <label class="label">Default branch (diff / MR base)</label>
+          <input v-model="editDefaultBranch" :disabled="savingEdit" class="input font-mono" />
+        </div>
+        <p class="text-xs text-muted">The branch can't equal the default branch.</p>
         <div class="flex justify-end gap-2">
-          <button
-            class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-60"
-            :disabled="savingEdit"
-            @click="editing = false"
-          >
-            Cancel
-          </button>
-          <button
-            class="rounded bg-blue-600 text-white px-3 py-1.5 text-sm hover:bg-blue-700 disabled:opacity-60"
-            :disabled="savingEdit"
-            @click="saveEdit"
-          >
+          <button class="btn btn-ghost btn-sm" :disabled="savingEdit" @click="editing = false">Cancel</button>
+          <button class="btn btn-primary btn-sm" :disabled="savingEdit" @click="saveEdit">
             {{ savingEdit ? "Saving…" : "Save" }}
           </button>
         </div>
@@ -209,20 +186,20 @@ watch(pendingApprovals, (p) => {
         <li
           v-for="r in pendingApprovals"
           :key="r.id"
-          class="rounded border border-amber-200 bg-amber-50 p-3 space-y-2"
+          class="space-y-2 rounded-md border border-accent/40 bg-accent/5 p-3"
         >
-          <pre class="bg-white/70 rounded text-xs p-2 whitespace-pre-wrap font-mono">{{ r.requested_op }}</pre>
-          <p class="text-sm text-amber-900">{{ r.prompt_to_operator }}</p>
+          <pre class="whitespace-pre-wrap rounded bg-canvas/70 p-2 font-mono text-xs text-accent">{{ r.requested_op }}</pre>
+          <p class="text-sm text-muted">{{ r.prompt_to_operator }}</p>
           <AuthApprovalForm :item="r" compact @resolved="onApprovalResolved" />
         </li>
       </ul>
     </Accordion>
 
     <!-- Chat with the agent — live over the socket when warm, queued otherwise. -->
-    <section v-if="canChat" class="bg-white p-4 rounded shadow-sm space-y-2">
+    <section v-if="canChat" class="card space-y-2 p-4">
       <div class="flex items-center gap-2">
-        <h2 class="font-medium text-sm">Chat</h2>
-        <span class="text-xs text-gray-500">
+        <h2 class="text-sm font-semibold">Chat</h2>
+        <span class="text-xs text-faint">
           {{ wsConnected
             ? "delivered live to the agent"
             : "queued — delivered when the session resumes" }}
@@ -232,25 +209,24 @@ watch(pendingApprovals, (p) => {
         v-model="message"
         rows="3"
         :disabled="sending"
-        class="w-full text-sm font-mono border border-gray-300 rounded p-2 disabled:opacity-60"
+        class="textarea font-mono"
         placeholder="Message the agent…  (e.g. Also update the README.)"
         @keydown.enter.exact.prevent="sendMessage"
       ></textarea>
       <div class="flex items-center gap-2">
+        <span class="font-mono text-[11px] text-faint" title="Output tokens spent this run (thinking included)">
+          <AnimatedNumber :value="tokensSpent" /> tokens spent
+        </span>
         <button
           v-if="isRunning && wsConnected"
           :disabled="!message.trim()"
-          class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-60"
+          class="btn btn-ghost btn-sm"
           title="Redirect the agent's goal (sent immediately)"
           @click="redefineGoal"
         >
           Redefine goal
         </button>
-        <button
-          :disabled="sending || !message.trim()"
-          class="rounded bg-blue-600 text-white px-4 py-1.5 text-sm hover:bg-blue-700 disabled:opacity-60 ml-auto"
-          @click="sendMessage"
-        >
+        <button :disabled="sending || !message.trim()" class="btn btn-primary btn-sm ml-auto" @click="sendMessage">
           {{ sending ? "Sending…" : "Send" }}
         </button>
       </div>
@@ -263,21 +239,17 @@ watch(pendingApprovals, (p) => {
       :subtitle="`vs origin/${store.detail.default_branch}`"
     >
       <template #actions>
-        <button
-          class="text-xs text-gray-500 hover:text-gray-800 disabled:opacity-60"
-          :disabled="diffLoading"
-          @click="loadDiff"
-        >
+        <button class="text-xs text-muted hover:text-ink disabled:opacity-60" :disabled="diffLoading" @click="loadDiff">
           {{ diffLoading ? "Loading…" : "Refresh" }}
         </button>
       </template>
       <div class="pt-3">
-        <p v-if="diffError" class="text-xs text-red-700">{{ diffError }}</p>
-        <p v-else-if="diffText === ''" class="text-sm text-gray-500">
+        <p v-if="diffError" class="text-xs text-signal-danger">{{ diffError }}</p>
+        <p v-else-if="diffText === ''" class="text-sm text-muted">
           No changes against origin/{{ store.detail.default_branch }} yet.
         </p>
         <DiffView v-else-if="diffText !== null" :source="diffText" />
-        <p v-else class="text-sm text-gray-500">Loading…</p>
+        <p v-else class="text-sm text-muted">Loading…</p>
       </div>
     </Accordion>
 
@@ -286,8 +258,8 @@ watch(pendingApprovals, (p) => {
       <div class="space-y-3 pt-3">
         <TriggerView :data="store.detail.trigger_data" />
         <details>
-          <summary class="cursor-pointer text-[11px] text-gray-500">raw payload</summary>
-          <pre class="text-xs whitespace-pre-wrap mt-2">{{
+          <summary class="cursor-pointer text-[11px] text-faint">raw payload</summary>
+          <pre class="mt-2 whitespace-pre-wrap font-mono text-xs text-muted">{{
             JSON.stringify(store.detail.trigger_data, null, 2)
           }}</pre>
         </details>
@@ -295,26 +267,29 @@ watch(pendingApprovals, (p) => {
     </Accordion>
 
     <!-- Result summary (only once the run produced one). -->
-    <section v-if="store.detail.result" class="bg-white p-4 rounded shadow-sm space-y-2">
-      <h2 class="font-medium text-sm">Result</h2>
+    <section v-if="store.detail.result" class="card space-y-3 p-4">
+      <h2 class="text-sm font-semibold">Result</h2>
       <dl class="grid grid-cols-3 gap-3 text-sm">
         <div>
-          <dt class="text-xs text-gray-500">Cost</dt>
-          <dd>${{ store.detail.result.cost_usd.toFixed(4) }}</dd>
+          <dt class="label mb-0.5">Cost</dt>
+          <dd class="font-mono text-muted">${{ store.detail.result.cost_usd.toFixed(4) }}</dd>
         </div>
         <div>
-          <dt class="text-xs text-gray-500">Turns</dt>
-          <dd>{{ store.detail.result.num_turns }}</dd>
+          <dt class="label mb-0.5">Turns</dt>
+          <dd class="font-mono text-muted">{{ store.detail.result.num_turns }}</dd>
         </div>
         <div>
-          <dt class="text-xs text-gray-500">Tokens</dt>
-          <dd>{{ store.detail.result.input_tokens }} / {{ store.detail.result.output_tokens }}</dd>
+          <dt class="label mb-0.5">Tokens in / out</dt>
+          <dd class="font-mono text-muted">{{ store.detail.result.input_tokens }} / {{ store.detail.result.output_tokens }}</dd>
         </div>
       </dl>
-      <div class="p-3 rounded" :class="store.detail.result.is_error ? 'bg-red-50' : 'bg-gray-50'">
+      <div
+        class="rounded-md border p-3"
+        :class="store.detail.result.is_error ? 'border-signal-danger/40 bg-signal-danger/5' : 'border-line bg-panel-2/60'"
+      >
         <pre
           v-if="store.detail.result.is_error"
-          class="text-xs whitespace-pre-wrap font-mono text-red-900"
+          class="whitespace-pre-wrap font-mono text-xs text-signal-danger"
         >{{ store.detail.result.result_text }}</pre>
         <MarkdownView v-else :source="store.detail.result.result_text" />
       </div>
@@ -327,16 +302,12 @@ watch(pendingApprovals, (p) => {
       :subtitle="`${eventCount} event${eventCount === 1 ? '' : 's'}`"
     >
       <template #actions>
-        <button
-          v-if="hasEvents"
-          class="text-[11px] text-gray-500 hover:text-gray-800"
-          @click="showRaw = !showRaw"
-        >
+        <button v-if="hasEvents" class="text-[11px] text-muted hover:text-ink" @click="showRaw = !showRaw">
           {{ showRaw ? "formatted" : "raw json" }}
         </button>
       </template>
       <div class="pt-3">
-        <p v-if="!hasEvents" class="text-sm text-gray-500">
+        <p v-if="!hasEvents" class="text-sm text-muted">
           No events yet{{ isLive ? " — waiting for the agent…" : "." }}
         </p>
         <ClaudeStream
@@ -347,10 +318,10 @@ watch(pendingApprovals, (p) => {
         />
         <pre
           v-else
-          class="text-xs whitespace-pre-wrap font-mono bg-gray-50 p-2 rounded max-h-[32rem] overflow-auto"
+          class="max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-md border border-line bg-canvas p-2 font-mono text-xs text-muted"
         >{{ eventText }}</pre>
       </div>
     </Accordion>
   </section>
-  <p v-else class="text-gray-500">Loading…</p>
+  <p v-else class="text-faint">Loading…</p>
 </template>

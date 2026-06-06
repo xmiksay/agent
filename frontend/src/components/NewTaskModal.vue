@@ -139,21 +139,19 @@ function close() {
 <template>
   <div
     v-if="props.open"
-    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-canvas/70 backdrop-blur-sm"
     @click.self="close"
   >
-    <div class="bg-white rounded-lg shadow-lg w-[640px] max-h-[90vh] overflow-auto">
-      <div class="px-5 py-4 border-b flex items-center justify-between">
-        <h2 class="text-lg font-semibold">New task</h2>
-        <button class="text-gray-500 hover:text-gray-800" :disabled="submitting" @click="close">
-          ✕
-        </button>
+    <div class="card max-h-[90vh] w-[640px] overflow-auto border-line-2 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.85)]">
+      <div class="flex items-center justify-between border-b border-line px-5 py-4">
+        <h2 class="font-display text-lg font-bold">New task</h2>
+        <button class="btn btn-subtle btn-sm" :disabled="submitting" @click="close">✕</button>
       </div>
 
-      <div class="px-5 py-4 space-y-4">
+      <div class="space-y-4 px-5 py-4">
         <div>
-          <label class="block text-xs uppercase text-gray-500 mb-1">Project</label>
-          <select v-model="projectId" class="w-full border rounded px-2 py-1.5">
+          <label class="label">Project</label>
+          <select v-model="projectId" class="select">
             <option v-for="p in projectsStore.list" :key="p.id" :value="p.id">
               {{ p.full_name }} ({{ p.provider }})
             </option>
@@ -161,8 +159,8 @@ function close() {
         </div>
 
         <div>
-          <label class="block text-xs uppercase text-gray-500 mb-1">Trigger</label>
-          <select v-model="triggerKind" class="w-full border rounded px-2 py-1.5">
+          <label class="label">Trigger</label>
+          <select v-model="triggerKind" class="select">
             <option v-for="k in triggerKinds" :key="k.value" :value="k.value">
               {{ k.label }} — {{ k.hint }}
             </option>
@@ -171,34 +169,25 @@ function close() {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs uppercase text-gray-500 mb-1">
+            <label class="label">
               {{ triggerKind === "issue_comment" ? "Issue iid" : triggerKind === "mr_comment" ? "MR iid" : "iid" }}
             </label>
-            <input
-              v-model.number="fields.iid"
-              type="number"
-              min="1"
-              class="w-full border rounded px-2 py-1.5"
-            />
+            <input v-model.number="fields.iid" type="number" min="1" class="input" />
           </div>
           <div>
-            <label class="block text-xs uppercase text-gray-500 mb-1">URL</label>
-            <input v-model="fields.url" type="url" class="w-full border rounded px-2 py-1.5" />
+            <label class="label">URL</label>
+            <input v-model="fields.url" type="url" class="input" />
           </div>
         </div>
 
         <div v-if="triggerKind === 'issue' || triggerKind === 'review_mr' || triggerKind === 'fix_review'">
-          <label class="block text-xs uppercase text-gray-500 mb-1">Title</label>
-          <input v-model="fields.title" type="text" class="w-full border rounded px-2 py-1.5" />
+          <label class="label">Title</label>
+          <input v-model="fields.title" type="text" class="input" />
         </div>
 
         <div v-if="triggerKind === 'issue'">
-          <label class="block text-xs uppercase text-gray-500 mb-1">Description</label>
-          <textarea
-            v-model="fields.description"
-            rows="5"
-            class="w-full border rounded px-2 py-1.5 font-mono text-sm"
-          ></textarea>
+          <label class="label">Description</label>
+          <textarea v-model="fields.description" rows="5" class="textarea font-mono" />
         </div>
 
         <div
@@ -208,60 +197,38 @@ function close() {
             triggerKind === 'mr_comment'
           "
         >
-          <label class="block text-xs uppercase text-gray-500 mb-1">Source branch</label>
-          <input
-            v-model="fields.source_branch"
-            type="text"
-            class="w-full border rounded px-2 py-1.5"
-          />
+          <label class="label">Source branch</label>
+          <input v-model="fields.source_branch" type="text" class="input font-mono" />
         </div>
 
         <div v-if="triggerKind === 'review_mr'">
-          <label class="block text-xs uppercase text-gray-500 mb-1">
-            Target branch <span class="text-gray-400">(default: {{ branchPlaceholder }})</span>
+          <label class="label">
+            Target branch <span class="normal-case text-faint">(default: {{ branchPlaceholder }})</span>
           </label>
           <input
             v-model="fields.target_branch"
             type="text"
             :placeholder="branchPlaceholder"
-            class="w-full border rounded px-2 py-1.5"
+            class="input font-mono"
           />
         </div>
 
         <div v-if="triggerKind === 'fix_review'">
-          <label class="block text-xs uppercase text-gray-500 mb-1">Review body</label>
-          <textarea
-            v-model="fields.review_body"
-            rows="4"
-            class="w-full border rounded px-2 py-1.5 font-mono text-sm"
-          ></textarea>
+          <label class="label">Review body</label>
+          <textarea v-model="fields.review_body" rows="4" class="textarea font-mono" />
         </div>
 
         <div v-if="triggerKind === 'mr_comment' || triggerKind === 'issue_comment'">
-          <label class="block text-xs uppercase text-gray-500 mb-1">Comment</label>
-          <textarea
-            v-model="fields.comment"
-            rows="4"
-            class="w-full border rounded px-2 py-1.5 font-mono text-sm"
-          ></textarea>
+          <label class="label">Comment</label>
+          <textarea v-model="fields.comment" rows="4" class="textarea font-mono" />
         </div>
 
-        <p v-if="errorMsg" class="text-sm text-red-600">{{ errorMsg }}</p>
+        <p v-if="errorMsg" class="text-sm text-signal-danger">{{ errorMsg }}</p>
       </div>
 
-      <div class="px-5 py-3 border-t flex justify-end gap-2 bg-gray-50 rounded-b-lg">
-        <button
-          class="px-3 py-1.5 text-sm rounded border hover:bg-gray-100"
-          :disabled="submitting"
-          @click="close"
-        >
-          Cancel
-        </button>
-        <button
-          class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-          :disabled="submitting || !projectId"
-          @click="submit"
-        >
+      <div class="flex justify-end gap-2 border-t border-line px-5 py-3">
+        <button class="btn btn-subtle" :disabled="submitting" @click="close">Cancel</button>
+        <button class="btn btn-primary" :disabled="submitting || !projectId" @click="submit">
           {{ submitting ? "Creating…" : "Create as pending" }}
         </button>
       </div>
