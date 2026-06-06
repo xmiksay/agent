@@ -25,4 +25,10 @@ export const projectsApi = {
       body,
     });
   },
+  updateEnv(id: string, body: { env_file: string }): Promise<ProjectConfig> {
+    return api(`/api/projects/${id}/env`, {
+      method: "PUT",
+      body,
+    });
+  },
 };

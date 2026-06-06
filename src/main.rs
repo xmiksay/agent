@@ -135,6 +135,10 @@ async fn main() -> anyhow::Result<()> {
             put(api::projects::update_config),
         )
         .route(
+            "/api/projects/{id}/env",
+            put(api::projects::update_env),
+        )
+        .route(
             "/api/projects/{id}/branches",
             get(api::projects::list_branches),
         )

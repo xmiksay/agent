@@ -8,10 +8,14 @@ const props = defineProps<{ id: string }>();
 const store = useProjectsStore();
 const draft = ref("");
 const saving = ref(false);
+const envDraft = ref("");
+const savingEnv = ref(false);
+const envPlaceholder = "DEPLOY_ENV={{ branch }}\nREPO_URL={{ url }}";
 
 const reload = async () => {
   await store.load(props.id);
   draft.value = (store.detail?.allowed_operations ?? []).join("\n");
+  envDraft.value = store.detail?.env_file ?? "";
 };
 
 onMounted(reload);
@@ -27,6 +31,15 @@ async function save() {
     await store.updateAllowedOps(props.id, ops);
   } finally {
     saving.value = false;
+  }
+}
+
+async function saveEnv() {
+  savingEnv.value = true;
+  try {
+    await store.updateEnvFile(props.id, envDraft.value);
+  } finally {
+    savingEnv.value = false;
   }
 }
 </script>
@@ -82,6 +95,37 @@ async function save() {
         @click="save"
       >
         {{ saving ? "Saving…" : "Save" }}
+      </button>
+    </section>
+
+    <section class="bg-white p-4 rounded shadow-sm space-y-3">
+      <h2 class="font-medium">Environment variables</h2>
+      <p class="text-xs text-gray-500">
+        <code>KEY=value</code> per line, <code>.env</code> style. Unpacked into
+        the agent's environment when it starts. Blank lines and <code>#</code>
+        comments are ignored. The text is a
+        <a
+          href="https://docs.rs/minijinja/latest/minijinja/syntax/index.html"
+          target="_blank"
+          class="text-blue-700 hover:underline"
+          >minijinja template</a
+        >
+        with the task's runtime variables:
+        <code>branch</code>, <code>default_branch</code>, <code>url</code>,
+        <code>project</code>, <code>service</code>, <code>task_id</code>.
+      </p>
+      <textarea
+        v-model="envDraft"
+        rows="8"
+        :placeholder="envPlaceholder"
+        class="w-full font-mono text-sm border rounded p-2"
+      />
+      <button
+        class="rounded bg-blue-600 text-white px-4 py-2 hover:bg-blue-700 disabled:opacity-60"
+        :disabled="savingEnv"
+        @click="saveEnv"
+      >
+        {{ savingEnv ? "Saving…" : "Save" }}
       </button>
     </section>
 

@@ -63,6 +63,8 @@ export interface ProjectConfig {
   default_branch: string;
   my_username: string;
   allowed_operations: string[];
+  /** Raw .env-style text injected as env vars when the agent starts. */
+  env_file: string;
   notes: string;
   created_at: string;
   updated_at: string;

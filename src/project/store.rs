@@ -83,6 +83,10 @@ pub struct ProjectConfig {
     pub default_branch: String,
     pub my_username: String,
     pub allowed_operations: Vec<String>,
+    /// `.env`-style minijinja template (`KEY=value` per line). Rendered with the
+    /// task's runtime variables and injected into the agent process at spawn —
+    /// see `project::env`.
+    pub env_file: String,
     pub notes: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -102,6 +106,7 @@ impl ProjectConfig {
             default_branch: m.default_branch,
             my_username: m.my_username,
             allowed_operations: allowed,
+            env_file: m.env_file,
             notes: m.notes,
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
@@ -323,6 +328,7 @@ impl ProjectStore {
             default_branch: Set(new.default_branch),
             my_username: Set(new.my_username),
             allowed_operations: Set(serde_json::to_value(default_allowed_operations())?),
+            env_file: Set(String::new()),
             notes: Set(String::new()),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
@@ -371,6 +377,20 @@ impl ProjectStore {
             .ok_or_else(|| anyhow!("project not found"))?
             .into();
         active.allowed_operations = Set(serde_json::to_value(ops)?);
+        active.updated_at = Set(Utc::now().into());
+        active.update(&self.db).await?;
+        self.get_project_by_id(id)
+            .await?
+            .ok_or_else(|| anyhow!("project disappeared"))
+    }
+
+    pub async fn update_env_file(&self, id: Uuid, env_file: String) -> Result<ProjectConfig> {
+        let mut active: projects::ActiveModel = projects::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| anyhow!("project not found"))?
+            .into();
+        active.env_file = Set(env_file);
         active.updated_at = Set(Utc::now().into());
         active.update(&self.db).await?;
         self.get_project_by_id(id)

@@ -14,6 +14,8 @@ pub struct Model {
     pub my_username: String,
     pub allowed_operations: Json,
     #[sea_orm(column_type = "Text")]
+    pub env_file: String,
+    #[sea_orm(column_type = "Text")]
     pub notes: String,
     pub git_service_id: Option<Uuid>,
     pub created_at: DateTimeWithTimeZone,

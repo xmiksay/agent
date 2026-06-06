@@ -16,7 +16,9 @@ use crate::jobs::prompt::build_prompt;
 use crate::jobs::store::TaskStore;
 use crate::jobs::stream::{Stream, stream_into_entry};
 use crate::jobs::types::TriggerReason;
-use crate::project::{BranchStatus, NewBranchEntry, ProjectStore, ProviderKind};
+use crate::project::{
+    BranchStatus, EnvContext, NewBranchEntry, ProjectStore, ProviderKind, build_env_vars,
+};
 use crate::provider::GitProvider;
 use crate::workspace::Workspace;
 use crate::workspace::layout::slugify;
@@ -126,6 +128,30 @@ pub async fn run_job(
 
     let mut cmd = Command::new(backend.program());
     cmd.args(&agent_args).current_dir(&work_dir);
+    // Project-configured env first, so reserved vars below always win. The stored
+    // value is a minijinja template rendered against the task's runtime vars.
+    if let Some(pid) = project_id
+        && let Ok(Some(pc)) = project_store.get_project_by_id(pid).await
+    {
+        let ctx = EnvContext {
+            branch: branch.clone(),
+            default_branch: default_branch.clone(),
+            url: git_url.clone(),
+            project: project_path.clone(),
+            service: service.slug.clone(),
+            task_id: task_id.to_string(),
+        };
+        match build_env_vars(&pc.env_file, &ctx) {
+            Ok(pairs) => {
+                for (key, value) in pairs {
+                    cmd.env(key, value);
+                }
+            }
+            Err(e) => {
+                warn!(%task_id, project = %project_path, error = %e, "skipping project env: template error")
+            }
+        }
+    }
     for (key, value) in backend.extra_env(task_id, &agent_port) {
         cmd.env(key, value);
     }

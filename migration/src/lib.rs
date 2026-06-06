@@ -13,6 +13,7 @@ mod m20260601_000010_add_task_pid;
 mod m20260601_000011_add_auth_request_metadata;
 mod m20260605_000012_add_task_pending_message;
 mod m20260605_000013_create_task_events;
+mod m20260606_000014_add_project_env_vars;
 
 pub struct Migrator;
 
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260601_000011_add_auth_request_metadata::Migration),
             Box::new(m20260605_000012_add_task_pending_message::Migration),
             Box::new(m20260605_000013_create_task_events::Migration),
+            Box::new(m20260606_000014_add_project_env_vars::Migration),
         ]
     }
 }

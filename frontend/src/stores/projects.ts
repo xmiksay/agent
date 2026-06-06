@@ -31,5 +31,21 @@ export const useProjectsStore = defineStore("projects", () => {
     return updated;
   }
 
-  return { list, detail, loading, refresh, load, updateAllowedOps };
+  async function updateEnvFile(id: string, envFile: string) {
+    const updated = await projectsApi.updateEnv(id, { env_file: envFile });
+    if (detail.value && detail.value.id === updated.id) {
+      detail.value = { ...detail.value, ...updated };
+    }
+    return updated;
+  }
+
+  return {
+    list,
+    detail,
+    loading,
+    refresh,
+    load,
+    updateAllowedOps,
+    updateEnvFile,
+  };
 });
