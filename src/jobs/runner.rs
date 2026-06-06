@@ -8,10 +8,13 @@ use tracing::{info, warn};
 use tokio::sync::Semaphore;
 
 use crate::agent::{AgentBackend, ClaudeCode};
+use crate::auth::store::AuthStore;
+use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::git_service::GitService;
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::output_log::TaskOutputLog;
+use crate::jobs::permission::handle_permission;
 use crate::jobs::prompt::build_prompt;
 use crate::jobs::store::TaskStore;
 use crate::jobs::stream::{Stream, stream_into_entry};
@@ -23,6 +26,7 @@ use crate::provider::GitProvider;
 use crate::workspace::Workspace;
 use crate::workspace::layout::slugify;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_job(
     task_id: uuid::Uuid,
     trigger: TriggerReason,
@@ -39,6 +43,8 @@ pub async fn run_job(
     output_log: TaskOutputLog,
     hub: LiveSessions,
     store: Arc<TaskStore>,
+    auth_store: Arc<AuthStore>,
+    auth_waiter: AuthWaiter,
     semaphore: Arc<Semaphore>,
     resume_session_id: Option<String>,
     prompt_override: Option<String>,
@@ -75,9 +81,6 @@ pub async fn run_job(
 
     // Hardcoded to Claude Code for now; a future per-task config will choose.
     let backend: Arc<dyn AgentBackend> = Arc::new(ClaudeCode);
-    write_worktree_files(&work_dir, backend.worktree_files(&workspace.authcheck_hook_path()))
-        .await
-        .context("writing agent worktree files")?;
 
     if let Some(pid) = project_id {
         let issue_iid = trigger.issue_iid().map(|v| v as i64);
@@ -105,11 +108,6 @@ pub async fn run_job(
     };
     info!(%prompt, program = backend.program(), "running agent");
 
-    let agent_port = config
-        .listen_addr
-        .rsplit_once(':')
-        .map(|(_, p)| p.to_string())
-        .unwrap_or_else(|| "3000".to_string());
     let agent_args = backend.build_args(resume_session_id.as_deref());
     let command_line = format!("{} {}", backend.program(), agent_args.join(" "));
 
@@ -152,9 +150,6 @@ pub async fn run_job(
             }
         }
     }
-    for (key, value) in backend.extra_env(task_id, &agent_port) {
-        cmd.env(key, value);
-    }
     let mut child = cmd
         .env(provider_token_var, provider_token_value)
         .stdin(Stdio::piped())
@@ -169,14 +164,31 @@ pub async fn run_job(
         let _ = store.set_pid(task_id, Some(pid)).await;
     }
 
-    // The turn loop writes one operator message per turn directly to stdin,
-    // gated by a semaphore permit so only an *actively-processing* agent counts
-    // against MAX_CONCURRENT_JOBS — an idle, warm agent holds no slot. The hub
-    // holds the input sender; dropping it (Stop/end) closes the input channel,
-    // which the loop reads as a graceful close (stdin EOF → claude exits).
-    let mut child_stdin = child.stdin.take().expect("piped stdin");
+    // Two stdin channels feed a single writer task that owns child stdin:
+    //   * `input` carries operator messages; the turn loop drains it one per
+    //     turn for pacing, then forwards each into `to_agent`.
+    //   * `to_agent` carries raw lines (operator messages AND control responses)
+    //     to the writer. The hub holds a `to_agent` clone so a mid-turn
+    //     `can_use_tool` response reaches stdin immediately, not at turn end.
+    // When every `to_agent` sender drops, the writer ends and dropping child
+    // stdin produces EOF — the graceful-close mechanism.
+    let child_stdin = child.stdin.take().expect("piped stdin");
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(32);
-    hub.register(task_id, backend.clone(), input_tx).await;
+    let (to_agent_tx, mut to_agent_rx) = tokio::sync::mpsc::channel::<String>(32);
+    hub.register(task_id, backend.clone(), input_tx, to_agent_tx.clone()).await;
+
+    let writer = tokio::spawn(async move {
+        let mut child_stdin = child_stdin;
+        while let Some(line) = to_agent_rx.recv().await {
+            if child_stdin.write_all(line.as_bytes()).await.is_err()
+                || child_stdin.write_all(b"\n").await.is_err()
+                || child_stdin.flush().await.is_err()
+            {
+                break;
+            }
+        }
+        // Dropping child_stdin here closes the pipe → EOF → claude exits.
+    });
 
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
@@ -202,6 +214,31 @@ pub async fn run_job(
     // One signal per turn, the moment a `result` event is seen on stdout.
     let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<()>(8);
 
+    // Permission prompts (`can_use_tool`) sniffed off stdout. The sender is owned
+    // ONLY by the stdout reader so it drops at stdout EOF and ends the consumer.
+    let (perm_tx, mut perm_rx) =
+        tokio::sync::mpsc::channel::<crate::agent::PermissionRequest>(32);
+    let perm_consumer = {
+        let hub = hub.clone();
+        let auth_store = auth_store.clone();
+        let auth_waiter = auth_waiter.clone();
+        let project_store = project_store.clone();
+        tokio::spawn(async move {
+            // One task per request so a 600s operator wait never blocks the next.
+            while let Some(req) = perm_rx.recv().await {
+                tokio::spawn(handle_permission(
+                    req,
+                    task_id,
+                    project_id,
+                    hub.clone(),
+                    auth_store.clone(),
+                    auth_waiter.clone(),
+                    project_store.clone(),
+                ));
+            }
+        })
+    };
+
     let stdout_reader = tokio::spawn(stream_into_entry(
         stdout_pipe,
         entry.clone(),
@@ -212,6 +249,7 @@ pub async fn run_job(
         Some(session_tx),
         Some((token_limit, budget_tx)),
         Some(result_tx),
+        Some(perm_tx),
     ));
     let stderr_reader = tokio::spawn(stream_into_entry(
         stderr_pipe,
@@ -220,6 +258,7 @@ pub async fn run_job(
         backend.clone(),
         hub.clone(),
         task_id,
+        None,
         None,
         None,
         None,
@@ -235,10 +274,11 @@ pub async fn run_job(
     let work_dir_str = work_dir.to_string_lossy().into_owned();
 
     // Turn loop. The first turn carries the initial prompt; later turns pull an
-    // operator message from the hub. A turn = acquire permit → write message →
-    // wait for its `result` → release permit → finalize (push + reply on demand)
-    // → go idle (warm, holding no slot) until the next message or a graceful
-    // close. No per-turn timeout — Stop/Pause from the UI handle a stuck turn.
+    // operator message from the hub. A turn = acquire permit → forward message to
+    // the writer → wait for its `result` → release permit → finalize (push +
+    // reply on demand) → go idle (warm, holding no slot) until the next message
+    // or a graceful close. No per-turn timeout — Stop/Pause from the UI handle a
+    // stuck turn.
     let mut pending = Some(backend.encode_user_message(&prompt));
     let mut killed_for_budget = false;
     loop {
@@ -263,10 +303,9 @@ pub async fn run_job(
         };
         let _ = store.set_status(task_id, "running").await;
 
-        if child_stdin.write_all(msg.as_bytes()).await.is_err()
-            || child_stdin.write_all(b"\n").await.is_err()
-            || child_stdin.flush().await.is_err()
-        {
+        // Forward to the writer task (which owns child stdin). A send error means
+        // the writer is gone (stdin closed) — end the session.
+        if to_agent_tx.send(msg).await.is_err() {
             drop(permit);
             break;
         }
@@ -304,13 +343,18 @@ pub async fn run_job(
         }
     }
 
-    // Session over: close stdin (EOF), reap the child, end the live session and
-    // drain the readers (the pipes hit EOF once the child is gone).
-    drop(child_stdin);
-    let _ = child.wait().await;
+    // Session over. Drop this clone of `to_agent`, then end the live session
+    // (which drops the hub's input + control clones). With every `to_agent`
+    // sender gone the writer drains and drops child stdin → EOF; reap the child
+    // and drain the readers (the pipes hit EOF once the child is gone). The
+    // stdout reader owns `perm_tx`, so awaiting it ends the permission consumer.
+    drop(to_agent_tx);
     hub.end(task_id).await;
+    let _ = writer.await;
+    let _ = child.wait().await;
     let _ = stdout_reader.await;
     let _ = stderr_reader.await;
+    let _ = perm_consumer.await;
     {
         let mut guard = entry.lock().await;
         guard.finished = true;
@@ -321,24 +365,3 @@ pub async fn run_job(
     info!(%task_id, status = final_status, "agent session ended");
     Ok(())
 }
-
-/// Materialize the backend's per-run worktree files (agent config, hooks),
-/// creating parent directories as needed.
-async fn write_worktree_files(
-    work_dir: &std::path::Path,
-    files: Vec<crate::agent::WorktreeFile>,
-) -> anyhow::Result<()> {
-    for file in files {
-        let path = work_dir.join(&file.rel_path);
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-        tokio::fs::write(&path, file.contents)
-            .await
-            .with_context(|| format!("writing {}", path.display()))?;
-    }
-    Ok(())
-}
-

@@ -2,8 +2,8 @@
 //!
 //! If `API_BEARER_TOKEN` is unset (typical for dev), all requests pass.
 //! Otherwise the `Authorization: Bearer <token>` header must match in
-//! constant time. Webhooks, `/internal/authcheck`, `/health`, and the
-//! SPA fallback are deliberately NOT covered — they have their own auth.
+//! constant time. Webhooks, `/health`, `/ws`, and the SPA fallback are
+//! deliberately NOT covered — they have their own auth.
 
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};

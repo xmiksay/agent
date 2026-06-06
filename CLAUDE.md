@@ -37,25 +37,27 @@ src/webhook/dispatch.rs           dedupe by event_id, decide trigger,
 src/jobs/store.rs                 persists tasks, owns the run loop;
     │                             confirm_task → spawn run_job
     ▼
-src/jobs/runner.rs                clone/fetch, write the backend's worktree
-    │   + src/agent (AgentBackend) files (Claude: .claude/settings.local.json),
-    │                             spawn the backend as a long-lived interactive
-    │                             session (`claude --input-format stream-json
-    │                             --output-format stream-json`), pump operator
-    │                             messages into its stdin, stream events into the
-    │                             live hub, enforce token budget, and at session
-    │                             end push changes + post result via GitProvider
+src/jobs/runner.rs                clone/fetch, spawn the backend as a long-lived
+    │                             interactive session (`claude --input-format
+    │                             stream-json --output-format stream-json
+    │                             --permission-mode default --permission-prompt-tool
+    │                             stdio`), pump operator messages into its stdin,
+    │                             stream events into the live hub, enforce token
+    │                             budget, and at session end push changes + post
+    │                             result via GitProvider
     │
     ├─ stdout events ──► src/jobs/hub.rs (LiveSessions): per-task broadcast +
     │                    batch-persist to the task_events table; fan out over
     │                    one app-wide GET /ws ◄──► Operator (SPA) chat/stop/redefine
     │
-    │ PreToolUse hook (Bash/AskUserQuestion)
+    │ can_use_tool control_request on stdout (Bash/AskUserQuestion/…)
     ▼
-POST /internal/authcheck          src/auth/handlers.rs — loopback-only;
-    │                             allowlist match OR open auth_requests row,
-    │                             block on AuthWaiter notify, and publish the
-    │                             pending approval to the task's live hub
+src/jobs/permission.rs            handle_permission — in-process; non-Bash tools
+    │                             (edits/reads) auto-allowed, Bash matched against
+    │                             the project allowlist; on miss / AskUserQuestion
+    │                             open an auth_requests row, block on AuthWaiter
+    │                             notify, publish to the live hub, then write a
+    │                             control_response back to the agent's stdin
     ▼
 Operator (SPA)                    approves/denies via
                                   POST /api/auth_requests/{id}/resolve
@@ -73,13 +75,14 @@ Operator (SPA)                    approves/denies via
 | `src/webhook/types.rs` | provider-specific payload structs |
 | `src/jobs/types.rs` | `TriggerReason`, `ClaudeOutput` |
 | `src/jobs/store.rs` | `TaskStore` — task CRUD, run loop, kill/continue/retry/push_message, branch_diff. **Over 500 lines — split before adding new methods.** |
-| `src/jobs/runner.rs` | `run_job` — spawns the interactive stream-json session and runs the **turn loop**: per turn it takes a concurrency permit, writes one operator message to stdin, waits for that turn's `result`, releases the permit, finalizes, then idles (warm, holding no slot) until the next message or a graceful close |
+| `src/jobs/runner.rs` | `run_job` — spawns the interactive stream-json session and runs the **turn loop**: per turn it takes a concurrency permit, forwards one operator message to the stdin writer task, waits for that turn's `result`, releases the permit, finalizes, then idles (warm, holding no slot) until the next message or a graceful close. Also owns the dedicated stdin writer task (so control responses reach the child mid-turn) and the permission consumer that spawns `handle_permission` per request |
 | `src/jobs/turn.rs` | `finalize_turn` — per-turn bookkeeping: persist the turn's result, push commits, and post a reply note "on demand" (only when commits landed or the turn errored) |
-| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to the `task_events` table, the `mpsc` back-channel to the agent's stdin, and `is_warm`/`send_to_agent`/`stop` for routing operator messages to a live session |
+| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to the `task_events` table, and two back-channels to the agent — `stdin` (operator messages, drained one per turn for pacing) and `control` (`respond_permission`, control responses written immediately). Plus `is_warm`/`send_to_agent`/`stop` for routing operator messages to a live session |
 | `src/jobs/prompt.rs` | `build_prompt` — per-trigger prompt text (split out of runner) |
-| `src/jobs/stream.rs` | `stream_into_entry` — pumps a child pipe into the live log + publishes each stdout event to the hub, sniffing session id / output tokens via the backend |
-| `src/agent/mod.rs` | `AgentBackend` trait + `WorktreeFile` — abstracts the coding-agent CLI (invocation, stdin message encoding, config/hook files, output parsing). Sync methods; the runner does the fs writes |
-| `src/agent/claude.rs` | `ClaudeCode` — the only backend today (hardcoded in `run_job`); drives `claude` as an interactive stream-json session and parses the `result` event. Unit-tested |
+| `src/jobs/stream.rs` | `stream_into_entry` — pumps a child pipe into the live log + publishes each stdout event to the hub, sniffing session id / output tokens via the backend; on stdout it also detects `can_use_tool` control requests and routes them to the permission handler instead of publishing them |
+| `src/jobs/permission.rs` | `handle_permission` — applies the allowlist-or-operator policy to one `can_use_tool` request and writes the `control_response` back via `hub.respond_permission`. Non-Bash/AskUserQuestion tools are auto-allowed; the 600s operator timeout lives here. Unit-tested |
+| `src/agent/mod.rs` | `AgentBackend` trait + `PermissionRequest`/`PermissionDecision` — abstracts the coding-agent CLI (invocation, stdin message encoding, control-protocol parse/encode, output parsing). Sync, pure methods |
+| `src/agent/claude.rs` | `ClaudeCode` — the only backend today (hardcoded in `run_job`); drives `claude` as an interactive stream-json session, parses the `result` event, and parses/encodes the `can_use_tool` control protocol. Unit-tested |
 | `src/ws/mod.rs` | `GET /ws` — **one** process-wide socket per browser. In-band auth (the client's first frame is its token); subscribes to the hub's `all` stream and forwards every task's `Envelope` frames; routes inbound `{kind, task_id, …}` operator messages to the agent stdin; 30s keepalive ping |
 | `src/jobs/registry.rs` | `RunningTasks` — abort handles by task id |
 | `src/jobs/output_log.rs` | in-memory stdout/stderr ring — kept only for the final result parse + stderr error tail (no longer served over HTTP) |
@@ -96,13 +99,11 @@ Operator (SPA)                    approves/denies via
 | `src/api/*.rs` | HTTP handlers under `/api/` — tasks, projects, git_services, auth_requests |
 | `src/auth/mod.rs` | `token_ok` — shared constant-time token check used by the bearer middleware (header) and the WS handler (first-frame token) |
 | `src/auth/middleware.rs` | bearer-token check for `/api/*` |
-| `src/auth/handlers.rs` | `/internal/authcheck` — loopback-only endpoint that the Claude Code PreToolUse hook calls |
 | `src/auth/store.rs` | `auth_requests` CRUD + status enum |
-| `src/auth/waiter.rs` | in-process `Notify` map; `authcheck` parks here until the operator resolves |
+| `src/auth/waiter.rs` | in-process `Notify` map; the permission handler parks here until the operator resolves |
 | `src/auth/operations.rs` | glob matcher for allowlist evaluation |
 | `src/entity/*.rs` | SeaORM `Model` structs (one per table) |
 | `migration/src/*.rs` | SeaORM migrations — append-only, numbered `mYYYYMMDD_NNNNNN_*` |
-| `defaults/.claude/hooks/authcheck.sh` | the PreToolUse hook script, embedded at build via `include_str!` and written into each worktree at `<base>/.agent-hooks/authcheck.sh` |
 | `src/spa.rs` | `rust-embed` handler — bakes `frontend/dist/` into the binary and serves it as the `/`-fallback (SPA paths fall through to `index.html`) |
 | `frontend/` | Vue 3 + Vite + Pinia + Tailwind SPA — `npm run build` must run before `cargo build` so the bundle is on disk when the embed derive picks it up |
 
@@ -117,18 +118,17 @@ Tables (current set, see migration files for canonical schemas):
 - `task_results` — final cost / turns / tokens / result text; one-to-one with tasks
 - `projects` — discovered repos, per-project `allowed_operations` glob list and `env_file` (a `.env`-style minijinja template injected as env vars at agent spawn)
 - `project_branches` — branches the agent has touched, with `issue_iid` / `pr_iid` linkage and status
-- `auth_requests` — operator-approval items raised from the authcheck hook
+- `auth_requests` — operator-approval items raised by the in-process permission handler
 - `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret
 
 ### HTTP surface
 
-Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webhook/*`, `/health`, `/internal/authcheck`, and `/ws` are outside that middleware; the authcheck endpoint is additionally restricted to loopback callers, and the `/ws` handler authenticates in-band (the client's first frame carries the token), so it never lands in URLs/proxy logs.
+Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webhook/*`, `/health`, and `/ws` are outside that middleware; the `/ws` handler authenticates in-band (the client's first frame carries the token), so it never lands in URLs/proxy logs.
 
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/webhook/gitlab/{slug}` | `X-Gitlab-Token` = service `webhook_secret` |
 | `POST` | `/webhook/github/{slug}` | `X-Hub-Signature-256` HMAC-SHA256 |
-| `POST` | `/internal/authcheck` | loopback only; called by the PreToolUse hook |
 | `GET` | `/ws` | **Single app-wide** WebSocket live stream (multiplexes all tasks). In-band auth (first frame = token). Outbound `Envelope` frames (`task_id`/`event`\|`auth_request`\|`status`); inbound `{kind: chat\|redefine\|stop, task_id}` routed to the agent stdin |
 | `GET` | `/api/tasks` | optional `?status=` |
 | `POST` | `/api/tasks` | operator-driven dispatch: `{ project_id, trigger: TriggerReason }` → pending task (use when the webhook missed/was filtered) |
@@ -145,7 +145,7 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 | `GET`/`POST` | `/api/git_services` | tokens and webhook secrets are write-only on GET |
 | `GET`/`PUT`/`DELETE` | `/api/git_services/{id}` | |
 | `GET` | `/api/auth_requests` | optional `?status=`, `?task_id=` |
-| `GET`/`POST` | `/api/auth_requests/{id}` / `/api/auth_requests/{id}/resolve` | unblocks the parked authcheck call |
+| `GET`/`POST` | `/api/auth_requests/{id}` / `/api/auth_requests/{id}/resolve` | unblocks the parked permission handler |
 | `GET` | `/api/auth/check` | 204 probe used by the SPA to validate the token |
 | `GET` | `/health` | 200 |
 
@@ -153,34 +153,31 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 
 ```
 $REPO_BASE_PATH/
-├── .agent-hooks/
-│   └── authcheck.sh                     # rewritten at every startup
 └── <service_slug>/
     └── <project_slug>/
         ├── <branch_slug>.lock           # advisory file lock per branch
         ├── <branch_slug>/               # one git worktree per branch
-        │   ├── .git/
-        │   └── .claude/settings.local.json   # permission mode "auto" + PreToolUse hook
+        │   └── .git/
         └── …
 ```
 
-`slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone/fetch, preserving an already-checked-out branch), writes `settings.local.json`, then runs `claude --print [--resume <sid>] --input-format stream-json --output-format stream-json --verbose --replay-user-messages`.
+`slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone/fetch, preserving an already-checked-out branch), then runs `claude --print [--resume <sid>] --input-format stream-json --output-format stream-json --verbose --replay-user-messages --permission-mode default --permission-prompt-tool stdio`. The agent's own config/hook files are **not** written into the worktree — permission behavior is a CLI flag, and tool gating is the in-process control-protocol handler.
 
 The process is **long-lived and turn-based**. The runner's turn loop, per turn: takes a `MAX_CONCURRENT_JOBS` permit (status → `running`), writes one operator message to stdin (the first turn uses the initial prompt), waits for that turn's `result`, **releases the permit** (status → `completed`), finalizes (push commits + reply-on-demand), then **idles warm** — the agent process stays alive but holds **no concurrency slot** (an idle agent is not a running agent). A new message (live via `hub.send_to_agent`, or a resume) wakes it into the next turn. The session ends on **stop** (hub drops the stdin sender → EOF → graceful exit), **pause** (SIGKILL), token-budget kill, or issue/MR close. `push_message` delivers to a warm agent first (`hub.is_warm`) and only resumes the session when there's no live agent — so a follow-up never spawns a second agent on the same branch.
 
 **Branch selection (a task never runs on the default branch).** `TaskStore::create_task` derives and persists `tasks.branch`: MR triggers reuse the MR's `source_branch`; an `Issue` trigger derives `<iid>-<slug(title)>` (e.g. `42-fix-login-button`); an `IssueComment` reuses the branch the original issue task recorded (`find_branch_for_issue`), falling back to bare `<iid>`. **Comments delegate:** when a resumable task already exists for the issue/MR branch (`find_resumable_task_for_branch`), the dispatcher delivers the comment via `push_message` to that one task — continuing the same agent/session — instead of creating a fresh task; a new task is created only when there's no prior session. `workspace::git::clone_or_fetch(path, url, branch, default_branch)` clones on first use, fetches, then: if the worktree is **already on `branch`** it is left untouched (local commits + uncommitted work are preserved across runs — what makes resume-on-message safe); otherwise it checks out `origin/<branch>` if it exists remotely, else creates the branch from `origin/<default_branch>` (`git checkout -B`, no force-reset). `push_changes` uses `git push -u origin HEAD` so a fresh branch gets its upstream. `run_job` hard-`bail!`s if the resolved branch equals the default branch.
 
-The spawned `claude` inherits `CLAUDE_TASK_ID`, `AGENT_PORT`, and a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services. The project's `env_file` is rendered (minijinja, against runtime vars `branch`/`default_branch`/`url`/`project`/`service`/`task_id` — see `src/project/env.rs`) and applied **before** these reserved vars, so a project env can never clobber `CLAUDE_TASK_ID` or the PAT.
+The spawned `claude` inherits a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services. The project's `env_file` is rendered (minijinja, against runtime vars `branch`/`default_branch`/`url`/`project`/`service`/`task_id` — see `src/project/env.rs`) and applied **before** this reserved var, so a project env can never clobber the PAT.
 
 ### How an operator approval works
 
-1. Claude tries to run a `Bash` or `AskUserQuestion`.
-2. The PreToolUse hook (`defaults/.claude/hooks/authcheck.sh`) POSTs the command to `http://127.0.0.1:<port>/internal/authcheck` with the task's `CLAUDE_TASK_ID`.
-3. The handler matches the command against the project's `allowed_operations` glob list (`auth/operations.rs`). On hit it returns `allowed:true` immediately.
-4. On miss (or for `AskUserQuestion`), it creates an `auth_requests` row, **publishes it to the task's live hub** (so the task page shows the pending approval instantly over the WS), and parks on `AuthWaiter.register(id).notified()` for up to `OPERATOR_TIMEOUT_SECS` (600s).
-5. The operator resolves via `POST /api/auth_requests/{id}/resolve`. The store wakes the waiter and publishes the resolution to the hub; the hook gets `{allowed, reply, reason}` and the Claude Code process continues.
+Tool gating runs entirely over the stream-json **control protocol** — the same stdin/stdout the runner already owns — so there is no hook script, no `/internal/authcheck` loopback, and no `CLAUDE_TASK_ID`/`AGENT_PORT`. `--permission-mode default --permission-prompt-tool stdio` makes the CLI emit a `can_use_tool` `control_request` on stdout for every non-trivially-safe tool and wait for a `control_response` on stdin.
 
-> The hook remains the *decision* mechanism (it's the only documented way to gate a tool on a human). A follow-up issue tracks replacing it with Claude Code's stream-json **control protocol** (`can_use_tool` over the stdin/stdout we already own), which would delete the hook script, the `/internal/authcheck` loopback, and `AuthWaiter`.
+1. The stdout pump (`src/jobs/stream.rs`) detects a `can_use_tool` line via `backend.parse_permission_request` and forwards it to the permission consumer instead of publishing it as a timeline event.
+2. `handle_permission` (`src/jobs/permission.rs`) applies the policy: any tool other than `Bash`/`AskUserQuestion` (edits, reads) is **allowed immediately**, echoing the input back as `updatedInput`.
+3. For `Bash`, the command is matched against the project's `allowed_operations` glob list (`auth/operations.rs`). On hit it allows immediately.
+4. On miss (or for `AskUserQuestion`), it creates an `auth_requests` row, **publishes it to the task's live hub** (so the task page shows the pending approval instantly over the WS), and parks on `AuthWaiter.register(id).notified()` for up to `OPERATOR_TIMEOUT_SECS` (600s).
+5. The operator resolves via `POST /api/auth_requests/{id}/resolve`. The store wakes the waiter and publishes the resolution to the hub; the handler encodes the decision (allow, or deny-with-message — `AskUserQuestion` is always a deny whose message the model reads as the answer) and `hub.respond_permission` writes the `control_response` straight to the agent's stdin, bypassing the per-turn pacing so a mid-turn prompt is answered without waiting for the turn to end.
 
 ## Configuration
 

@@ -1,9 +1,9 @@
 //! Live session hub: per-task fan-out of agent events to WebSocket clients,
-//! durable batching into `tasks.event_log`, and the back-channel that writes
-//! operator messages to the running agent's stdin.
+//! durable batching into `tasks.event_log`, and the back-channels that write
+//! operator messages and control responses to the running agent's stdin.
 //!
 //! One `TaskChannel` exists per *watched or active* task. The runner calls
-//! [`LiveSessions::register`] at session start (attaching the stdin sender and
+//! [`LiveSessions::register`] at session start (attaching the stdin senders and
 //! seeding the sequence number from the persisted history length) and
 //! [`LiveSessions::end`] at exit. A WebSocket handler calls
 //! [`LiveSessions::subscribe`], which lazily creates the channel if the session
@@ -30,7 +30,7 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{error, warn};
 use uuid::Uuid;
 
-use crate::agent::AgentBackend;
+use crate::agent::{AgentBackend, PermissionDecision};
 use crate::entity::task_events;
 
 /// Persist to `event_log` once this many unflushed events accumulate.
@@ -74,8 +74,13 @@ struct TaskChannel {
     backend: Arc<dyn AgentBackend>,
     next_seq: AtomicU64,
     history: Mutex<History>,
-    /// Present only while a runner session is live; writes go to the agent stdin.
+    /// Operator-message channel — present only while a runner session is live.
+    /// The runner's turn loop drains this one message per turn for pacing.
     stdin: Mutex<Option<mpsc::Sender<String>>>,
+    /// Raw-line channel to the agent's stdin writer task. Carries control
+    /// responses, which must reach stdin immediately (mid-turn), bypassing the
+    /// per-turn pacing of `stdin`. Present only while a session is live.
+    control: Mutex<Option<mpsc::Sender<String>>>,
 }
 
 impl TaskChannel {
@@ -85,6 +90,7 @@ impl TaskChannel {
             next_seq: AtomicU64::new(start_seq),
             history: Mutex::new(History { items: Vec::new(), flushed: 0 }),
             stdin: Mutex::new(None),
+            control: Mutex::new(None),
         }
     }
 
@@ -118,14 +124,17 @@ impl LiveSessions {
         self.channels.get(&task_id).map(|c| c.clone())
     }
 
-    /// Attach a live session: store the stdin sender and seed the sequence
+    /// Attach a live session: store the stdin senders and seed the sequence
     /// counter from the persisted event count so live `seq`s continue where the
     /// DB history left off. Creates the channel if a subscriber raced ahead.
+    /// `stdin` carries operator messages (drained one per turn); `control`
+    /// carries control responses straight to the stdin writer task.
     pub async fn register(
         &self,
         task_id: Uuid,
         backend: Arc<dyn AgentBackend>,
         stdin: mpsc::Sender<String>,
+        control: mpsc::Sender<String>,
     ) {
         let start_seq = self.persisted_len(task_id).await;
         // Reuse a channel a subscriber may have created (preserving its live
@@ -138,6 +147,7 @@ impl LiveSessions {
             .clone();
         ch.next_seq.store(start_seq, Ordering::SeqCst);
         *ch.stdin.lock().await = Some(stdin);
+        *ch.control.lock().await = Some(control);
     }
 
     /// Publish a raw agent event: assign a seq, broadcast, capture `result`
@@ -196,6 +206,24 @@ impl LiveSessions {
         }
     }
 
+    /// Encode a permission decision and send it straight to the agent's stdin
+    /// writer, bypassing per-turn pacing so a mid-turn `can_use_tool` is
+    /// answered without waiting for the turn to end. False if no live session.
+    pub async fn respond_permission(
+        &self,
+        task_id: Uuid,
+        request_id: &str,
+        decision: PermissionDecision,
+    ) -> bool {
+        let Some(ch) = self.get(task_id) else { return false };
+        let line = ch.backend.encode_permission_response(request_id, &decision);
+        let control = ch.control.lock().await;
+        match control.as_ref() {
+            Some(tx) => tx.send(line).await.is_ok(),
+            None => false,
+        }
+    }
+
     /// Whether a live (warm) session is attached — i.e. an agent process is alive
     /// and accepting messages on stdin, even if the task is idle between turns.
     pub async fn is_warm(&self, task_id: Uuid) -> bool {
@@ -216,6 +244,11 @@ impl LiveSessions {
     /// subscriber receivers, which makes their sockets finish).
     pub async fn end(&self, task_id: Uuid) {
         if let Some(ch) = self.get(task_id) {
+            // Drop both stdin senders so the agent's writer task sees its channel
+            // close (EOF on child stdin) even if a transient `get()` clone of the
+            // Arc briefly outlives the map removal below.
+            ch.stdin.lock().await.take();
+            ch.control.lock().await.take();
             let tail = {
                 let mut h = ch.history.lock().await;
                 let tail = h.items[h.flushed..].to_vec();

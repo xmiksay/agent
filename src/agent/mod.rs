@@ -1,7 +1,4 @@
-use std::path::{Path, PathBuf};
-
 use anyhow::Result;
-use uuid::Uuid;
 
 use crate::jobs::types::ClaudeOutput;
 
@@ -9,20 +6,33 @@ pub mod claude;
 
 pub use claude::ClaudeCode;
 
-/// A file the backend wants materialized in the worktree before a run — agent
-/// config, permission hooks, etc. `rel_path` is relative to the worktree root.
-pub struct WorktreeFile {
-    pub rel_path: PathBuf,
-    pub contents: String,
+/// A `can_use_tool` permission prompt parsed off the agent's stdout control
+/// protocol. `input` is the tool's verbatim input object (e.g. `{"command": …}`
+/// for Bash) — echoed back unchanged on an Allow decision.
+pub struct PermissionRequest {
+    pub request_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
+}
+
+/// The operator/policy decision for a [`PermissionRequest`], encoded back onto
+/// the agent's stdin as a `control_response`.
+#[derive(Debug, PartialEq)]
+pub enum PermissionDecision {
+    /// Permit the tool call. `updated_input` must echo the original input
+    /// verbatim — the CLI rejects an allow without it.
+    Allow { updated_input: serde_json::Value },
+    /// Reject the tool call (or, for AskUserQuestion, deliver `message` as the
+    /// operator's answer).
+    Deny { message: String },
 }
 
 /// A coding-agent CLI backend. Only Claude Code is wired up today; the trait
-/// isolates every agent-specific decision (invocation, config files, output
-/// parsing) so another CLI can be added — and, later, selected per task —
-/// without touching the runner.
+/// isolates every agent-specific decision (invocation, control-protocol
+/// encoding, output parsing) so another CLI can be added — and, later, selected
+/// per task — without touching the runner.
 ///
-/// All methods are synchronous: any filesystem work (writing `worktree_files`)
-/// is done by the runner so backends stay pure and easy to unit-test.
+/// All methods are synchronous and pure, so they're easy to unit-test.
 pub trait AgentBackend: Send + Sync {
     /// CLI program name, e.g. `claude`.
     fn program(&self) -> &str;
@@ -41,12 +51,16 @@ pub trait AgentBackend: Send + Sync {
     /// streaming-input format.
     fn encode_user_message(&self, text: &str) -> String;
 
-    /// Extra env vars for the spawned process. The provider PAT is injected by
-    /// the runner separately since it's agent-agnostic.
-    fn extra_env(&self, task_id: Uuid, agent_port: &str) -> Vec<(String, String)>;
+    /// Parse a `can_use_tool` permission request off a single stdout line.
+    /// Returns `None` for any line that isn't such a request.
+    fn parse_permission_request(&self, line: &str) -> Option<PermissionRequest>;
 
-    /// Files to write into the worktree before the run (config + hooks).
-    fn worktree_files(&self, authcheck_hook: &Path) -> Vec<WorktreeFile>;
+    /// Encode a permission decision as a single stdin `control_response` line.
+    fn encode_permission_response(
+        &self,
+        request_id: &str,
+        decision: &PermissionDecision,
+    ) -> String;
 
     /// Parse the final normalized result from the process's full stdout.
     fn parse_result(&self, stdout: &str) -> Result<ClaudeOutput>;

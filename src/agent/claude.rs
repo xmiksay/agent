@@ -1,9 +1,6 @@
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context, Result};
-use uuid::Uuid;
 
-use crate::agent::{AgentBackend, WorktreeFile};
+use crate::agent::{AgentBackend, PermissionDecision, PermissionRequest};
 use crate::jobs::types::ClaudeOutput;
 
 /// The Claude Code CLI backend (`claude`). Drives it headless with
@@ -26,6 +23,12 @@ impl AgentBackend for ClaudeCode {
         // echoes each stdin message back on stdout so it shows up in the live
         // timeline. Each turn ends with a `{"type":"result", ...}` event; the
         // process exits when stdin closes (EOF) — our graceful Stop.
+        //
+        // `--permission-mode default --permission-prompt-tool stdio` routes
+        // tool-permission prompts over the stream-json control protocol: the CLI
+        // emits a `control_request`/`can_use_tool` on stdout and waits for our
+        // `control_response` on stdin. That replaces the old PreToolUse hook —
+        // trivially-safe tools are auto-allowed, everything else prompts us.
         let mut args = vec!["--print".to_string()];
         if let Some(sid) = resume_session_id {
             args.push("-r".to_string());
@@ -39,6 +42,10 @@ impl AgentBackend for ClaudeCode {
                 "stream-json",
                 "--verbose",
                 "--replay-user-messages",
+                "--permission-mode",
+                "default",
+                "--permission-prompt-tool",
+                "stdio",
             ]
             .map(String::from),
         );
@@ -53,38 +60,49 @@ impl AgentBackend for ClaudeCode {
         .to_string()
     }
 
-    fn extra_env(&self, task_id: Uuid, agent_port: &str) -> Vec<(String, String)> {
-        // The PreToolUse authcheck hook reads these to call back into the agent.
-        vec![
-            ("CLAUDE_TASK_ID".to_string(), task_id.to_string()),
-            ("AGENT_PORT".to_string(), agent_port.to_string()),
-        ]
+    fn parse_permission_request(&self, line: &str) -> Option<PermissionRequest> {
+        let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+        if v.get("type").and_then(|t| t.as_str()) != Some("control_request") {
+            return None;
+        }
+        let request = v.get("request")?;
+        if request.get("subtype").and_then(|s| s.as_str()) != Some("can_use_tool") {
+            return None;
+        }
+        Some(PermissionRequest {
+            request_id: v.get("request_id").and_then(|r| r.as_str())?.to_string(),
+            tool_name: request.get("tool_name").and_then(|t| t.as_str())?.to_string(),
+            input: request.get("input").cloned().unwrap_or(serde_json::Value::Null),
+        })
     }
 
-    fn worktree_files(&self, authcheck_hook: &Path) -> Vec<WorktreeFile> {
-        let hook = authcheck_hook.to_string_lossy();
-        // `auto` runs Claude Code autonomously — it accepts routine actions
-        // (edits, reads) without prompting, which is required in headless mode
-        // where an interactive permission prompt can't be answered. The Bash +
-        // AskUserQuestion PreToolUse hooks still fire regardless of mode — they
-        // are the actual operator-approval policy layer.
-        //
-        // `settings.local.json` is the conventional per-machine override file
-        // (typically gitignored), so it doesn't need to be committed by the
-        // project.
-        let body = serde_json::json!({
-            "permissions": { "defaultMode": "auto" },
-            "hooks": {
-                "PreToolUse": [
-                    { "matcher": "Bash", "hooks": [{ "type": "command", "command": hook }] },
-                    { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": hook }] }
-                ]
+    fn encode_permission_response(
+        &self,
+        request_id: &str,
+        decision: &PermissionDecision,
+    ) -> String {
+        // The CLI rejects an `allow` that omits `updatedInput` (ZodError), so it
+        // always carries the (verbatim) input back; a `deny` carries a message,
+        // which for AskUserQuestion is read by the model as the operator's answer.
+        let inner = match decision {
+            PermissionDecision::Allow { updated_input } => serde_json::json!({
+                "behavior": "allow",
+                "updatedInput": updated_input,
+            }),
+            PermissionDecision::Deny { message } => serde_json::json!({
+                "behavior": "deny",
+                "message": message,
+            }),
+        };
+        serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": request_id,
+                "response": inner,
             }
-        });
-        vec![WorktreeFile {
-            rel_path: PathBuf::from(".claude/settings.local.json"),
-            contents: serde_json::to_string_pretty(&body).unwrap_or_default(),
-        }]
+        })
+        .to_string()
     }
 
     fn parse_result(&self, stdout: &str) -> Result<ClaudeOutput> {
@@ -128,7 +146,6 @@ impl AgentBackend for ClaudeCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn build_args_without_resume_is_interactive_stream_json() {
@@ -143,6 +160,10 @@ mod tests {
                 "stream-json",
                 "--verbose",
                 "--replay-user-messages",
+                "--permission-mode",
+                "default",
+                "--permission-prompt-tool",
+                "stdio",
             ]
         );
     }
@@ -153,6 +174,9 @@ mod tests {
         assert_eq!(&args[..3], &["--print", "-r", "sess-123"]);
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"--input-format".to_string()));
+        // The control-protocol flags coexist with --resume.
+        assert!(args.contains(&"--permission-prompt-tool".to_string()));
+        assert!(args.contains(&"stdio".to_string()));
     }
 
     #[test]
@@ -164,6 +188,58 @@ mod tests {
         assert_eq!(v["message"]["role"], "user");
         assert_eq!(v["message"]["content"][0]["type"], "text");
         assert_eq!(v["message"]["content"][0]["text"], "hello there");
+    }
+
+    #[test]
+    fn parse_permission_request_reads_can_use_tool() {
+        let line = r#"{"type":"control_request","request_id":"req-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls -la"}}}"#;
+        let req = ClaudeCode.parse_permission_request(line).expect("some");
+        assert_eq!(req.request_id, "req-1");
+        assert_eq!(req.tool_name, "Bash");
+        assert_eq!(req.input["command"], "ls -la");
+    }
+
+    #[test]
+    fn parse_permission_request_ignores_normal_events() {
+        assert!(ClaudeCode
+            .parse_permission_request(r#"{"type":"assistant","message":{}}"#)
+            .is_none());
+        assert!(ClaudeCode.parse_permission_request("not json").is_none());
+    }
+
+    #[test]
+    fn parse_permission_request_ignores_other_control_requests() {
+        let line = r#"{"type":"control_request","request_id":"req-2","request":{"subtype":"interrupt"}}"#;
+        assert!(ClaudeCode.parse_permission_request(line).is_none());
+    }
+
+    #[test]
+    fn encode_permission_response_allow_carries_updated_input() {
+        let input = serde_json::json!({"command": "ls"});
+        let line = ClaudeCode.encode_permission_response(
+            "req-9",
+            &PermissionDecision::Allow { updated_input: input.clone() },
+        );
+        assert!(!line.contains('\n'));
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["type"], "control_response");
+        assert_eq!(v["response"]["subtype"], "success");
+        assert_eq!(v["response"]["request_id"], "req-9");
+        assert_eq!(v["response"]["response"]["behavior"], "allow");
+        assert_eq!(v["response"]["response"]["updatedInput"], input);
+    }
+
+    #[test]
+    fn encode_permission_response_deny_carries_message() {
+        let line = ClaudeCode.encode_permission_response(
+            "req-10",
+            &PermissionDecision::Deny { message: "nope".into() },
+        );
+        assert!(!line.contains('\n'));
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["response"]["request_id"], "req-10");
+        assert_eq!(v["response"]["response"]["behavior"], "deny");
+        assert_eq!(v["response"]["response"]["message"], "nope");
     }
 
     #[test]
@@ -206,16 +282,5 @@ mod tests {
         assert_eq!(ClaudeCode.extract_output_tokens(nested), Some(7));
         assert_eq!(ClaudeCode.extract_output_tokens(r#"{"type":"x"}"#), None);
         assert_eq!(ClaudeCode.extract_output_tokens(""), None);
-    }
-
-    #[test]
-    fn worktree_files_emits_settings_with_hook_and_auto_mode() {
-        let files = ClaudeCode.worktree_files(Path::new("/hooks/authcheck.sh"));
-        assert_eq!(files.len(), 1);
-        let f = &files[0];
-        assert_eq!(f.rel_path, Path::new(".claude/settings.local.json"));
-        assert!(f.contents.contains("\"auto\""));
-        assert!(f.contents.contains("/hooks/authcheck.sh"));
-        assert!(f.contents.contains("AskUserQuestion"));
     }
 }
