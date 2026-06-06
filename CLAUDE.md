@@ -73,8 +73,9 @@ Operator (SPA)                    approves/denies via
 | `src/webhook/types.rs` | provider-specific payload structs |
 | `src/jobs/types.rs` | `TriggerReason`, `ClaudeOutput` |
 | `src/jobs/store.rs` | `TaskStore` — task CRUD, run loop, kill/continue/retry/push_message, branch_diff. **Over 500 lines — split before adding new methods.** |
-| `src/jobs/runner.rs` | `run_job` — spawns the agent backend as an interactive stream-json session, pumps operator messages into stdin, streams events to the hub, enforces token budget; at session end pushes commits + posts the result note |
-| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to the `task_events` table, and the `mpsc` back-channel to the running agent's stdin |
+| `src/jobs/runner.rs` | `run_job` — spawns the interactive stream-json session and runs the **turn loop**: per turn it takes a concurrency permit, writes one operator message to stdin, waits for that turn's `result`, releases the permit, finalizes, then idles (warm, holding no slot) until the next message or a graceful close |
+| `src/jobs/turn.rs` | `finalize_turn` — per-turn bookkeeping: persist the turn's result, push commits, and post a reply note "on demand" (only when commits landed or the turn errored) |
+| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to the `task_events` table, the `mpsc` back-channel to the agent's stdin, and `is_warm`/`send_to_agent`/`stop` for routing operator messages to a live session |
 | `src/jobs/prompt.rs` | `build_prompt` — per-trigger prompt text (split out of runner) |
 | `src/jobs/stream.rs` | `stream_into_entry` — pumps a child pipe into the live log + publishes each stdout event to the hub, sniffing session id / output tokens via the backend |
 | `src/agent/mod.rs` | `AgentBackend` trait + `WorktreeFile` — abstracts the coding-agent CLI (invocation, stdin message encoding, config/hook files, output parsing). Sync methods; the runner does the fs writes |
@@ -162,7 +163,9 @@ $REPO_BASE_PATH/
         └── …
 ```
 
-`slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone or fetch+reset), writes `settings.local.json`, then runs `claude --print [--resume <sid>] --input-format stream-json --output-format stream-json --verbose --replay-user-messages`. The process is **long-lived**: the initial prompt and every operator message are written to its stdin as `{"type":"user",…}` lines; it stays `running` (one `result` event per turn) until the operator sends **stop** (the hub drops the stdin sender → EOF → graceful exit) or **pause** (SIGKILL). At session end the runner pushes commits and posts the result note.
+`slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone/fetch, preserving an already-checked-out branch), writes `settings.local.json`, then runs `claude --print [--resume <sid>] --input-format stream-json --output-format stream-json --verbose --replay-user-messages`.
+
+The process is **long-lived and turn-based**. The runner's turn loop, per turn: takes a `MAX_CONCURRENT_JOBS` permit (status → `running`), writes one operator message to stdin (the first turn uses the initial prompt), waits for that turn's `result`, **releases the permit** (status → `completed`), finalizes (push commits + reply-on-demand), then **idles warm** — the agent process stays alive but holds **no concurrency slot** (an idle agent is not a running agent). A new message (live via `hub.send_to_agent`, or a resume) wakes it into the next turn. The session ends on **stop** (hub drops the stdin sender → EOF → graceful exit), **pause** (SIGKILL), token-budget kill, or issue/MR close. `push_message` delivers to a warm agent first (`hub.is_warm`) and only resumes the session when there's no live agent — so a follow-up never spawns a second agent on the same branch.
 
 **Branch selection (a task never runs on the default branch).** `TaskStore::create_task` derives and persists `tasks.branch`: MR triggers reuse the MR's `source_branch`; an `Issue` trigger derives `<iid>-<slug(title)>` (e.g. `42-fix-login-button`); an `IssueComment` reuses the branch the original issue task recorded (`find_branch_for_issue`), falling back to bare `<iid>`. `workspace::git::clone_or_fetch(path, url, branch, default_branch)` clones on first use, fetches, then: if the worktree is **already on `branch`** it is left untouched (local commits + uncommitted work are preserved across runs — what makes resume-on-message safe); otherwise it checks out `origin/<branch>` if it exists remotely, else creates the branch from `origin/<default_branch>` (`git checkout -B`, no force-reset). `push_changes` uses `git push -u origin HEAD` so a fresh branch gets its upstream. `run_job` hard-`bail!`s if the resolved branch equals the default branch.
 
@@ -187,7 +190,7 @@ Read by `src/config.rs::from_env`. Defaults in parentheses.
 | `DATABASE_URL` | required | Postgres DSN |
 | `REPO_BASE_PATH` | `/tmp/claude-jobs` | worktree base |
 | `LISTEN_ADDR` | `0.0.0.0:3000` | bind address |
-| `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size |
+| `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size — gates **actively-processing turns**, acquired/released per turn so idle warm agents hold no slot |
 | `TASK_TOKEN_BUDGET` | `1_000_000` | soft cap; runner kills `claude` when cumulative `output_tokens ≥ budget/2` and the operator can Resume |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*`; SPA prompts and stores in `localStorage` |
 | `RUST_LOG` | `agent=info` | `tracing-subscriber` filter |

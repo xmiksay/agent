@@ -214,6 +214,15 @@ impl LiveSessions {
         }
     }
 
+    /// Whether a live (warm) session is attached — i.e. an agent process is alive
+    /// and accepting messages on stdin, even if the task is idle between turns.
+    pub async fn is_warm(&self, task_id: Uuid) -> bool {
+        match self.get(task_id) {
+            Some(ch) => ch.stdin.lock().await.is_some(),
+            None => false,
+        }
+    }
+
     /// Graceful stop: drop the stdin sender so the agent's ChildStdin hits EOF
     /// and the process exits after finishing the current turn.
     pub async fn stop(&self, task_id: Uuid) -> bool {

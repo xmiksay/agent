@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tracing::{info, warn, error};
-
+use tracing::{info, warn};
+use tokio::sync::Semaphore;
 
 use crate::agent::{AgentBackend, ClaudeCode};
 use crate::config::Config;
@@ -13,8 +13,9 @@ use crate::git_service::GitService;
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::output_log::TaskOutputLog;
 use crate::jobs::prompt::build_prompt;
-use crate::jobs::stream::{Stream, stream_into_entry, tail};
-use crate::jobs::types::{ClaudeOutput, TriggerReason};
+use crate::jobs::store::TaskStore;
+use crate::jobs::stream::{Stream, stream_into_entry};
+use crate::jobs::types::TriggerReason;
 use crate::project::{BranchStatus, NewBranchEntry, ProjectStore, ProviderKind};
 use crate::provider::GitProvider;
 use crate::workspace::Workspace;
@@ -35,11 +36,11 @@ pub async fn run_job(
     project_store: Arc<ProjectStore>,
     output_log: TaskOutputLog,
     hub: LiveSessions,
+    store: Arc<TaskStore>,
+    semaphore: Arc<Semaphore>,
     resume_session_id: Option<String>,
     prompt_override: Option<String>,
-    mut pid_tx: Option<tokio::sync::oneshot::Sender<u32>>,
-    session_tx: Option<tokio::sync::oneshot::Sender<String>>,
-) -> Result<ClaudeOutput> {
+) -> Result<()> {
     let project_slug = slugify(&project_path);
     // The branch is derived and persisted at task-creation time (TaskStore::
     // create_task), so it's always present here. Guard against ever operating
@@ -139,46 +140,41 @@ pub async fn run_job(
 
     if let Some(pid) = child.id() {
         info!(%task_id, pid, "agent process running");
-        if let Some(tx) = pid_tx.take() {
-            let _ = tx.send(pid);
-        }
+        let _ = store.set_pid(task_id, Some(pid)).await;
     }
 
-    // Interactive stdin: a pump task drains operator messages from the hub into
-    // the child's stdin. The initial prompt is the first message. Holding the
-    // ChildStdin keeps the session alive; the hub's `stop`/`end` drops the
-    // sender, the pump sees the channel close, drops ChildStdin → EOF → claude
-    // finishes the current turn and exits.
+    // The turn loop writes one operator message per turn directly to stdin,
+    // gated by a semaphore permit so only an *actively-processing* agent counts
+    // against MAX_CONCURRENT_JOBS — an idle, warm agent holds no slot. The hub
+    // holds the input sender; dropping it (Stop/end) closes the input channel,
+    // which the loop reads as a graceful close (stdin EOF → claude exits).
     let mut child_stdin = child.stdin.take().expect("piped stdin");
-    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<String>(32);
-    let stdin_pump = tokio::spawn(async move {
-        while let Some(line) = stdin_rx.recv().await {
-            if child_stdin.write_all(line.as_bytes()).await.is_err()
-                || child_stdin.write_all(b"\n").await.is_err()
-                || child_stdin.flush().await.is_err()
-            {
-                break;
-            }
-        }
-    });
-    // Send the initial prompt, then hand the sender to the hub (only the hub
-    // holds a sender now, so a graceful Stop closes stdin deterministically).
-    stdin_tx
-        .send(backend.encode_user_message(&prompt))
-        .await
-        .context("failed to queue initial prompt")?;
-    hub.register(task_id, backend.clone(), stdin_tx).await;
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(32);
+    hub.register(task_id, backend.clone(), input_tx).await;
 
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
 
-    // Token-budget abort: stream reader counts output_tokens from each event's
-    // `usage` field and fires this oneshot once cumulative use hits 50% of the
-    // configured budget. Aborting via SIGKILL is fine — session_id was already
-    // captured from the init event, so the task can Resume after rate limit
-    // resets.
-    let (budget_tx, budget_rx) = tokio::sync::oneshot::channel::<u64>();
+    // Persist the session id the moment the stream reader sniffs it (first turn),
+    // so a later resume works even if the agent is killed.
+    let (session_tx, session_rx) = tokio::sync::oneshot::channel::<String>();
+    {
+        let store = store.clone();
+        tokio::spawn(async move {
+            if let Ok(sid) = session_rx.await {
+                let _ = store.set_session_id_pub(task_id, &sid).await;
+            }
+        });
+    }
+
+    // Token-budget abort: fired once cumulative output tokens cross 50% of the
+    // budget; we SIGKILL and end the session (session_id is captured, so Resume
+    // works after a rate-limit reset).
+    let (budget_tx, mut budget_rx) = tokio::sync::oneshot::channel::<u64>();
     let token_limit = config.task_token_budget / 2;
+
+    // One signal per turn, the moment a `result` event is seen on stdout.
+    let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<()>(8);
 
     let stdout_reader = tokio::spawn(stream_into_entry(
         stdout_pipe,
@@ -187,8 +183,9 @@ pub async fn run_job(
         backend.clone(),
         hub.clone(),
         task_id,
-        session_tx,
+        Some(session_tx),
         Some((token_limit, budget_tx)),
+        Some(result_tx),
     ));
     let stderr_reader = tokio::spawn(stream_into_entry(
         stderr_pipe,
@@ -199,175 +196,103 @@ pub async fn run_job(
         task_id,
         None,
         None,
+        None,
     ));
 
-    // No timeout — claude tasks can run as long as they need. Operator can
-    // Pause/Kill from the UI if a task is stuck. We do enforce a token budget
-    // (above) which races against child.wait().
-    let exit_status = tokio::select! {
-        res = child.wait() => res.context("waiting for claude exit")?,
-        used = budget_rx => {
-            let used = used.unwrap_or_default();
-            warn!(%task_id, used, limit = token_limit, "token budget reached, killing claude");
-            let _ = child.start_kill();
-            let status = child.wait().await.context("waiting for claude exit after kill")?;
-            // Surface as a graceful pause: the outer save path treats non-zero
-            // exits as failure, but session_id is set so Resume works.
-            status
-        }
-    };
-    let exit_code = exit_status.code();
-
-    // The child is gone; stop the stdin pump and drain the readers (they finish
-    // once the pipes hit EOF).
-    stdin_pump.abort();
-    let _ = stdout_reader.await;
-    let _ = stderr_reader.await;
-
-    // Close the live session: flush the unpersisted event tail to event_log and
-    // drop the channel so any attached WebSocket finishes.
-    hub.end(task_id).await;
-
-    // Snapshot the streamed state for downstream use.
-    let (stdout, stderr) = {
-        let mut guard = entry.lock().await;
-        guard.exit_code = exit_code;
-        guard.finished = true;
-        (guard.stdout.clone(), guard.stderr.clone())
-    };
-
-    info!(
-        exit_code = ?exit_code,
-        stdout_bytes = stdout.len(),
-        stderr_bytes = stderr.len(),
-        "claude process exited"
-    );
-
-    if !exit_status.success() {
-        // The full stdout/stderr are already in the in-memory output log and
-        // rendered nicely by the Command output panel. Keep this error short
-        // (it ends up in task_results.result_text) — only include the stderr
-        // tail because that's where curl/launch failures show up.
-        let stderr_tail = tail(stderr.trim(), 600);
-        if stderr_tail.is_empty() {
-            bail!("claude exited with status {:?}", exit_code);
-        } else {
-            bail!(
-                "claude exited with status {:?}\nstderr tail:\n{stderr_tail}",
-                exit_code
-            );
-        }
-    }
-
-    let claude_result = backend.parse_result(&stdout).with_context(|| {
-        let stderr_tail = tail(stderr.trim(), 600);
-        if stderr_tail.is_empty() {
-            "no result event in agent output".to_string()
-        } else {
-            format!("no result event in agent output\nstderr tail:\n{stderr_tail}")
-        }
-    })?;
-
-    info!(
-        cost = claude_result.total_cost_usd,
-        turns = claude_result.num_turns,
-        is_error = claude_result.is_error,
-        "claude finished"
-    );
-
-    if claude_result.is_error {
-        error!(result = %claude_result.result, "claude returned error");
-    }
-
-    // Post result back to provider
-    post_result(&trigger, &claude_result, &project_path, provider.as_ref()).await?;
-
-    // Push any changes for workflows that produce code edits.
-    if matches!(
+    let code_trigger = matches!(
         trigger,
         TriggerReason::Issue { .. }
             | TriggerReason::FixReview { .. }
             | TriggerReason::MRComment { .. }
             | TriggerReason::IssueComment { .. }
-    ) {
-        push_changes(work_dir.to_string_lossy().as_ref()).await?;
-    }
-
-    // NOTE: checkout is intentionally NOT removed here — see workspace lifecycle.
-    Ok(claude_result)
-}
-
-async fn post_result(
-    trigger: &TriggerReason,
-    result: &ClaudeOutput,
-    project_path: &str,
-    provider: &dyn GitProvider,
-) -> Result<()> {
-    use crate::provider::NoteTarget;
-    let target = match trigger {
-        TriggerReason::Issue { iid, .. } | TriggerReason::IssueComment { issue_iid: iid, .. } => {
-            NoteTarget::Issue(*iid)
-        }
-        TriggerReason::ReviewMR { iid, .. }
-        | TriggerReason::FixReview { iid, .. }
-        | TriggerReason::MRComment { mr_iid: iid, .. } => NoteTarget::MergeRequest(*iid),
-    };
-
-    let status = if result.is_error { "error" } else { "completed" };
-    let body = format!(
-        "**Claude Agent** ({status})\n\n\
-         Cost: ${:.4} | Turns: {}\n\n\
-         {}",
-        result.total_cost_usd,
-        result.num_turns,
-        if result.is_error {
-            format!("Error: {}", result.result)
-        } else {
-            "Task completed. See commits for changes.".to_string()
-        }
     );
+    let work_dir_str = work_dir.to_string_lossy().into_owned();
 
-    provider.post_note(project_path, target, &body).await
-}
-
-async fn push_changes(work_dir: &str) -> Result<()> {
-    let has_changes = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(work_dir)
-        .output()
-        .await?;
-
-    if has_changes.stdout.is_empty() {
-        let unpushed = Command::new("git")
-            .args(["log", "@{u}..HEAD", "--oneline"])
-            .current_dir(work_dir)
-            .output()
-            .await;
-
-        match unpushed {
-            Ok(out) if out.stdout.is_empty() => {
-                info!("no changes to push");
-                return Ok(());
+    // Turn loop. The first turn carries the initial prompt; later turns pull an
+    // operator message from the hub. A turn = acquire permit → write message →
+    // wait for its `result` → release permit → finalize (push + reply on demand)
+    // → go idle (warm, holding no slot) until the next message or a graceful
+    // close. No per-turn timeout — Stop/Pause from the UI handle a stuck turn.
+    let mut pending = Some(backend.encode_user_message(&prompt));
+    let mut killed_for_budget = false;
+    loop {
+        let msg = match pending.take() {
+            Some(m) => m,
+            None => {
+                let _ = store.set_status(task_id, "completed").await;
+                tokio::select! {
+                    m = input_rx.recv() => match m {
+                        Some(m) => m,
+                        None => break, // Stop: the hub dropped the input sender
+                    },
+                    _ = child.wait() => break,
+                }
             }
-            _ => {}
+        };
+
+        // A turn begins — only now do we occupy a concurrency slot.
+        let permit = match semaphore.acquire().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+        let _ = store.set_status(task_id, "running").await;
+
+        if child_stdin.write_all(msg.as_bytes()).await.is_err()
+            || child_stdin.write_all(b"\n").await.is_err()
+            || child_stdin.flush().await.is_err()
+        {
+            drop(permit);
+            break;
+        }
+
+        let mut turn_exited = false;
+        tokio::select! {
+            _ = result_rx.recv() => {} // this turn finished
+            _ = child.wait() => turn_exited = true,
+            used = &mut budget_rx => {
+                let used = used.unwrap_or_default();
+                warn!(%task_id, used, limit = token_limit, "token budget reached, killing claude");
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                turn_exited = true;
+                killed_for_budget = true;
+            }
+        }
+        drop(permit); // released between turns — an idle agent holds no slot
+
+        crate::jobs::turn::finalize_turn(
+            &entry,
+            backend.as_ref(),
+            &store,
+            &trigger,
+            &project_path,
+            provider.as_ref(),
+            &work_dir_str,
+            task_id,
+            code_trigger,
+        )
+        .await;
+
+        if turn_exited {
+            break;
         }
     }
 
-    info!("pushing changes");
-    // `-u origin HEAD` pushes the current branch to a same-named remote branch
-    // and sets upstream — required for a freshly created issue branch that has
-    // no upstream yet; idempotent for branches that already track a remote.
-    let push = Command::new("git")
-        .args(["push", "-u", "origin", "HEAD"])
-        .current_dir(work_dir)
-        .status()
-        .await
-        .context("failed to git push")?;
-
-    if !push.success() {
-        bail!("git push failed");
+    // Session over: close stdin (EOF), reap the child, end the live session and
+    // drain the readers (the pipes hit EOF once the child is gone).
+    drop(child_stdin);
+    let _ = child.wait().await;
+    hub.end(task_id).await;
+    let _ = stdout_reader.await;
+    let _ = stderr_reader.await;
+    {
+        let mut guard = entry.lock().await;
+        guard.finished = true;
     }
 
+    let final_status = if killed_for_budget { "killed" } else { "completed" };
+    let _ = store.finish_task(task_id, final_status).await;
+    info!(%task_id, status = final_status, "agent session ended");
     Ok(())
 }
 
