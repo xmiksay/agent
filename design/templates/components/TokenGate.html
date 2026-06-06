@@ -1,0 +1,36 @@
+<template>
+  <div class="fixed inset-0 z-50 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center">
+    <div class="bg-white rounded shadow-lg p-6 w-full max-w-md space-y-4">
+      <h2 class="text-lg font-semibold">Sign in</h2>
+      <p class="text-sm text-gray-600">
+        Paste the API bearer token (the value of <code>API_BEARER_TOKEN</code>
+        on the server). Stored locally in your browser.
+      </p>
+      <input
+        v-model="draft"
+        type="password"
+        autocomplete="off"
+        placeholder="Bearer token"
+        class="w-full border rounded p-2 font-mono text-sm"
+        @keydown.enter="save"
+      />
+      <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+      <div class="flex gap-2">
+        <button
+          class="rounded bg-blue-600 text-white px-4 py-2 hover:bg-blue-700 disabled:opacity-60"
+          :disabled="busy"
+          @click="save"
+        >
+          {{ busy ? "Checking…" : "Save" }}
+        </button>
+        <button
+          v-if="session.hasToken"
+          class="rounded border px-4 py-2 hover:bg-gray-50"
+          @click="forget"
+        >
+          Forget
+        </button>
+      </div>
+    </div>
+  </div>
+</template>

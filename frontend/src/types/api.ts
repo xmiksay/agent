@@ -34,12 +34,6 @@ export interface StreamEnvelope {
   payload: unknown;
 }
 
-/** Operator → agent messages sent back over the same socket. */
-export type InboundMessage =
-  | { kind: "chat"; text: string }
-  | { kind: "redefine"; text: string }
-  | { kind: "stop" };
-
 export interface TaskResult {
   id: string;
   task_id: string;
@@ -55,6 +49,8 @@ export interface TaskResult {
 export interface TaskDetail extends Task {
   result: TaskResult | null;
   work_dir: string | null;
+  /** An agent process is attached and warm (idle between turns or running). */
+  live: boolean;
 }
 
 export interface ProjectConfig {
@@ -67,6 +63,8 @@ export interface ProjectConfig {
   default_branch: string;
   my_username: string;
   allowed_operations: string[];
+  /** Raw .env-style text injected as env vars when the agent starts. */
+  env_file: string;
   notes: string;
   created_at: string;
   updated_at: string;

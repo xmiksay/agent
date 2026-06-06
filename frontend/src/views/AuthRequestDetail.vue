@@ -16,31 +16,43 @@ function onResolved(updated: AuthRequest) {
 </script>
 
 <template>
-  <section v-if="store.detail" class="space-y-3">
+  <section v-if="store.detail" class="space-y-4">
+    <RouterLink to="/auth_requests" class="inline-block text-sm text-muted hover:text-accent">
+      ← Auth queue
+    </RouterLink>
+
     <header class="flex items-center gap-3">
-      <h1 class="text-xl font-semibold font-mono">{{ store.detail.id }}</h1>
+      <h1 class="font-display font-mono text-xl font-bold">{{ store.detail.id }}</h1>
       <StatusPill :status="store.detail.status" />
-    </header>
-    <p>
-      <RouterLink :to="`/tasks/${store.detail.task_id}`">
-        ← task {{ store.detail.task_id }}
+      <RouterLink
+        :to="`/tasks/${store.detail.task_id}`"
+        class="ml-auto font-mono text-xs text-accent hover:underline"
+      >
+        task {{ store.detail.task_id }} →
       </RouterLink>
-    </p>
-    <h2 class="font-medium mt-3">Requested operation</h2>
-    <pre class="bg-ink-50 p-2 rounded text-xs whitespace-pre-wrap">{{ store.detail.requested_op }}</pre>
-    <h2 class="font-medium">Prompt</h2>
-    <p class="text-sm whitespace-pre-wrap">{{ store.detail.prompt_to_operator }}</p>
+    </header>
 
-    <AuthApprovalForm
-      v-if="store.detail.status === 'pending'"
-      :item="store.detail"
-      @resolved="onResolved"
-    />
+    <div class="card space-y-3 p-5">
+      <div>
+        <h2 class="label mb-1">Requested operation</h2>
+        <pre class="whitespace-pre-wrap rounded-md border border-line bg-canvas px-3 py-2 font-mono text-xs text-ink">{{ store.detail.requested_op }}</pre>
+      </div>
+      <div>
+        <h2 class="label mb-1">Prompt</h2>
+        <p class="whitespace-pre-wrap text-sm text-muted">{{ store.detail.prompt_to_operator }}</p>
+      </div>
 
-    <template v-if="store.detail.operator_reply">
-      <h2 class="font-medium">Operator reply</h2>
-      <pre class="bg-ink-50 p-2 rounded text-xs whitespace-pre-wrap">{{ store.detail.operator_reply }}</pre>
-    </template>
+      <AuthApprovalForm
+        v-if="store.detail.status === 'pending'"
+        :item="store.detail"
+        @resolved="onResolved"
+      />
+
+      <div v-if="store.detail.operator_reply">
+        <h2 class="label mb-1">Operator reply</h2>
+        <pre class="whitespace-pre-wrap rounded-md border border-line bg-canvas px-3 py-2 font-mono text-xs text-muted">{{ store.detail.operator_reply }}</pre>
+      </div>
+    </div>
   </section>
-  <p v-else class="text-gray-500">Loading…</p>
+  <p v-else class="text-faint">Loading…</p>
 </template>

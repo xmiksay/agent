@@ -31,11 +31,15 @@ function forget() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center">
-    <div class="bg-white rounded shadow-lg p-6 w-full max-w-md space-y-4">
-      <h2 class="text-lg font-semibold">Sign in</h2>
-      <p class="text-sm text-gray-600">
-        Paste the API bearer token (the value of <code>API_BEARER_TOKEN</code>
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80 backdrop-blur-sm">
+    <div class="card w-full max-w-md space-y-4 border-line-2 p-6 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.85)]">
+      <div class="flex items-center gap-2.5">
+        <span class="led led-pulse text-accent" />
+        <h2 class="font-display text-lg font-bold">Sign in</h2>
+      </div>
+      <p class="text-sm text-muted">
+        Paste the API bearer token (the value of
+        <code class="rounded border border-line bg-panel-2 px-1 py-0.5 font-mono text-xs text-ink">API_BEARER_TOKEN</code>
         on the server). Stored locally in your browser.
       </p>
       <input
@@ -43,25 +47,15 @@ function forget() {
         type="password"
         autocomplete="off"
         placeholder="Bearer token"
-        class="w-full border rounded p-2 font-mono text-sm"
+        class="input font-mono"
         @keydown.enter="save"
       />
-      <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+      <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>
       <div class="flex gap-2">
-        <button
-          class="rounded bg-blue-600 text-white px-4 py-2 hover:bg-blue-700 disabled:opacity-60"
-          :disabled="busy"
-          @click="save"
-        >
+        <button class="btn btn-primary" :disabled="busy" @click="save">
           {{ busy ? "Checking…" : "Save" }}
         </button>
-        <button
-          v-if="session.hasToken"
-          class="rounded border px-4 py-2 hover:bg-gray-50"
-          @click="forget"
-        >
-          Forget
-        </button>
+        <button v-if="session.hasToken" class="btn btn-ghost" @click="forget">Forget</button>
       </div>
     </div>
   </div>

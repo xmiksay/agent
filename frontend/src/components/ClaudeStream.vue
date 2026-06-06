@@ -18,7 +18,7 @@
 // tool_use card so the operator can decide right where the call happens.
 
 import { computed } from "vue";
-import type { AuthRequest } from "../types/api";
+import type { AuthQuestion, AuthRequest } from "../types/api";
 import AuthApprovalForm from "./AuthApprovalForm.vue";
 import MarkdownView from "./MarkdownView.vue";
 
@@ -69,6 +69,8 @@ const parsed = computed(() => {
     }
     if (!v || typeof v !== "object") continue;
     if (v.type === "result") continue;
+    // Thinking-token accounting events are noise to the operator — drop them.
+    if (v.type === "thinking_tokens" || v.subtype === "thinking_tokens") continue;
     if (v.type === "system" && v.subtype === "init") {
       blocks.push({
         kind: "init",
@@ -234,99 +236,121 @@ function toolInputSummary(input: unknown): string {
 function clamp(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n)}…`;
 }
+
+// The shell command behind a Bash tool_use, so we can highlight it terminal-style.
+function bashCommand(b: ToolUseBlock): string | null {
+  if (b.name !== "Bash") return null;
+  const o = b.input as Record<string, unknown> | null;
+  return o && typeof o.command === "string" ? o.command : null;
+}
+
+// The structured questions behind an AskUserQuestion tool_use, if any.
+function questionList(input: unknown): AuthQuestion[] | null {
+  const q = (input as Record<string, unknown> | null)?.questions;
+  return Array.isArray(q) && q.length > 0 ? (q as AuthQuestion[]) : null;
+}
 </script>
 
 <template>
-  <div v-if="blocks.length === 0" class="text-sm text-gray-500">
-    No events yet.
-  </div>
+  <div v-if="blocks.length === 0" class="text-sm text-faint">No events yet.</div>
   <ol v-else class="space-y-2">
     <li
       v-for="(b, i) in blocks"
       :key="i"
-      class="rounded border text-xs"
+      class="rounded-md border text-xs"
       :class="{
-        'border-gray-200 bg-gray-50': b.kind === 'init' || b.kind === 'unknown' || b.kind === 'system_note' || b.kind === 'rate_limit',
-        'border-gray-200 bg-white': b.kind === 'text',
-        'border-amber-300 bg-amber-50': b.kind === 'tool_use' && b.awaitingApproval,
-        'border-blue-200 bg-blue-50': b.kind === 'tool_use' && !b.awaitingApproval,
-        'border-emerald-200 bg-emerald-50': b.kind === 'tool_result' && !b.isError,
-        'border-red-200 bg-red-50': (b.kind === 'tool_result' && b.isError) || b.kind === 'error',
+        'border-line bg-panel/60': b.kind === 'init' || b.kind === 'unknown' || b.kind === 'system_note' || b.kind === 'rate_limit',
+        'border-line bg-panel': b.kind === 'text',
+        'border-accent/60 bg-accent/5': b.kind === 'tool_use' && b.awaitingApproval,
+        'border-signal-live/30 bg-signal-live/5': b.kind === 'tool_use' && !b.awaitingApproval,
+        'border-signal-ok/30 bg-signal-ok/5': b.kind === 'tool_result' && !b.isError,
+        'border-signal-danger/40 bg-signal-danger/5': (b.kind === 'tool_result' && b.isError) || b.kind === 'error',
       }"
     >
       <template v-if="b.kind === 'init'">
-        <div class="px-3 py-2 text-gray-600">
-          <span class="font-medium">session start</span>
-          <span v-if="b.sessionId" class="ml-2 font-mono">{{ b.sessionId }}</span>
-          <span v-if="b.cwd" class="ml-2 text-gray-500">cwd: {{ b.cwd }}</span>
-          <span v-if="b.toolCount != null" class="ml-2 text-gray-500">
-            tools: {{ b.toolCount }}
-          </span>
+        <div class="px-3 py-2 font-mono text-faint">
+          <span class="font-medium text-muted">session start</span>
+          <span v-if="b.sessionId" class="ml-2">{{ b.sessionId }}</span>
+          <span v-if="b.cwd" class="ml-2">cwd: {{ b.cwd }}</span>
+          <span v-if="b.toolCount != null" class="ml-2">tools: {{ b.toolCount }}</span>
         </div>
       </template>
 
       <template v-else-if="b.kind === 'text'">
         <div class="px-3 py-2">
-          <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
-            {{ b.role }}
-          </div>
-          <MarkdownView v-if="b.role === 'assistant'" :source="b.body" />
-          <pre v-else class="whitespace-pre-wrap font-sans text-sm leading-snug">{{ b.body }}</pre>
+          <div class="mb-1 text-[10px] uppercase tracking-label" :class="b.role === 'assistant' ? 'text-accent' : 'text-faint'">{{ b.role }}</div>
+          <MarkdownView :source="b.body" />
         </div>
       </template>
 
       <template v-else-if="b.kind === 'tool_use'">
-        <div class="px-3 py-2 space-y-2">
+        <div class="space-y-2 px-3 py-2">
           <details>
-            <summary class="cursor-pointer flex items-baseline gap-2">
-              <span :class="b.awaitingApproval ? 'text-amber-800' : 'text-blue-700'" class="font-medium">
+            <summary class="flex cursor-pointer items-baseline gap-2">
+              <span :class="b.awaitingApproval ? 'text-accent' : 'text-signal-live'" class="font-medium">
                 {{ b.awaitingApproval ? "⏸ awaiting approval" : "→" }} {{ b.name }}
               </span>
-              <span class="text-gray-700 font-mono text-[11px] truncate">
-                {{ clamp(toolInputSummary(b.input), 200) }}
-              </span>
+              <span class="truncate font-mono text-[11px] text-muted">{{ clamp(toolInputSummary(b.input), 200) }}</span>
             </summary>
-            <pre class="mt-2 text-[11px] font-mono whitespace-pre-wrap overflow-auto max-h-64">{{ JSON.stringify(b.input, null, 2) }}</pre>
+            <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-muted">{{ JSON.stringify(b.input, null, 2) }}</pre>
           </details>
-          <div v-if="b.awaitingApproval" class="border-t border-amber-200 pt-2">
-            <pre class="whitespace-pre-wrap font-sans text-xs leading-snug text-amber-900 mb-2">{{ b.awaitingApproval.prompt_to_operator }}</pre>
-            <AuthApprovalForm
-              :item="b.awaitingApproval"
-              compact
-              @resolved="(r) => emit('resolved', r)"
-            />
+
+          <!-- Highlight the shell command behind a Bash call, terminal-style. -->
+          <div v-if="bashCommand(b)" class="overflow-hidden rounded border border-signal-live/30">
+            <div class="bg-signal-live/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-label text-signal-live">bash</div>
+            <pre class="overflow-x-auto bg-canvas px-3 py-2 font-mono text-[11px] leading-snug text-signal-live">{{ bashCommand(b) }}</pre>
+          </div>
+
+          <!-- AskUserQuestion: show each question + its options (interactive form
+               below when this call is awaiting approval). -->
+          <div v-if="questionList(b.input) && !b.awaitingApproval" class="space-y-2">
+            <div v-for="(q, qi) in questionList(b.input)" :key="qi" class="border-l-2 border-signal-auth/60 pl-3">
+              <div class="text-xs font-medium text-ink">
+                {{ q.question }}
+                <span v-if="q.multiSelect" class="ml-1 text-[10px] uppercase tracking-label text-faint">multi</span>
+              </div>
+              <ul class="mt-1 space-y-0.5">
+                <li v-for="opt in q.options" :key="opt.label" class="text-[11px] text-muted">
+                  <span class="font-medium text-ink">{{ opt.label }}</span>
+                  <span v-if="opt.description"> — {{ opt.description }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div v-if="b.awaitingApproval" class="border-t border-accent/30 pt-2">
+            <pre class="mb-2 whitespace-pre-wrap font-sans text-xs leading-snug text-accent">{{ b.awaitingApproval.prompt_to_operator }}</pre>
+            <AuthApprovalForm :item="b.awaitingApproval" compact @resolved="(r) => emit('resolved', r)" />
           </div>
         </div>
       </template>
 
       <template v-else-if="b.kind === 'tool_result'">
         <details>
-          <summary class="px-3 py-2 cursor-pointer flex items-baseline gap-2">
-            <span :class="b.isError ? 'text-red-700' : 'text-emerald-700'" class="font-medium">
+          <summary class="flex cursor-pointer items-baseline gap-2 px-3 py-2">
+            <span :class="b.isError ? 'text-signal-danger' : 'text-signal-ok'" class="font-medium">
               {{ b.isError ? "✗ tool error" : "← tool result" }}
             </span>
-            <span class="text-gray-700 font-mono text-[11px] truncate">
-              {{ clamp(b.body.replace(/\s+/g, " "), 200) }}
-            </span>
+            <span class="truncate font-mono text-[11px] text-muted">{{ clamp(b.body.replace(/\s+/g, " "), 200) }}</span>
           </summary>
-          <pre class="px-3 pb-2 text-[11px] font-mono whitespace-pre-wrap overflow-auto max-h-64">{{ b.body }}</pre>
+          <pre class="max-h-64 overflow-auto whitespace-pre-wrap px-3 pb-2 font-mono text-[11px] text-muted">{{ b.body }}</pre>
         </details>
       </template>
 
       <template v-else-if="b.kind === 'rate_limit'">
-        <div class="px-3 py-2 text-gray-700">
+        <div class="px-3 py-2 text-muted">
           <span class="font-medium">rate limit</span>
           <span class="ml-2">{{ b.rateLimitType ?? "?" }}</span>
           <span
-            class="ml-2 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide"
-            :class="b.status === 'allowed' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'"
+            class="ml-2 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-label"
+            :class="b.status === 'allowed' ? 'bg-signal-ok/15 text-signal-ok' : 'bg-signal-danger/15 text-signal-danger'"
           >
             {{ b.status }}
           </span>
-          <span v-if="b.resetsAt" class="ml-2 text-gray-500">
+          <span v-if="b.resetsAt" class="ml-2 text-faint">
             resets {{ new Date(b.resetsAt * 1000).toLocaleString() }}
           </span>
-          <span v-if="b.overageStatus" class="ml-2 text-gray-500">
+          <span v-if="b.overageStatus" class="ml-2 text-faint">
             overage: {{ b.overageStatus
               }}{{ b.overageReason ? ` (${b.overageReason})` : "" }}{{ b.isUsingOverage ? ", active" : "" }}
           </span>
@@ -334,26 +358,26 @@ function clamp(s: string, n: number): string {
       </template>
 
       <template v-else-if="b.kind === 'system_note'">
-        <div class="px-3 py-2 text-gray-600">
+        <div class="px-3 py-2 text-muted">
           <span class="font-medium">{{ b.subtype }}</span>
-          <span v-if="b.summary" class="ml-2 text-gray-500">{{ b.summary }}</span>
+          <span v-if="b.summary" class="ml-2 text-faint">{{ b.summary }}</span>
         </div>
       </template>
 
       <template v-else-if="b.kind === 'error'">
         <div class="px-3 py-2">
-          <div class="text-[10px] uppercase tracking-wide text-red-700 mb-1">error</div>
-          <pre class="whitespace-pre-wrap font-mono text-xs">{{ b.message }}</pre>
+          <div class="mb-1 text-[10px] uppercase tracking-label text-signal-danger">error</div>
+          <pre class="whitespace-pre-wrap font-mono text-xs text-signal-danger">{{ b.message }}</pre>
         </div>
       </template>
 
       <template v-else>
         <details>
-          <summary class="px-3 py-2 cursor-pointer flex items-baseline gap-2 text-gray-600">
+          <summary class="flex cursor-pointer items-baseline gap-2 px-3 py-2 text-muted">
             <span class="font-medium">{{ b.type }}</span>
-            <span v-if="b.summary" class="text-gray-500">{{ b.summary }}</span>
+            <span v-if="b.summary" class="text-faint">{{ b.summary }}</span>
           </summary>
-          <pre class="px-3 pb-2 font-mono whitespace-pre-wrap text-[11px] text-gray-600">{{ b.raw }}</pre>
+          <pre class="whitespace-pre-wrap px-3 pb-2 font-mono text-[11px] text-faint">{{ b.raw }}</pre>
         </details>
       </template>
     </li>

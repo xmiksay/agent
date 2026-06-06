@@ -1,0 +1,110 @@
+<template>
+  <div class="space-y-3">
+    <!-- AskUserQuestion: structured controls -->
+    <template v-if="questions">
+      <div
+        v-for="(q, qi) in questions"
+        :key="qi"
+        class="space-y-1.5 border-l-2 border-amber-300 pl-3"
+      >
+        <div class="text-xs font-medium text-gray-800">
+          {{ q.question }}
+          <span v-if="q.multiSelect" class="text-[10px] uppercase text-gray-400 ml-1">
+            multi
+          </span>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <template v-if="q.multiSelect">
+            <button
+              v-for="opt in q.options"
+              :key="opt.label"
+              type="button"
+              :disabled="!!busy || useCustom"
+              class="px-2 py-1 text-xs rounded border transition"
+              :class="
+                isPickedMulti(qi, opt.label)
+                  ? 'bg-amber-600 border-amber-700 text-white'
+                  : 'bg-white border-gray-300 text-gray-800 hover:bg-amber-50'
+              "
+              :title="opt.description"
+              @click="toggleMulti(qi, opt.label)"
+            >
+              <span class="font-medium">{{ opt.label }}</span>
+              <span v-if="opt.description" class="text-[10px] opacity-75 ml-1">
+                — {{ opt.description }}
+              </span>
+            </button>
+          </template>
+          <template v-else>
+            <button
+              v-for="opt in q.options"
+              :key="opt.label"
+              type="button"
+              :disabled="!!busy || useCustom"
+              class="px-2 py-1 text-xs rounded border transition"
+              :class="
+                isPickedSingle(qi, opt.label)
+                  ? 'bg-amber-600 border-amber-700 text-white'
+                  : 'bg-white border-gray-300 text-gray-800 hover:bg-amber-50'
+              "
+              :title="opt.description"
+              @click="pickSingle(qi, opt.label)"
+            >
+              <span class="font-medium">{{ opt.label }}</span>
+              <span v-if="opt.description" class="text-[10px] opacity-75 ml-1">
+                — {{ opt.description }}
+              </span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <div class="space-y-1">
+        <label class="flex items-center gap-1.5 text-[11px] text-gray-600">
+          <input v-model="useCustom" type="checkbox" class="rounded" />
+          Custom reply instead
+        </label>
+        <textarea
+          v-if="useCustom"
+          v-model="customReply"
+          :rows="props.compact ? 2 : 3"
+          class="w-full border rounded p-2 text-xs font-mono"
+          placeholder="Type a free-form answer — sent to claude as the tool result."
+        />
+      </div>
+    </template>
+
+    <!-- Non-question: plain reply -->
+    <template v-else>
+      <div>
+        <label class="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+          Optional reply
+        </label>
+        <textarea
+          v-model="reply"
+          :rows="props.compact ? 1 : 2"
+          class="w-full border rounded p-2 text-xs font-mono"
+          placeholder="Optional note attached to your decision."
+        />
+      </div>
+    </template>
+
+    <div class="flex gap-2">
+      <button
+        :disabled="!!busy || !canApprove"
+        class="rounded bg-emerald-600 text-white px-3 py-1 text-xs hover:bg-emerald-700 disabled:opacity-60"
+        @click="resolve('approve')"
+      >
+        {{ busy === "approve" ? "Approving…" : "Approve" }}
+      </button>
+      <button
+        :disabled="!!busy"
+        class="rounded border border-red-300 text-red-700 px-3 py-1 text-xs hover:bg-red-50 disabled:opacity-60"
+        @click="resolve('deny')"
+      >
+        {{ busy === "deny" ? "Denying…" : "Deny" }}
+      </button>
+    </div>
+    <p v-if="error" class="text-xs text-red-700">{{ error }}</p>
+  </div>
+</template>

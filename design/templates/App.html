@@ -1,0 +1,39 @@
+<template>
+  <div class="min-h-screen flex flex-col">
+    <header class="bg-white border-b border-gray-200">
+      <div class="max-w-6xl mx-auto px-4 py-3 flex gap-6 items-center">
+        <span class="font-semibold tracking-tight">Claude Agent</span>
+        <nav class="flex gap-4 text-sm">
+          <RouterLink to="/" class="hover:text-blue-700">Tasks</RouterLink>
+          <RouterLink to="/projects" class="hover:text-blue-700">Projects</RouterLink>
+          <RouterLink to="/git_services" class="hover:text-blue-700">Services</RouterLink>
+          <RouterLink
+            to="/auth_requests"
+            class="hover:text-blue-700 inline-flex items-center gap-1.5"
+            :class="hasPendingApprovals ? 'text-amber-600 font-medium' : ''"
+          >
+            Auth queue
+            <span
+              v-if="hasPendingApprovals"
+              class="w-1.5 h-1.5 rounded-full bg-amber-500"
+              title="Pending approvals"
+            />
+          </RouterLink>
+          <RouterLink to="/stats" class="hover:text-blue-700">Stats</RouterLink>
+        </nav>
+        <button
+          v-if="session.hasToken"
+          class="ml-auto text-xs text-gray-500 hover:text-red-600"
+          title="Sign out (clears local token)"
+          @click="session.clear()"
+        >
+          sign out
+        </button>
+      </div>
+    </header>
+    <main class="flex-1 max-w-6xl mx-auto w-full px-4 py-6">
+      <RouterView />
+    </main>
+    <TokenGate v-if="showGate" />
+  </div>
+</template>

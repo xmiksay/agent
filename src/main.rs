@@ -135,6 +135,10 @@ async fn main() -> anyhow::Result<()> {
             put(api::projects::update_config),
         )
         .route(
+            "/api/projects/{id}/env",
+            put(api::projects::update_env),
+        )
+        .route(
             "/api/projects/{id}/branches",
             get(api::projects::list_branches),
         )
@@ -177,10 +181,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/webhook/gitlab/{slug}", post(webhook::gitlab::handle))
         .route("/webhook/github/{slug}", post(webhook::github::handle))
         .route("/internal/authcheck", post(auth::handlers::authcheck))
-        // The live stream authorizes via a `?token=` query param inside the
-        // handler (browsers can't set headers on a WebSocket), so it sits
-        // outside the bearer middleware that guards `/api/*`.
-        .route("/ws/tasks/{id}", get(ws::task_stream))
+        // Single app-wide live stream. Auth is in-band (the client's first frame
+        // is its token), so it sits outside the `/api/*` bearer middleware.
+        .route("/ws", get(ws::global_stream))
         .merge(api_routes)
         .route("/health", get(health))
         .with_state(state)

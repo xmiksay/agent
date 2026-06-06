@@ -1,10 +1,10 @@
-import { computed, onMounted, onUnmounted, reactive, ref, watch, type Ref } from "vue";
+import { computed, onMounted, ref, watch, type Ref } from "vue";
 import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
+import { useStreamStore } from "../stores/stream";
 import { authApi } from "../api/auth";
 import { tasksApi } from "../api/tasks";
-import { openTaskStream, type TaskStreamController } from "../api/ws";
-import type { AuthRequest, StreamEnvelope } from "../types/api";
+import type { AuthRequest } from "../types/api";
 
 /**
  * Everything behind the task detail view: REST detail/result, the live event
@@ -14,30 +14,55 @@ import type { AuthRequest, StreamEnvelope } from "../types/api";
  */
 export function useTaskDetail(idRef: Ref<string>) {
   const store = useTasksStore();
+  const stream = useStreamStore();
   const router = useRouter();
   const busy = ref<string | null>(null);
-  const pendingApprovals = ref<AuthRequest[]>([]);
 
-  // --- Live event stream -----------------------------------------------------
-  // seq → raw agent event. The persisted /events history seeds 0..N-1; live WS
-  // frames continue from N. Dedupe is automatic since seq is the map key.
-  const events = reactive(new Map<number, unknown>());
-  const wsConnected = ref(false);
-  let stream: TaskStreamController | null = null;
-
-  // ClaudeStream consumes a newline-delimited JSON string and reverses it
-  // (newest on top), so re-serialize the ordered events into that shape.
-  const eventText = computed(() =>
-    [...events.keys()]
+  // --- Live event stream (via the single app-wide socket) --------------------
+  // The global stream store holds every task's events keyed by task_id; we read
+  // this task's slice. History from /events seeds seq 0..N-1; live frames
+  // continue from N (dedupe is automatic since seq is the map key). ClaudeStream
+  // wants a newline-delimited JSON string (it reverses to newest-first).
+  const eventText = computed(() => {
+    const m = stream.eventsFor(idRef.value);
+    if (!m) return "";
+    return [...m.keys()]
       .sort((a, b) => a - b)
-      .map((k) => JSON.stringify(events.get(k)))
-      .join("\n"),
-  );
-  const eventCount = computed(() => events.size);
-  const hasEvents = computed(() => events.size > 0);
+      .map((k) => JSON.stringify(m.get(k)))
+      .join("\n");
+  });
+  const eventCount = computed(() => stream.eventsFor(idRef.value)?.size ?? 0);
+  const hasEvents = computed(() => eventCount.value > 0);
 
-  const isLive = computed(() =>
-    ["pending", "running"].includes(store.detail?.status ?? ""),
+  // Cumulative output tokens spent this run, summed from each event's usage —
+  // mirrors the backend's per-chunk accounting (src/jobs/stream.rs). Thinking
+  // tokens are hidden from the timeline but still counted here, so the operator
+  // sees the real spend behind the chat box.
+  const tokensSpent = computed(() => {
+    const m = stream.eventsFor(idRef.value);
+    if (!m) return 0;
+    let total = 0;
+    for (const ev of m.values()) {
+      const e = ev as Record<string, any>;
+      const out =
+        e?.usage?.output_tokens ?? e?.message?.usage?.output_tokens ?? null;
+      if (typeof out === "number") total += out;
+    }
+    return total;
+  });
+
+  // Pending approvals for this task, sliced from the shared live set.
+  const pendingApprovals = computed(() =>
+    [...stream.approvals.values()].filter((a) => a.task_id === idRef.value),
+  );
+
+  // A task is "live" while pending/running OR its agent is warm (idle between
+  // turns). `wsConnected` = socket up AND this task live, so chat goes straight
+  // to the agent rather than being queued.
+  const isLive = computed(
+    () =>
+      ["pending", "running"].includes(store.detail?.status ?? "") ||
+      store.detail?.live === true,
   );
   const isRunning = computed(() => store.detail?.status === "running");
   const isPending = computed(() => store.detail?.status === "pending");
@@ -47,10 +72,11 @@ export function useTaskDetail(idRef: Ref<string>) {
   const canContinue = computed(() => !!store.detail?.session_id && canRetry.value);
   const canKill = computed(() => isRunning.value);
   const canChat = computed(() => isRunning.value || !!store.detail?.session_id);
+  const wsConnected = computed(() => stream.connected && isLive.value);
 
   async function reloadPending() {
     try {
-      pendingApprovals.value = await authApi.list({ task_id: idRef.value, status: "pending" });
+      stream.seedApprovals(await authApi.list({ task_id: idRef.value, status: "pending" }));
     } catch {
       /* ignore — section will just be empty */
     }
@@ -59,66 +85,44 @@ export function useTaskDetail(idRef: Ref<string>) {
   async function loadHistory() {
     try {
       const { events: hist } = await tasksApi.events(idRef.value);
-      hist.forEach((e, i) => events.set(i, e));
+      stream.seedEvents(idRef.value, hist);
     } catch {
       /* history endpoint may 404 for a brand-new task */
     }
   }
 
-  function applyEnvelope(env: StreamEnvelope) {
-    if (env.kind === "event") {
-      events.set(env.seq, env.payload);
-    } else if (env.kind === "auth_request") {
-      const r = env.payload as AuthRequest;
-      const rest = pendingApprovals.value.filter((p) => p.id !== r.id);
-      pendingApprovals.value = r.status === "pending" ? [...rest, r] : rest;
-    } else if (env.kind === "status") {
-      const s = (env.payload as { status?: string }).status;
-      if (s && store.detail) store.detail.status = s;
-    }
-  }
-
-  function openStream() {
-    if (stream) return;
-    stream = openTaskStream(idRef.value, {
-      onEnvelope: applyEnvelope,
-      onOpen: async () => {
-        wsConnected.value = true;
-        // Refetch history on (re)connect to fill any gap from a dropped socket.
-        await loadHistory();
-      },
-      onClose: async () => {
-        wsConnected.value = false;
-        // The session may have ended — reconcile status + final history.
-        await store.load(idRef.value);
-        await loadHistory();
-      },
-      shouldReconnect: () => isLive.value,
-    });
-  }
-
-  function closeStream() {
-    stream?.close();
-    stream = null;
-    wsConnected.value = false;
-  }
-
   async function setup() {
-    events.clear();
+    stream.start();
     await store.load(idRef.value);
     await Promise.all([loadHistory(), reloadPending()]);
-    if (isLive.value) openStream();
   }
 
   onMounted(setup);
-  onUnmounted(closeStream);
-  watch(idRef, async () => {
-    closeStream();
-    await setup();
-  });
+  watch(idRef, setup);
+
+  // Reconnect → refetch history (fill any gap) + reconcile task state.
+  watch(
+    () => stream.connected,
+    (up) => {
+      if (up) {
+        loadHistory();
+        store.load(idRef.value);
+      }
+    },
+  );
+  // A pushed status change for this task → reflect it; reload on terminal states
+  // to pick up the result row.
+  watch(
+    () => stream.statusByTask.get(idRef.value),
+    (s) => {
+      if (!s || !store.detail) return;
+      store.detail.status = s;
+      if (["completed", "failed", "killed"].includes(s)) store.load(idRef.value);
+    },
+  );
 
   function onApprovalResolved(resolved: AuthRequest) {
-    pendingApprovals.value = pendingApprovals.value.filter((p) => p.id !== resolved.id);
+    stream.dropApproval(resolved.id);
   }
 
   // --- Branch diff (lazy) ----------------------------------------------------
@@ -178,10 +182,7 @@ export function useTaskDetail(idRef: Ref<string>) {
   }
 
   async function confirmRun() {
-    await withBusy("confirm", async () => {
-      await store.confirm(idRef.value);
-      openStream();
-    });
+    await withBusy("confirm", () => store.confirm(idRef.value));
   }
 
   async function retry() {
@@ -195,7 +196,6 @@ export function useTaskDetail(idRef: Ref<string>) {
     await withBusy("continue", async () => {
       await store.continue_(idRef.value);
       await store.load(idRef.value);
-      if (isLive.value) openStream();
     });
   }
 
@@ -224,14 +224,14 @@ export function useTaskDetail(idRef: Ref<string>) {
     if (!text) return;
     sending.value = true;
     try {
-      if (isRunning.value && wsConnected.value) {
-        // Live: straight to the agent's stdin, no delay.
-        stream?.send({ kind: "chat", text });
+      if (wsConnected.value) {
+        // A warm agent is attached (running or idle between turns) — straight to
+        // its stdin, no delay.
+        stream.send({ kind: "chat", task_id: idRef.value, text });
       } else {
-        // Paused/resumable: queue it; delivered on the next resume.
+        // No live agent: queue it; delivered when the session resumes.
         await tasksApi.pushMessage(idRef.value, text);
         await store.load(idRef.value);
-        if (isLive.value) openStream();
       }
       message.value = "";
     } catch (e) {
@@ -244,13 +244,13 @@ export function useTaskDetail(idRef: Ref<string>) {
   function redefineGoal() {
     const text = message.value.trim();
     if (!text || !wsConnected.value) return;
-    stream?.send({ kind: "redefine", text });
+    stream.send({ kind: "redefine", task_id: idRef.value, text });
     message.value = "";
   }
 
   function stopAgent() {
     if (!confirm("Stop the agent? It finishes the current turn, then wraps up.")) return;
-    stream?.send({ kind: "stop" });
+    stream.send({ kind: "stop", task_id: idRef.value });
   }
 
   return {
@@ -260,6 +260,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     eventText,
     eventCount,
     hasEvents,
+    tokensSpent,
     wsConnected,
     isLive,
     isRunning,

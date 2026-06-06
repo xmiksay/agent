@@ -160,6 +160,11 @@ impl TaskStore {
         if task.status == "running" || task.status == "pending" {
             anyhow::bail!("task is already {}; nothing to resume", task.status);
         }
+        // A warm session is already live (idle between turns) — resuming would
+        // spawn a second agent on the same branch. Message it instead.
+        if self.hub.is_warm(task_id).await {
+            anyhow::bail!("agent is still live for this task; send it a message instead of resuming");
+        }
 
         // Reset the task row to pending so confirm_task can pick it up. Drop
         // any previous result row — claude will produce a fresh one.
@@ -188,6 +193,16 @@ impl TaskStore {
         if message.trim().is_empty() {
             anyhow::bail!("message is empty");
         }
+
+        // Warm path: a live agent is attached — hand the message straight to its
+        // stdin. Its turn loop wakes, flips back to `running`, and processes it
+        // with full in-session memory; no respawn, no delay.
+        if self.hub.send_to_agent(task_id, &message).await {
+            info!(%task_id, "delivered message to live agent");
+            return Ok(());
+        }
+
+        // Cold path: no live agent. Persist the message and resume the session.
         let task = tasks::Entity::find_by_id(task_id)
             .one(&self.db)
             .await
@@ -197,25 +212,14 @@ impl TaskStore {
             anyhow::bail!("task has no session_id; cannot push a follow-up");
         }
 
-        // Persist the message first so a crash between kill and resume still
-        // delivers it on the next manual resume.
+        // Persist first so a crash before resume still delivers it next time.
         let mut active: tasks::ActiveModel = task.clone().into();
         active.pending_message = Set(Some(message));
         active.update(&self.db).await?;
 
-        // Pause-if-running, then resume.
-        let was_running = self.running.abort(task_id).await;
-        if was_running {
-            self.hub.end(task_id).await;
-            let _ = self.finish_task(task_id, "killed").await;
-            info!(%task_id, "paused running task to deliver pushed message");
-        }
-
         if task.status == "pending" {
-            // Already pending; confirm will pick up pending_message.
             self.confirm_task(task_id).await?;
         } else {
-            // continue_task resets to pending → confirm.
             self.continue_task(task_id).await?;
         }
         Ok(())
@@ -460,7 +464,6 @@ impl TaskStore {
             session_id: Set(None),
             pid: Set(None),
             pending_message: Set(None),
-            event_log: Set(None),
         };
 
         tasks::Entity::insert(task)
@@ -542,17 +545,12 @@ impl TaskStore {
         let store = Arc::clone(self);
         let semaphore = self.semaphore.clone();
 
+        // The job spawn no longer holds a permit for its whole life — run_job
+        // acquires one per *turn*, so an idle (warm) agent occupies no slot.
+        // Setup failures here mark the task failed; run_job owns the rest of the
+        // lifecycle (status transitions, per-turn results, final finish).
         let join = tokio::spawn(async move {
-            let _permit = match semaphore.acquire().await {
-                Ok(p) => p,
-                Err(_) => {
-                    error!(%task_id, "semaphore closed");
-                    return;
-                }
-            };
-
-            // Update status to running
-            if let Err(e) = store.update_status(task_id, "running").await {
+            if let Err(e) = store.set_status(task_id, "running").await {
                 error!(%task_id, error = %e, "failed to set running status");
                 return;
             }
@@ -561,14 +559,14 @@ impl TaskStore {
                 Ok(t) => t,
                 Err(e) => {
                     error!(%task_id, error = %e, "failed to deserialize trigger");
-                    let _ = store.update_status(task_id, "failed").await;
+                    let _ = store.finish_task(task_id, "failed").await;
                     return;
                 }
             };
 
             let Some(service_id) = task.git_service_id else {
                 error!(%task_id, "task has no git_service_id");
-                let _ = store.update_status(task_id, "failed").await;
+                let _ = store.finish_task(task_id, "failed").await;
                 return;
             };
 
@@ -576,7 +574,7 @@ impl TaskStore {
                 Some(s) => s,
                 None => {
                     error!(%task_id, %service_id, "git_service not loaded");
-                    let _ = store.update_status(task_id, "failed").await;
+                    let _ = store.finish_task(task_id, "failed").await;
                     return;
                 }
             };
@@ -585,7 +583,7 @@ impl TaskStore {
                 Ok(p) => p,
                 Err(e) => {
                     error!(%task_id, error = %e, "provider not configured");
-                    let _ = store.update_status(task_id, "failed").await;
+                    let _ = store.finish_task(task_id, "failed").await;
                     return;
                 }
             };
@@ -593,38 +591,14 @@ impl TaskStore {
             info!(%task_id, "job starting");
 
             let resume_session_id = task.session_id.clone();
-            // Consume pending_message: clear the column before spawn so a
-            // crash doesn't replay the same message on the next retry, and
-            // pass it to run_job as a prompt override.
+            // Consume pending_message: clear the column before the run so a
+            // crash doesn't replay the same message, and pass it as the prompt.
             let prompt_override = task.pending_message.clone();
             if prompt_override.is_some() {
                 if let Err(e) = store.clear_pending_message(task_id).await {
                     error!(%task_id, error = %e, "failed to clear pending_message");
                 }
             }
-            let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<u32>();
-            let pid_writer = {
-                let store = store.clone();
-                tokio::spawn(async move {
-                    if let Ok(pid) = pid_rx.await {
-                        if let Err(e) = store.set_pid(task_id, Some(pid)).await {
-                            error!(%task_id, error = %e, "failed to persist pid");
-                        }
-                    }
-                })
-            };
-
-            let (session_tx, session_rx) = tokio::sync::oneshot::channel::<String>();
-            let session_writer = {
-                let store = store.clone();
-                tokio::spawn(async move {
-                    if let Ok(sid) = session_rx.await {
-                        if let Err(e) = store.set_session_id_pub(task_id, &sid).await {
-                            error!(%task_id, error = %e, "failed to persist session_id");
-                        }
-                    }
-                })
-            };
 
             let result = run_job(
                 task_id,
@@ -641,38 +615,21 @@ impl TaskStore {
                 store.project_store.clone(),
                 store.output_log.clone(),
                 store.hub.clone(),
+                store.clone(),
+                semaphore,
                 resume_session_id,
                 prompt_override,
-                Some(pid_tx),
-                Some(session_tx),
             )
             .await;
-            pid_writer.abort();
-            session_writer.abort();
 
             store.running.unregister(task_id).await;
 
-            match result {
-                Ok(claude_output) => {
-                    info!(%task_id, "job completed");
-                    if !claude_output.session_id.is_empty() {
-                        let _ = store
-                            .set_session_id(task_id, &claude_output.session_id)
-                            .await;
-                    }
-                    if let Err(e) = store.save_result(task_id, &claude_output).await {
-                        error!(%task_id, error = %e, "failed to save result");
-                    }
-                    let status = if claude_output.is_error { "failed" } else { "completed" };
-                    let _ = store.finish_task(task_id, status).await;
-                }
-                Err(e) => {
-                    // {e:?} prints the full anyhow chain incl. Context layers.
-                    let chain = format!("{e:?}");
-                    error!(%task_id, error = %e, chain = %chain, "job failed");
-                    let _ = store.save_error_result(task_id, &chain).await;
-                    let _ = store.finish_task(task_id, "failed").await;
-                }
+            if let Err(e) = result {
+                // {e:?} prints the full anyhow chain incl. Context layers.
+                let chain = format!("{e:?}");
+                error!(%task_id, error = %e, chain = %chain, "job failed");
+                let _ = store.save_error_result(task_id, &chain).await;
+                let _ = store.finish_task(task_id, "failed").await;
             }
         });
 
@@ -684,22 +641,44 @@ impl TaskStore {
         Ok(())
     }
 
-    async fn update_status(&self, task_id: Uuid, status: &str) -> Result<()> {
-        let mut task: tasks::ActiveModel = tasks::Entity::find_by_id(task_id)
+    /// Set the task's status without touching `finished_at` — used for the
+    /// per-turn running↔completed transitions of a warm session. `started_at`
+    /// is stamped once, on the first move to `running`.
+    pub(crate) async fn set_status(&self, task_id: Uuid, status: &str) -> Result<()> {
+        let model = tasks::Entity::find_by_id(task_id)
             .one(&self.db)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("task not found"))?
-            .into();
-
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
+        let stamp_start = status == "running" && model.started_at.is_none();
+        let mut task: tasks::ActiveModel = model.into();
         task.status = Set(status.to_string());
-        if status == "running" {
+        if stamp_start {
             task.started_at = Set(Some(Utc::now().into()));
         }
         task.update(&self.db).await?;
+        // Push the turn transition to live subscribers so the SPA reflects
+        // running↔completed without polling.
+        self.hub
+            .publish_aux(
+                task_id,
+                crate::jobs::hub::EnvelopeKind::Status,
+                serde_json::json!({ "status": status }),
+            )
+            .await;
         Ok(())
     }
 
-    async fn finish_task(&self, task_id: Uuid, status: &str) -> Result<()> {
+    /// Replace the one-to-one result row (each turn overwrites the prior one).
+    pub(crate) async fn replace_result(&self, task_id: Uuid, output: &ClaudeOutput) -> Result<()> {
+        task_results::Entity::delete_many()
+            .filter(task_results::Column::TaskId.eq(task_id))
+            .exec(&self.db)
+            .await
+            .context("clearing prior turn result")?;
+        self.save_result(task_id, output).await
+    }
+
+    pub(crate) async fn finish_task(&self, task_id: Uuid, status: &str) -> Result<()> {
         let mut task: tasks::ActiveModel = tasks::Entity::find_by_id(task_id)
             .one(&self.db)
             .await?
@@ -768,17 +747,36 @@ impl TaskStore {
             .context("failed to list tasks")
     }
 
-    /// Persisted agent event history (`event_log`) in order; empty if none yet.
-    pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<serde_json::Value>> {
-        let task = tasks::Entity::find_by_id(task_id)
+    /// Most recent task on this project+branch that captured a `session_id`, so
+    /// it can take a follow-up (delivered live to a warm agent, or via resume).
+    /// Lets a comment continue the same agent/session instead of spawning a fresh
+    /// one on the shared branch.
+    pub async fn find_resumable_task_for_branch(
+        &self,
+        project_id: Uuid,
+        branch: &str,
+    ) -> Result<Option<Uuid>> {
+        let row = tasks::Entity::find()
+            .filter(tasks::Column::ProjectId.eq(project_id))
+            .filter(tasks::Column::Branch.eq(branch))
+            .filter(tasks::Column::SessionId.is_not_null())
+            .order_by_desc(tasks::Column::CreatedAt)
             .one(&self.db)
             .await
-            .context("db error")?
-            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
-        Ok(match task.event_log {
-            Some(serde_json::Value::Array(items)) => items,
-            _ => Vec::new(),
-        })
+            .context("looking up resumable task for branch")?;
+        Ok(row.map(|t| t.id))
+    }
+
+    /// Persisted agent event history from `task_events`, ordered by `seq`.
+    pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<serde_json::Value>> {
+        use crate::entity::task_events;
+        let rows = task_events::Entity::find()
+            .filter(task_events::Column::TaskId.eq(task_id))
+            .order_by_asc(task_events::Column::Seq)
+            .all(&self.db)
+            .await
+            .context("loading task events")?;
+        Ok(rows.into_iter().map(|r| r.payload).collect())
     }
 
     pub async fn get_task(

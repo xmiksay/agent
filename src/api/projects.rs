@@ -26,6 +26,11 @@ pub struct UpdateConfigRequest {
     pub allowed_operations: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateEnvRequest {
+    pub env_file: String,
+}
+
 pub async fn list_projects(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ProjectListItem>>, StatusCode> {
@@ -100,6 +105,25 @@ pub async fn update_config(
     let updated = state
         .project_store
         .update_allowed_ops(project.id, req.allowed_operations)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(updated))
+}
+
+pub async fn update_env(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateEnvRequest>,
+) -> Result<Json<ProjectConfig>, StatusCode> {
+    let project = state
+        .project_store
+        .get_project_by_id(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let updated = state
+        .project_store
+        .update_env_file(project.id, req.env_file)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(updated))

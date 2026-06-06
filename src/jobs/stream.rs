@@ -35,6 +35,9 @@ pub async fn stream_into_entry<R>(
     task_id: Uuid,
     mut session_tx: Option<tokio::sync::oneshot::Sender<String>>,
     mut budget: Option<(u64, tokio::sync::oneshot::Sender<u64>)>,
+    // Fires once per turn the moment a `result` event is seen, so the runner's
+    // turn loop knows the current turn finished (and the agent is now idle).
+    result_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -60,7 +63,14 @@ pub async fn stream_into_entry<R>(
                 if matches!(which, Stream::Stdout) {
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(chunk.trim()) {
                         if value.is_object() {
+                            let is_result =
+                                value.get("type").and_then(|t| t.as_str()) == Some("result");
                             hub.publish_event(task_id, value).await;
+                            if is_result {
+                                if let Some(tx) = result_tx.as_ref() {
+                                    let _ = tx.send(()).await;
+                                }
+                            }
                         }
                     }
                 }

@@ -79,138 +79,123 @@ onMounted(() => store.refresh());
 
 <template>
   <section class="space-y-6">
-    <div class="flex items-center gap-4">
-      <h1 class="text-2xl font-semibold">Git services</h1>
-      <button
-        v-if="!showForm"
-        class="ml-auto rounded bg-blue-600 text-white px-3 py-1.5 text-sm hover:bg-blue-700"
-        @click="showForm = true"
-      >
-        Add service
-      </button>
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="font-display text-2xl font-bold tracking-tight">Git services</h1>
+        <p class="mt-1 text-sm text-muted">
+          Provider connections — tokens and webhook secrets stay write-only.
+        </p>
+      </div>
+      <button v-if="!showForm" class="btn btn-primary" @click="showForm = true">+ Add service</button>
     </div>
 
-    <form
-      v-if="showForm"
-      class="bg-white p-4 rounded shadow-sm space-y-3"
-      @submit.prevent="submit"
-    >
-      <div class="grid grid-cols-2 gap-3 text-sm">
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">Kind</span>
-          <select v-model="form.kind" class="border rounded p-2" @change="onKindChange">
+    <form v-if="showForm" class="card space-y-3 p-5" @submit.prevent="submit">
+      <div class="grid grid-cols-2 gap-3">
+        <label class="flex flex-col">
+          <span class="label">Kind</span>
+          <select v-model="form.kind" class="select" @change="onKindChange">
             <option value="gitlab">GitLab</option>
             <option value="github" :disabled="hasGithub">
               GitHub{{ hasGithub ? " (already configured)" : "" }}
             </option>
           </select>
         </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">Slug (URL-safe, unique)</span>
+        <label class="flex flex-col">
+          <span class="label">Slug (URL-safe, unique)</span>
           <input
             v-model="form.slug"
             required
             pattern="[A-Za-z0-9_-]+"
             placeholder="e.g. main, work, personal"
-            class="border rounded p-2 font-mono"
+            class="input font-mono"
           />
         </label>
-        <label class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">Display name</span>
-          <input
-            v-model="form.display_name"
-            required
-            placeholder="Work GitLab"
-            class="border rounded p-2"
-          />
+        <label class="col-span-2 flex flex-col">
+          <span class="label">Display name</span>
+          <input v-model="form.display_name" required placeholder="Work GitLab" class="input" />
         </label>
-        <label class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">
+        <label class="col-span-2 flex flex-col">
+          <span class="label">
             Base URL ({{ form.kind === "github" ? "REST API" : "GitLab instance" }})
           </span>
-          <input
-            v-model="form.base_url"
-            required
-            type="url"
-            class="border rounded p-2 font-mono"
-          />
+          <input v-model="form.base_url" required type="url" class="input font-mono" />
         </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">Bot username</span>
+        <label class="flex flex-col">
+          <span class="label">Bot username</span>
           <input
             v-model="form.bot_username"
             required
             placeholder="@-mention to match in comments"
-            class="border rounded p-2 font-mono"
+            class="input font-mono"
           />
         </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-gray-500">Personal access token</span>
+        <label class="flex flex-col">
+          <span class="label">Personal access token</span>
           <input
             v-model="form.token"
             required
             type="password"
             autocomplete="new-password"
-            class="border rounded p-2 font-mono"
+            class="input font-mono"
           />
         </label>
-        <label class="flex flex-col gap-1 col-span-2">
-          <span class="text-xs text-gray-500">Webhook secret</span>
+        <label class="col-span-2 flex flex-col">
+          <span class="label">Webhook secret</span>
           <input
             v-model="form.webhook_secret"
             required
             type="password"
             autocomplete="new-password"
-            class="border rounded p-2 font-mono"
+            class="input font-mono"
           />
         </label>
       </div>
 
-      <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+      <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>
 
-      <p class="text-xs text-gray-500">{{ webhookHelp(form.kind) }}</p>
+      <p class="text-xs text-muted">{{ webhookHelp(form.kind) }}</p>
 
       <div class="flex gap-2">
-        <button
-          type="submit"
-          :disabled="saving"
-          class="rounded bg-blue-600 text-white px-4 py-2 hover:bg-blue-700 disabled:opacity-60"
-        >
+        <button type="submit" :disabled="saving" class="btn btn-primary">
           {{ saving ? "Saving…" : "Create" }}
         </button>
-        <button
-          type="button"
-          class="rounded border px-4 py-2 hover:bg-gray-50"
-          @click="showForm = false"
-        >
-          Cancel
-        </button>
+        <button type="button" class="btn btn-ghost" @click="showForm = false">Cancel</button>
       </div>
     </form>
 
-    <div v-if="store.loading" class="text-gray-500">Loading…</div>
-    <ul v-else class="space-y-2">
-      <li
-        v-for="s in store.list"
-        :key="s.id"
-        class="bg-white rounded shadow-sm px-4 py-3 flex items-center gap-3"
-      >
-        <ProviderBadge :provider="s.kind" />
-        <RouterLink :to="`/git_services/${s.id}`" class="font-medium">
-          {{ s.display_name }}
-        </RouterLink>
-        <span class="text-xs text-gray-500 font-mono">{{ s.slug }}</span>
-        <span class="text-xs text-gray-400 truncate">{{ s.base_url }}</span>
-        <button
-          class="ml-auto text-xs text-red-600 hover:underline"
-          @click="remove(s.id, s.slug)"
-        >
-          delete
-        </button>
-      </li>
-      <li v-if="!store.list.length && !store.loading" class="text-gray-500">
-        No git services configured. Add one to start receiving webhooks.
-      </li>
-    </ul>
+    <div v-if="store.loading" class="text-muted">Loading…</div>
+    <div v-else-if="!store.list.length" class="card p-10 text-center text-faint">
+      No git services configured. Add one to start receiving webhooks.
+    </div>
+    <div v-else class="card overflow-x-auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Name</th>
+            <th>Slug</th>
+            <th>Base URL</th>
+            <th class="text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="s in store.list" :key="s.id">
+            <td><ProviderBadge :provider="s.kind" /></td>
+            <td>
+              <RouterLink :to="`/git_services/${s.id}`" class="font-medium text-ink hover:text-accent">
+                {{ s.display_name }}
+              </RouterLink>
+            </td>
+            <td class="font-mono text-xs text-muted">{{ s.slug }}</td>
+            <td class="truncate font-mono text-xs text-faint">{{ s.base_url }}</td>
+            <td class="text-right">
+              <button class="text-xs text-signal-danger hover:underline" @click="remove(s.id, s.slug)">
+                delete
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </template>

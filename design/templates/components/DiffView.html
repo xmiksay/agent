@@ -1,0 +1,10 @@
+<template>
+  <pre
+    class="text-xs font-mono bg-gray-900 text-gray-200 p-2 rounded max-h-[32rem] overflow-auto leading-snug"
+  ><span
+      v-for="(line, i) in lines"
+      :key="i"
+      :class="cls[line.kind]"
+      class="block px-1"
+    >{{ line.text || " " }}</span></pre>
+</template>

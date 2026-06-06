@@ -47,8 +47,8 @@ src/jobs/runner.rs                clone/fetch, write the backend's worktree
     │                             end push changes + post result via GitProvider
     │
     ├─ stdout events ──► src/jobs/hub.rs (LiveSessions): per-task broadcast +
-    │                    batch-persist to tasks.event_log; fan out over
-    │                    GET /ws/tasks/{id} ◄──► Operator (SPA) chat/stop/redefine
+    │                    batch-persist to the task_events table; fan out over
+    │                    one app-wide GET /ws ◄──► Operator (SPA) chat/stop/redefine
     │
     │ PreToolUse hook (Bash/AskUserQuestion)
     ▼
@@ -69,17 +69,18 @@ Operator (SPA)                    approves/denies via
 | `src/config.rs` | env → `Config` struct |
 | `src/webhook/gitlab.rs`, `src/webhook/github.rs` | per-provider HTTP handlers: HMAC verify, payload → `NormalizedEvent`, hand to `dispatch` |
 | `src/webhook/normalized.rs` | provider-agnostic event shape (`EventKind`) |
-| `src/webhook/dispatch.rs` | event → `TriggerReason`, dedupe, project upsert, task create |
+| `src/webhook/dispatch.rs` | event → `TriggerReason`, dedupe, project upsert, task create. A comment on an issue/MR with an existing agent is **delivered as a message** to that task (one agent/session per issue/MR), not a new task. Issue/MR close stops the branch's live agent before reclaiming the worktree |
 | `src/webhook/types.rs` | provider-specific payload structs |
 | `src/jobs/types.rs` | `TriggerReason`, `ClaudeOutput` |
 | `src/jobs/store.rs` | `TaskStore` — task CRUD, run loop, kill/continue/retry/push_message, branch_diff. **Over 500 lines — split before adding new methods.** |
-| `src/jobs/runner.rs` | `run_job` — spawns the agent backend as an interactive stream-json session, pumps operator messages into stdin, streams events to the hub, enforces token budget; at session end pushes commits + posts the result note |
-| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to `tasks.event_log`, and the `mpsc` back-channel to the running agent's stdin |
+| `src/jobs/runner.rs` | `run_job` — spawns the interactive stream-json session and runs the **turn loop**: per turn it takes a concurrency permit, writes one operator message to stdin, waits for that turn's `result`, releases the permit, finalizes, then idles (warm, holding no slot) until the next message or a graceful close |
+| `src/jobs/turn.rs` | `finalize_turn` — per-turn bookkeeping: persist the turn's result, push commits, and post a reply note "on demand" (only when commits landed or the turn errored) |
+| `src/jobs/hub.rs` | `LiveSessions` — per-task event hub: monotonic `seq`, `broadcast` fan-out to WS clients, batch-persist (every 100) to the `task_events` table, the `mpsc` back-channel to the agent's stdin, and `is_warm`/`send_to_agent`/`stop` for routing operator messages to a live session |
 | `src/jobs/prompt.rs` | `build_prompt` — per-trigger prompt text (split out of runner) |
 | `src/jobs/stream.rs` | `stream_into_entry` — pumps a child pipe into the live log + publishes each stdout event to the hub, sniffing session id / output tokens via the backend |
 | `src/agent/mod.rs` | `AgentBackend` trait + `WorktreeFile` — abstracts the coding-agent CLI (invocation, stdin message encoding, config/hook files, output parsing). Sync methods; the runner does the fs writes |
 | `src/agent/claude.rs` | `ClaudeCode` — the only backend today (hardcoded in `run_job`); drives `claude` as an interactive stream-json session and parses the `result` event. Unit-tested |
-| `src/ws/mod.rs` | `GET /ws/tasks/{id}` handler — token (`?token=`) checked in-handler; subscribes to the hub, streams `Envelope` frames, routes inbound chat/redefine/stop to the agent stdin |
+| `src/ws/mod.rs` | `GET /ws` — **one** process-wide socket per browser. In-band auth (the client's first frame is its token); subscribes to the hub's `all` stream and forwards every task's `Envelope` frames; routes inbound `{kind, task_id, …}` operator messages to the agent stdin; 30s keepalive ping |
 | `src/jobs/registry.rs` | `RunningTasks` — abort handles by task id |
 | `src/jobs/output_log.rs` | in-memory stdout/stderr ring — kept only for the final result parse + stderr error tail (no longer served over HTTP) |
 | `src/workspace/mod.rs` | filesystem layout: `<base>/<service_slug>/<project_slug>/<branch_slug>/` |
@@ -90,9 +91,10 @@ Operator (SPA)                    approves/denies via
 | `src/provider/registry.rs` | `ProviderRegistry` — per-service `Arc<dyn GitProvider>` cache, kept in sync with `git_services` table |
 | `src/provider/{gitlab,github}/` | provider impls: REST calls for posting notes / approving / reading comments |
 | `src/git_service/store.rs` | CRUD for the `git_services` table |
-| `src/project/store.rs` | projects + project_branches tables, allowed_operations config |
+| `src/project/store.rs` | projects + project_branches tables, allowed_operations + env_file config |
+| `src/project/env.rs` | renders a project's `env_file` (a minijinja template) against the task's runtime vars and parses the result into `(key, value)` pairs injected at spawn. Unit-tested |
 | `src/api/*.rs` | HTTP handlers under `/api/` — tasks, projects, git_services, auth_requests |
-| `src/auth/mod.rs` | `token_ok` — shared constant-time token check used by the bearer middleware (header) and the WS handler (query param) |
+| `src/auth/mod.rs` | `token_ok` — shared constant-time token check used by the bearer middleware (header) and the WS handler (first-frame token) |
 | `src/auth/middleware.rs` | bearer-token check for `/api/*` |
 | `src/auth/handlers.rs` | `/internal/authcheck` — loopback-only endpoint that the Claude Code PreToolUse hook calls |
 | `src/auth/store.rs` | `auth_requests` CRUD + status enum |
@@ -110,24 +112,24 @@ PostgreSQL via SeaORM. Migrations live in `migration/src/` and run automatically
 
 Tables (current set, see migration files for canonical schemas):
 
-- `tasks` — one row per agent run; `status` is one of `pending|running|completed|failed|killed`. `event_log` (jsonb) is the durable agent event stream, appended in batches of 100 by the live hub; `pending_message` carries a queued follow-up for the resume path
-
+- `tasks` — one row per agent run; `status` is one of `pending|running|completed|failed|killed`. `pending_message` carries a queued follow-up for the resume path
+- `task_events` — durable agent event stream; one row per event, PK `(task_id, seq)`, append-only, batch-inserted (100 at a time) by the live hub, cascade-deleted with the task
 - `task_results` — final cost / turns / tokens / result text; one-to-one with tasks
-- `projects` — discovered repos, per-project `allowed_operations` glob list
+- `projects` — discovered repos, per-project `allowed_operations` glob list and `env_file` (a `.env`-style minijinja template injected as env vars at agent spawn)
 - `project_branches` — branches the agent has touched, with `issue_iid` / `pr_iid` linkage and status
 - `auth_requests` — operator-approval items raised from the authcheck hook
 - `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret
 
 ### HTTP surface
 
-Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webhook/*`, `/health`, `/internal/authcheck`, and `/ws/*` are outside that middleware; the authcheck endpoint is additionally restricted to loopback callers, and the WS handler validates the token from its `?token=` query param in-handler.
+Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webhook/*`, `/health`, `/internal/authcheck`, and `/ws` are outside that middleware; the authcheck endpoint is additionally restricted to loopback callers, and the `/ws` handler authenticates in-band (the client's first frame carries the token), so it never lands in URLs/proxy logs.
 
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/webhook/gitlab/{slug}` | `X-Gitlab-Token` = service `webhook_secret` |
 | `POST` | `/webhook/github/{slug}` | `X-Hub-Signature-256` HMAC-SHA256 |
 | `POST` | `/internal/authcheck` | loopback only; called by the PreToolUse hook |
-| `GET` | `/ws/tasks/{id}` | WebSocket live stream; auth via `?token=`. Outbound `Envelope` frames (`event`/`auth_request`/`status`); inbound `{kind: chat\|redefine\|stop}` routed to the agent stdin |
+| `GET` | `/ws` | **Single app-wide** WebSocket live stream (multiplexes all tasks). In-band auth (first frame = token). Outbound `Envelope` frames (`task_id`/`event`\|`auth_request`\|`status`); inbound `{kind: chat\|redefine\|stop, task_id}` routed to the agent stdin |
 | `GET` | `/api/tasks` | optional `?status=` |
 | `POST` | `/api/tasks` | operator-driven dispatch: `{ project_id, trigger: TriggerReason }` → pending task (use when the webhook missed/was filtered) |
 | `GET` | `/api/tasks/stats` | time spent per `?group_by=project\|service\|branch\|trigger_type` within `?from=`/`?to=` (default last 30d). Running tasks counted as `now - started_at`. |
@@ -138,8 +140,8 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 | `POST` | `/api/tasks/{id}/continue` | resume via `claude -r <session_id>` |
 | `POST` | `/api/tasks/{id}/message` | queue a follow-up prompt for the resume path (used when the task is **not** live; live chat goes over the WS) |
 | `GET` | `/api/tasks/{id}/diff` | `git diff origin/<default_branch>` of the task's worktree (+ untracked listing) |
-| `GET` | `/api/tasks/{id}/events` | persisted agent events from `event_log` (array index = `seq`); seeds the SPA timeline before the WS streams live frames |
-| `GET` | `/api/projects` / `GET /api/projects/{id}` / `PUT /api/projects/{id}/config` / `GET /api/projects/{id}/branches` | |
+| `GET` | `/api/tasks/{id}/events` | persisted agent events from `task_events` ordered by `seq`; seeds the SPA timeline before the WS streams live frames |
+| `GET` | `/api/projects` / `GET /api/projects/{id}` / `PUT /api/projects/{id}/config` / `PUT /api/projects/{id}/env` / `GET /api/projects/{id}/branches` | `/env` sets the `.env` minijinja template |
 | `GET`/`POST` | `/api/git_services` | tokens and webhook secrets are write-only on GET |
 | `GET`/`PUT`/`DELETE` | `/api/git_services/{id}` | |
 | `GET` | `/api/auth_requests` | optional `?status=`, `?task_id=` |
@@ -158,15 +160,17 @@ $REPO_BASE_PATH/
         ├── <branch_slug>.lock           # advisory file lock per branch
         ├── <branch_slug>/               # one git worktree per branch
         │   ├── .git/
-        │   └── .claude/settings.local.json   # bypassPermissions + PreToolUse hook
+        │   └── .claude/settings.local.json   # permission mode "auto" + PreToolUse hook
         └── …
 ```
 
-`slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone or fetch+reset), writes `settings.local.json`, then runs `claude --print [--resume <sid>] --input-format stream-json --output-format stream-json --verbose --replay-user-messages`. The process is **long-lived**: the initial prompt and every operator message are written to its stdin as `{"type":"user",…}` lines; it stays `running` (one `result` event per turn) until the operator sends **stop** (the hub drops the stdin sender → EOF → graceful exit) or **pause** (SIGKILL). At session end the runner pushes commits and posts the result note.
+`slugify` lower-cases and replaces non-alphanumerics with `__`. Each task confirms the worktree exists (clone/fetch, preserving an already-checked-out branch), writes `settings.local.json`, then runs `claude --print [--resume <sid>] --input-format stream-json --output-format stream-json --verbose --replay-user-messages`.
 
-**Branch selection (a task never runs on the default branch).** `TaskStore::create_task` derives and persists `tasks.branch`: MR triggers reuse the MR's `source_branch`; an `Issue` trigger derives `<iid>-<slug(title)>` (e.g. `42-fix-login-button`); an `IssueComment` reuses the branch the original issue task recorded (`find_branch_for_issue`), falling back to bare `<iid>`. `workspace::git::clone_or_fetch(path, url, branch, default_branch)` checks out `origin/<branch>` if it exists remotely, otherwise creates the branch from `origin/<default_branch>` (`git checkout -f -B`); `push_changes` uses `git push -u origin HEAD` so a fresh branch gets its upstream. `run_job` hard-`bail!`s if the resolved branch equals the default branch.
+The process is **long-lived and turn-based**. The runner's turn loop, per turn: takes a `MAX_CONCURRENT_JOBS` permit (status → `running`), writes one operator message to stdin (the first turn uses the initial prompt), waits for that turn's `result`, **releases the permit** (status → `completed`), finalizes (push commits + reply-on-demand), then **idles warm** — the agent process stays alive but holds **no concurrency slot** (an idle agent is not a running agent). A new message (live via `hub.send_to_agent`, or a resume) wakes it into the next turn. The session ends on **stop** (hub drops the stdin sender → EOF → graceful exit), **pause** (SIGKILL), token-budget kill, or issue/MR close. `push_message` delivers to a warm agent first (`hub.is_warm`) and only resumes the session when there's no live agent — so a follow-up never spawns a second agent on the same branch.
 
-The spawned `claude` inherits `CLAUDE_TASK_ID`, `AGENT_PORT`, and a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services.
+**Branch selection (a task never runs on the default branch).** `TaskStore::create_task` derives and persists `tasks.branch`: MR triggers reuse the MR's `source_branch`; an `Issue` trigger derives `<iid>-<slug(title)>` (e.g. `42-fix-login-button`); an `IssueComment` reuses the branch the original issue task recorded (`find_branch_for_issue`), falling back to bare `<iid>`. **Comments delegate:** when a resumable task already exists for the issue/MR branch (`find_resumable_task_for_branch`), the dispatcher delivers the comment via `push_message` to that one task — continuing the same agent/session — instead of creating a fresh task; a new task is created only when there's no prior session. `workspace::git::clone_or_fetch(path, url, branch, default_branch)` clones on first use, fetches, then: if the worktree is **already on `branch`** it is left untouched (local commits + uncommitted work are preserved across runs — what makes resume-on-message safe); otherwise it checks out `origin/<branch>` if it exists remotely, else creates the branch from `origin/<default_branch>` (`git checkout -B`, no force-reset). `push_changes` uses `git push -u origin HEAD` so a fresh branch gets its upstream. `run_job` hard-`bail!`s if the resolved branch equals the default branch.
+
+The spawned `claude` inherits `CLAUDE_TASK_ID`, `AGENT_PORT`, and a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services. The project's `env_file` is rendered (minijinja, against runtime vars `branch`/`default_branch`/`url`/`project`/`service`/`task_id` — see `src/project/env.rs`) and applied **before** these reserved vars, so a project env can never clobber `CLAUDE_TASK_ID` or the PAT.
 
 ### How an operator approval works
 
@@ -187,7 +191,7 @@ Read by `src/config.rs::from_env`. Defaults in parentheses.
 | `DATABASE_URL` | required | Postgres DSN |
 | `REPO_BASE_PATH` | `/tmp/claude-jobs` | worktree base |
 | `LISTEN_ADDR` | `0.0.0.0:3000` | bind address |
-| `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size |
+| `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size — gates **actively-processing turns**, acquired/released per turn so idle warm agents hold no slot |
 | `TASK_TOKEN_BUDGET` | `1_000_000` | soft cap; runner kills `claude` when cumulative `output_tokens ≥ budget/2` and the operator can Resume |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*`; SPA prompts and stores in `localStorage` |
 | `RUST_LOG` | `agent=info` | `tracing-subscriber` filter |
