@@ -738,6 +738,26 @@ impl TaskStore {
             .context("failed to list tasks")
     }
 
+    /// Most recent task on this project+branch that captured a `session_id`, so
+    /// it can take a follow-up (delivered live to a warm agent, or via resume).
+    /// Lets a comment continue the same agent/session instead of spawning a fresh
+    /// one on the shared branch.
+    pub async fn find_resumable_task_for_branch(
+        &self,
+        project_id: Uuid,
+        branch: &str,
+    ) -> Result<Option<Uuid>> {
+        let row = tasks::Entity::find()
+            .filter(tasks::Column::ProjectId.eq(project_id))
+            .filter(tasks::Column::Branch.eq(branch))
+            .filter(tasks::Column::SessionId.is_not_null())
+            .order_by_desc(tasks::Column::CreatedAt)
+            .one(&self.db)
+            .await
+            .context("looking up resumable task for branch")?;
+        Ok(row.map(|t| t.id))
+    }
+
     /// Persisted agent event history from `task_events`, ordered by `seq`.
     pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<serde_json::Value>> {
         use crate::entity::task_events;

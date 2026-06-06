@@ -66,6 +66,22 @@ pub async fn dispatch(
         return Ok(vec![]);
     }
 
+    // A comment continues the issue/MR's existing agent: deliver it as a message
+    // to that task (live to a warm agent, else resume its session) instead of
+    // spawning a fresh, memory-less run on the shared branch. Falls back to a new
+    // task when there's no resumable one yet (e.g. the first interaction is a
+    // comment).
+    if let Some(task_id) = resumable_task_for_comment(state, project.id, &trigger).await? {
+        let comment = match &trigger {
+            TriggerReason::IssueComment { comment, .. }
+            | TriggerReason::MRComment { comment, .. } => comment.clone(),
+            _ => unreachable!("resumable_task_for_comment only matches comment triggers"),
+        };
+        state.task_store.push_message(task_id, comment).await?;
+        info!(%task_id, "delivered comment to existing issue/MR agent");
+        return Ok(vec![task_id]);
+    }
+
     let id = state
         .task_store
         .create_task(
@@ -80,6 +96,34 @@ pub async fn dispatch(
         .await?;
 
     Ok(vec![id])
+}
+
+/// For a comment trigger, the existing task on the issue/MR branch that can take
+/// the comment as a follow-up (has a `session_id`). `None` for non-comment
+/// triggers or when no such task exists yet.
+async fn resumable_task_for_comment(
+    state: &AppState,
+    project_id: Uuid,
+    trigger: &TriggerReason,
+) -> Result<Option<Uuid>> {
+    let branch = match trigger {
+        TriggerReason::MRComment { source_branch, .. } => source_branch.clone(),
+        TriggerReason::IssueComment { issue_iid, .. } => {
+            match state
+                .project_store
+                .find_branch_for_issue(project_id, *issue_iid as i64)
+                .await?
+            {
+                Some(b) => b.branch_name,
+                None => return Ok(None),
+            }
+        }
+        _ => return Ok(None),
+    };
+    state
+        .task_store
+        .find_resumable_task_for_branch(project_id, &branch)
+        .await
 }
 
 async fn release_for_issue(
@@ -97,6 +141,8 @@ async fn release_for_issue(
         debug!(issue_iid, "no checked-out branch bound to this issue, nothing to release");
         return Ok(());
     };
+    // Stop any live agent on this branch before reclaiming the worktree.
+    stop_branch_agent(state, project_id, &branch.branch_name).await;
     let _g = state
         .workspace
         .lock_branch(service_slug, project_slug, &branch.branch_slug)
@@ -129,6 +175,8 @@ async fn release_for_branch(
         debug!(branch = branch_name, "branch not tracked, nothing to release");
         return Ok(());
     };
+    // Stop any live agent on this branch before reclaiming the worktree.
+    stop_branch_agent(state, project_id, branch_name).await;
     let _g = state
         .workspace
         .lock_branch(service_slug, project_slug, &branch_slug)
@@ -146,6 +194,22 @@ async fn release_for_branch(
         .await?;
     info!(branch = branch_name, "released branch on PR close");
     Ok(())
+}
+
+/// Kill a live (running or warm-idle) agent bound to a branch so its worktree
+/// can be reclaimed. Best-effort: a missing/already-finished task is a no-op.
+async fn stop_branch_agent(state: &AppState, project_id: Uuid, branch_name: &str) {
+    if let Ok(Some(task_id)) = state
+        .task_store
+        .find_resumable_task_for_branch(project_id, branch_name)
+        .await
+    {
+        if let Err(e) = state.task_store.kill_task(task_id).await {
+            debug!(%task_id, error = %e, "no live agent to stop on close");
+        } else {
+            info!(%task_id, branch = branch_name, "stopped agent on issue/MR close");
+        }
+    }
 }
 
 fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReason> {
