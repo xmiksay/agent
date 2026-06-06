@@ -25,7 +25,7 @@ onMounted(() => store.refresh());
     <div v-else-if="!store.list.length" class="card p-10 text-center text-faint">
       No projects yet — they appear after the first webhook event.
     </div>
-    <div v-else class="card overflow-hidden">
+    <div v-else class="card overflow-x-auto">
       <table class="tbl">
         <thead>
           <tr>

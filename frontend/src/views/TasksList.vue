@@ -176,7 +176,7 @@ async function saveEdit(t: Task) {
     <NewTaskModal :open="newTaskOpen" @close="newTaskOpen = false" @created="onCreated" />
 
     <div v-if="store.loading" class="card px-4 py-10 text-center text-muted">Loading…</div>
-    <div v-else class="card overflow-hidden">
+    <div v-else class="card overflow-x-auto">
       <table class="tbl">
         <thead>
           <tr>

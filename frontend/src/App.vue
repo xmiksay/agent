@@ -82,16 +82,19 @@ const showGate = computed(() => session.validated === false);
           />
         </RouterLink>
       </nav>
-      <div class="flex items-center gap-2 border-t border-line px-4 py-3 font-mono text-[11px] text-faint">
-        <span class="led text-signal-ok" /> ~/projects/agent
-        <button
-          v-if="session.hasToken"
-          class="ml-auto text-faint hover:text-signal-danger"
-          title="Sign out (clears local token)"
-          @click="session.clear()"
-        >
-          sign out
-        </button>
+      <div class="space-y-2 border-t border-line px-4 py-3">
+        <Switcher compact />
+        <div class="flex items-center gap-2 font-mono text-[11px] text-faint">
+          <span class="led text-signal-ok" /> ~/projects/agent
+          <button
+            v-if="session.hasToken"
+            class="ml-auto text-faint hover:text-signal-danger"
+            title="Sign out (clears local token)"
+            @click="session.clear()"
+          >
+            sign out
+          </button>
+        </div>
       </div>
     </aside>
 
@@ -100,7 +103,7 @@ const showGate = computed(() => session.validated === false);
       v-else
       class="sticky top-0 z-30 hidden border-b border-line bg-canvas/80 backdrop-blur-md md:block"
     >
-      <div class="mx-auto flex max-w-6xl items-center gap-6 px-8 py-3">
+      <div class="flex w-full items-center gap-6 px-8 py-3">
         <div class="flex items-center gap-2.5">
           <Logo :size="28" />
           <span class="font-display text-lg font-bold tracking-tight">Agent</span>
@@ -122,6 +125,7 @@ const showGate = computed(() => session.validated === false);
           </RouterLink>
         </nav>
         <div class="ml-auto flex items-center gap-3">
+          <Switcher />
           <button
             v-if="session.hasToken"
             class="font-mono text-xs text-faint hover:text-signal-danger"
@@ -181,16 +185,16 @@ const showGate = computed(() => session.validated === false);
           >
             sign out
           </button>
+          <div class="border-t border-line px-3 pt-2.5">
+            <Switcher compact />
+          </div>
         </nav>
       </header>
 
-      <main class="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-8 sm:py-8">
+      <main class="w-full flex-1 px-4 py-6 sm:px-8 sm:py-8">
         <RouterView />
       </main>
     </div>
-
-    <!-- ===== Combined layout + theme switch ===== -->
-    <Switcher />
 
     <TokenGate v-if="showGate" />
   </div>
