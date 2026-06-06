@@ -8,6 +8,8 @@ use tokio::sync::{Mutex, Semaphore};
 use tracing::{info, error};
 use uuid::Uuid;
 
+use crate::auth::store::AuthStore;
+use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::entity::{task_results, tasks};
 use crate::jobs::hub::LiveSessions;
@@ -30,9 +32,12 @@ pub struct TaskStore {
     output_log: TaskOutputLog,
     running: RunningTasks,
     hub: LiveSessions,
+    auth_store: Arc<AuthStore>,
+    auth_waiter: AuthWaiter,
 }
 
 impl TaskStore {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: DatabaseConnection,
         config: Config,
@@ -42,6 +47,8 @@ impl TaskStore {
         output_log: TaskOutputLog,
         running: RunningTasks,
         hub: LiveSessions,
+        auth_store: Arc<AuthStore>,
+        auth_waiter: AuthWaiter,
     ) -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_jobs)),
@@ -54,6 +61,8 @@ impl TaskStore {
             output_log,
             running,
             hub,
+            auth_store,
+            auth_waiter,
         }
     }
 
@@ -616,6 +625,8 @@ impl TaskStore {
                 store.output_log.clone(),
                 store.hub.clone(),
                 store.clone(),
+                store.auth_store.clone(),
+                store.auth_waiter.clone(),
                 semaphore,
                 resume_session_id,
                 prompt_override,

@@ -18,7 +18,6 @@ use axum::http::StatusCode;
 use axum::middleware as axum_middleware;
 use axum::routing::{get, post, put};
 use axum::Router;
-use anyhow::Context;
 use migration::MigratorTrait;
 use sea_orm::Database;
 use tracing::info;
@@ -67,10 +66,6 @@ async fn main() -> anyhow::Result<()> {
 
     let project_store = Arc::new(ProjectStore::new(db.clone()));
     let workspace = Arc::new(Workspace::new(&config.repo_base_path));
-    workspace
-        .install_shared_hooks()
-        .await
-        .context("installing shared agent hooks")?;
     let auth_store = Arc::new(AuthStore::new(db.clone()));
     let auth_waiter = AuthWaiter::new();
     let output_log = TaskOutputLog::new();
@@ -85,6 +80,8 @@ async fn main() -> anyhow::Result<()> {
         output_log,
         running,
         hub,
+        auth_store.clone(),
+        auth_waiter.clone(),
     ));
 
     // Any task left running/pending in the DB was orphaned by a previous
@@ -180,7 +177,6 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/webhook/gitlab/{slug}", post(webhook::gitlab::handle))
         .route("/webhook/github/{slug}", post(webhook::github::handle))
-        .route("/internal/authcheck", post(auth::handlers::authcheck))
         // Single app-wide live stream. Auth is in-band (the client's first frame
         // is its token), so it sits outside the `/api/*` bearer middleware.
         .route("/ws", get(ws::global_stream))

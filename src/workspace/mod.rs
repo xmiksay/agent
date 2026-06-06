@@ -43,45 +43,6 @@ impl Workspace {
         self.project_root(service_slug, project_slug).join(branch_slug)
     }
 
-    /// Stable path for hooks shared across every project worktree. Lives
-    /// outside any project dir so it is never confused with a service slug
-    /// (the leading dot blocks both git and provider-slug collisions).
-    pub fn shared_hooks_dir(&self) -> PathBuf {
-        self.base.join(".agent-hooks")
-    }
-
-    pub fn authcheck_hook_path(&self) -> PathBuf {
-        self.shared_hooks_dir().join("authcheck.sh")
-    }
-
-    /// Materialise the bundled authcheck hook script under
-    /// `<repo_base>/.agent-hooks/`. Idempotent; rewrites on every startup so
-    /// agent upgrades take effect even when the workspace base persists.
-    pub async fn install_shared_hooks(&self) -> Result<()> {
-        const AUTHCHECK_SH: &str =
-            include_str!("../../defaults/.claude/hooks/authcheck.sh");
-
-        let dir = self.shared_hooks_dir();
-        tokio::fs::create_dir_all(&dir)
-            .await
-            .with_context(|| format!("creating {}", dir.display()))?;
-
-        let path = self.authcheck_hook_path();
-        tokio::fs::write(&path, AUTHCHECK_SH)
-            .await
-            .with_context(|| format!("writing {}", path.display()))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let meta = tokio::fs::metadata(&path).await?;
-            let mut perms = meta.permissions();
-            perms.set_mode(0o755);
-            tokio::fs::set_permissions(&path, perms).await?;
-        }
-        Ok(())
-    }
-
     /// Acquire both the in-process mutex and the cross-process advisory lock
     /// guarding mutations of a single branch worktree. Scoped per branch (not
     /// per project) so tasks on different branches of the same project — each

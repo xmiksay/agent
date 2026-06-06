@@ -4,7 +4,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::agent::AgentBackend;
+use crate::agent::{AgentBackend, PermissionRequest};
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::output_log::LiveEntry;
 
@@ -26,6 +26,11 @@ pub enum Stream {
 /// backend, and publishing each parsed event to the live hub for WebSocket
 /// fan-out + persistence. The session id and budget signals are sent on their
 /// oneshots the moment they're seen.
+///
+/// `perm_tx` (stdout only) receives any `can_use_tool` control request parsed
+/// off the stream; those lines are internal plumbing and are NOT published as
+/// timeline events (the operator sees them via the auth_request side-channel).
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_into_entry<R>(
     reader: R,
     entry: LiveEntry,
@@ -38,6 +43,7 @@ pub async fn stream_into_entry<R>(
     // Fires once per turn the moment a `result` event is seen, so the runner's
     // turn loop knows the current turn finished (and the agent is now idle).
     result_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    perm_tx: Option<tokio::sync::mpsc::Sender<PermissionRequest>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -56,6 +62,15 @@ pub async fn stream_into_entry<R>(
                         Stream::Stdout => guard.stdout.push_str(&chunk),
                         Stream::Stderr => guard.stderr.push_str(&chunk),
                     }
+                }
+                // A `can_use_tool` control request is internal plumbing: route it
+                // to the permission handler and skip publishing it as a timeline
+                // event. Session-id/token sniffing below is irrelevant for it.
+                if let Some(tx) = perm_tx.as_ref()
+                    && let Some(req) = backend.parse_permission_request(chunk.trim())
+                {
+                    let _ = tx.send(req).await;
+                    continue;
                 }
                 // Each stdout line is one agent event — fan it out live and
                 // persist it. stderr is operational noise; it stays out of the
