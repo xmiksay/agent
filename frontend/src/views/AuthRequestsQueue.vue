@@ -1,31 +1,40 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
-import { useAuthRequestsStore } from "../stores/authRequests";
+import { computed, onMounted } from "vue";
+import { useStreamStore } from "../stores/stream";
+import { authApi } from "../api/auth";
 import StatusPill from "../components/StatusPill.vue";
 import AuthApprovalForm from "../components/AuthApprovalForm.vue";
+import type { AuthRequest } from "../types/api";
 
-const store = useAuthRequestsStore();
-let timer: number | null = null;
+// Approvals stream in live over the single app-wide socket (the same store that
+// powers the nav badge). Seed once from REST to cover any raised before this
+// client connected — no polling.
+const stream = useStreamStore();
 
-async function reload() {
-  await store.refresh("pending");
+onMounted(async () => {
+  try {
+    stream.seedApprovals(await authApi.list({ status: "pending" }));
+  } catch {
+    /* ignore — list just stays as whatever the socket has delivered */
+  }
+});
+
+const pending = computed<AuthRequest[]>(() =>
+  [...stream.approvals.values()]
+    .filter((a) => a.status === "pending")
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+);
+
+function onResolved(r: AuthRequest) {
+  stream.dropApproval(r.id);
 }
-
-onMounted(() => {
-  reload();
-  timer = window.setInterval(reload, 3000);
-});
-
-onUnmounted(() => {
-  if (timer !== null) window.clearInterval(timer);
-});
 </script>
 
 <template>
   <section>
     <h1 class="text-2xl font-semibold mb-4">Pending operator approvals</h1>
     <ul class="space-y-3">
-      <li v-for="r in store.list" :key="r.id" class="bg-white rounded shadow-sm p-4 space-y-2">
+      <li v-for="r in pending" :key="r.id" class="bg-white rounded shadow-sm p-4 space-y-2">
         <div class="flex items-center gap-2 text-xs text-gray-500">
           <span class="font-mono">{{ r.id.slice(0, 8) }}</span>
           <StatusPill :status="r.status" />
@@ -34,9 +43,9 @@ onUnmounted(() => {
         </div>
         <pre class="bg-ink-50 rounded text-xs p-2 whitespace-pre-wrap">{{ r.requested_op }}</pre>
         <p class="text-sm text-gray-700">{{ r.prompt_to_operator }}</p>
-        <AuthApprovalForm :item="r" compact @resolved="reload" />
+        <AuthApprovalForm :item="r" compact @resolved="onResolved" />
       </li>
-      <li v-if="!store.list.length" class="text-gray-500 text-sm">No pending requests.</li>
+      <li v-if="!pending.length" class="text-gray-500 text-sm">No pending requests.</li>
     </ul>
   </section>
 </template>
