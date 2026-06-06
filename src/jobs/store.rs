@@ -656,6 +656,15 @@ impl TaskStore {
             task.started_at = Set(Some(Utc::now().into()));
         }
         task.update(&self.db).await?;
+        // Push the turn transition to live subscribers so the SPA reflects
+        // running↔completed without polling.
+        self.hub
+            .publish_aux(
+                task_id,
+                crate::jobs::hub::EnvelopeKind::Status,
+                serde_json::json!({ "status": status }),
+            )
+            .await;
         Ok(())
     }
 

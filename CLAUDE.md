@@ -48,7 +48,7 @@ src/jobs/runner.rs                clone/fetch, write the backend's worktree
     │
     ├─ stdout events ──► src/jobs/hub.rs (LiveSessions): per-task broadcast +
     │                    batch-persist to the task_events table; fan out over
-    │                    GET /ws/tasks/{id} ◄──► Operator (SPA) chat/stop/redefine
+    │                    one app-wide GET /ws ◄──► Operator (SPA) chat/stop/redefine
     │
     │ PreToolUse hook (Bash/AskUserQuestion)
     ▼
@@ -80,7 +80,7 @@ Operator (SPA)                    approves/denies via
 | `src/jobs/stream.rs` | `stream_into_entry` — pumps a child pipe into the live log + publishes each stdout event to the hub, sniffing session id / output tokens via the backend |
 | `src/agent/mod.rs` | `AgentBackend` trait + `WorktreeFile` — abstracts the coding-agent CLI (invocation, stdin message encoding, config/hook files, output parsing). Sync methods; the runner does the fs writes |
 | `src/agent/claude.rs` | `ClaudeCode` — the only backend today (hardcoded in `run_job`); drives `claude` as an interactive stream-json session and parses the `result` event. Unit-tested |
-| `src/ws/mod.rs` | `GET /ws/tasks/{id}` handler — token (`?token=`) checked in-handler; subscribes to the hub, streams `Envelope` frames, routes inbound chat/redefine/stop to the agent stdin |
+| `src/ws/mod.rs` | `GET /ws` — **one** process-wide socket per browser. In-band auth (the client's first frame is its token); subscribes to the hub's `all` stream and forwards every task's `Envelope` frames; routes inbound `{kind, task_id, …}` operator messages to the agent stdin; 30s keepalive ping |
 | `src/jobs/registry.rs` | `RunningTasks` — abort handles by task id |
 | `src/jobs/output_log.rs` | in-memory stdout/stderr ring — kept only for the final result parse + stderr error tail (no longer served over HTTP) |
 | `src/workspace/mod.rs` | filesystem layout: `<base>/<service_slug>/<project_slug>/<branch_slug>/` |
@@ -93,7 +93,7 @@ Operator (SPA)                    approves/denies via
 | `src/git_service/store.rs` | CRUD for the `git_services` table |
 | `src/project/store.rs` | projects + project_branches tables, allowed_operations config |
 | `src/api/*.rs` | HTTP handlers under `/api/` — tasks, projects, git_services, auth_requests |
-| `src/auth/mod.rs` | `token_ok` — shared constant-time token check used by the bearer middleware (header) and the WS handler (query param) |
+| `src/auth/mod.rs` | `token_ok` — shared constant-time token check used by the bearer middleware (header) and the WS handler (first-frame token) |
 | `src/auth/middleware.rs` | bearer-token check for `/api/*` |
 | `src/auth/handlers.rs` | `/internal/authcheck` — loopback-only endpoint that the Claude Code PreToolUse hook calls |
 | `src/auth/store.rs` | `auth_requests` CRUD + status enum |
@@ -121,14 +121,14 @@ Tables (current set, see migration files for canonical schemas):
 
 ### HTTP surface
 
-Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webhook/*`, `/health`, `/internal/authcheck`, and `/ws/*` are outside that middleware; the authcheck endpoint is additionally restricted to loopback callers, and the WS handler validates the token from its `?token=` query param in-handler.
+Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webhook/*`, `/health`, `/internal/authcheck`, and `/ws` are outside that middleware; the authcheck endpoint is additionally restricted to loopback callers, and the `/ws` handler authenticates in-band (the client's first frame carries the token), so it never lands in URLs/proxy logs.
 
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/webhook/gitlab/{slug}` | `X-Gitlab-Token` = service `webhook_secret` |
 | `POST` | `/webhook/github/{slug}` | `X-Hub-Signature-256` HMAC-SHA256 |
 | `POST` | `/internal/authcheck` | loopback only; called by the PreToolUse hook |
-| `GET` | `/ws/tasks/{id}` | WebSocket live stream; auth via `?token=`. Outbound `Envelope` frames (`event`/`auth_request`/`status`); inbound `{kind: chat\|redefine\|stop}` routed to the agent stdin |
+| `GET` | `/ws` | **Single app-wide** WebSocket live stream (multiplexes all tasks). In-band auth (first frame = token). Outbound `Envelope` frames (`task_id`/`event`\|`auth_request`\|`status`); inbound `{kind: chat\|redefine\|stop, task_id}` routed to the agent stdin |
 | `GET` | `/api/tasks` | optional `?status=` |
 | `POST` | `/api/tasks` | operator-driven dispatch: `{ project_id, trigger: TriggerReason }` → pending task (use when the webhook missed/was filtered) |
 | `GET` | `/api/tasks/stats` | time spent per `?group_by=project\|service\|branch\|trigger_type` within `?from=`/`?to=` (default last 30d). Running tasks counted as `now - started_at`. |

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 import { RouterLink, RouterView } from "vue-router";
 import { useSessionStore } from "./stores/session";
+import { useStreamStore } from "./stores/stream";
 import { probeAuth } from "./api/client";
 import TokenGate from "./components/TokenGate.vue";
 
 const session = useSessionStore();
+const stream = useStreamStore();
 
 onMounted(async () => {
   if (session.hasToken && session.validated === null) {
@@ -20,6 +22,17 @@ onMounted(async () => {
   }
 });
 
+// The whole app shares one WebSocket. Open it once the token is validated (or
+// no-auth mode is confirmed); tear it down if the token becomes invalid.
+watch(
+  () => session.validated,
+  (v) => (v === true ? stream.start() : stream.stop()),
+  { immediate: true },
+);
+
+// Highlight the Auth queue tab whenever an approval is pending anywhere.
+const hasPendingApprovals = computed(() => stream.approvals.size > 0);
+
 const showGate = computed(() => session.validated === false);
 </script>
 
@@ -32,7 +45,18 @@ const showGate = computed(() => session.validated === false);
           <RouterLink to="/" class="hover:text-blue-700">Tasks</RouterLink>
           <RouterLink to="/projects" class="hover:text-blue-700">Projects</RouterLink>
           <RouterLink to="/git_services" class="hover:text-blue-700">Services</RouterLink>
-          <RouterLink to="/auth_requests" class="hover:text-blue-700">Auth queue</RouterLink>
+          <RouterLink
+            to="/auth_requests"
+            class="hover:text-blue-700 inline-flex items-center gap-1.5"
+            :class="hasPendingApprovals ? 'text-amber-600 font-medium' : ''"
+          >
+            Auth queue
+            <span
+              v-if="hasPendingApprovals"
+              class="w-1.5 h-1.5 rounded-full bg-amber-500"
+              title="Pending approvals"
+            />
+          </RouterLink>
           <RouterLink to="/stats" class="hover:text-blue-700">Stats</RouterLink>
         </nav>
         <button

@@ -102,7 +102,7 @@ watch(pendingApprovals, (p) => {
           {{ busy === "continue" ? "Resuming…" : "Resume" }}
         </button>
         <button
-          v-if="isRunning"
+          v-if="wsConnected"
           class="rounded bg-amber-600 text-white px-3 py-1.5 text-sm hover:bg-amber-700"
           title="Graceful stop: the agent finishes the current turn, then wraps up"
           @click="stopAgent"
@@ -218,14 +218,14 @@ watch(pendingApprovals, (p) => {
       </ul>
     </Accordion>
 
-    <!-- Chat with the agent — live over the socket when running, queued otherwise. -->
+    <!-- Chat with the agent — live over the socket when warm, queued otherwise. -->
     <section v-if="canChat" class="bg-white p-4 rounded shadow-sm space-y-2">
       <div class="flex items-center gap-2">
         <h2 class="font-medium text-sm">Chat</h2>
         <span class="text-xs text-gray-500">
-          {{ isRunning && wsConnected
-            ? "delivered live to the running agent"
-            : "queued — delivered on the next resume" }}
+          {{ wsConnected
+            ? "delivered live to the agent"
+            : "queued — delivered when the session resumes" }}
         </span>
       </div>
       <textarea

@@ -21,6 +21,9 @@ pub struct TaskDetail {
     /// Absolute path to this task's git worktree on the agent host.
     /// `None` if the task's git_service can no longer be resolved.
     pub work_dir: Option<String>,
+    /// True when an agent process is attached and warm (idle between turns or
+    /// actively running) — the SPA keeps its WebSocket open and chats live.
+    pub live: bool,
 }
 
 pub async fn list_tasks(
@@ -69,7 +72,8 @@ pub async fn get_task(
         None => None,
     };
 
-    Ok(Json(TaskDetail { task, result, work_dir }))
+    let live = state.task_store.hub().is_warm(id).await;
+    Ok(Json(TaskDetail { task, result, work_dir, live }))
 }
 
 pub async fn confirm_task(
