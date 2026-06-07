@@ -4,6 +4,7 @@ import { useTasksStore } from "../stores/tasks";
 import { useStreamStore } from "../stores/stream";
 import { authApi } from "../api/auth";
 import { tasksApi } from "../api/tasks";
+import { extractTaskNotifications } from "./useClaudeStream";
 import type { AuthRequest } from "../types/api";
 
 /**
@@ -33,6 +34,14 @@ export function useTaskDetail(idRef: Ref<string>) {
   });
   const eventCount = computed(() => stream.eventsFor(idRef.value)?.size ?? 0);
   const hasEvents = computed(() => eventCount.value > 0);
+
+  // Background-task completions, lifted out of the timeline into the Outline.
+  const taskNotifications = computed(() => {
+    const m = stream.eventsFor(idRef.value);
+    if (!m) return [];
+    const ordered = [...m.keys()].sort((a, b) => a - b).map((k) => m.get(k));
+    return extractTaskNotifications(ordered);
+  });
 
   // Cumulative output tokens spent this run, summed from each event's usage —
   // mirrors the backend's per-chunk accounting (src/jobs/stream.rs). Thinking
@@ -260,6 +269,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     eventText,
     eventCount,
     hasEvents,
+    taskNotifications,
     tokensSpent,
     wsConnected,
     isLive,
