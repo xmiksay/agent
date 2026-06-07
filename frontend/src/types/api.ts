@@ -80,6 +80,7 @@ export interface GitServiceView {
   created_at: string;
   updated_at: string;
   webhook_path: string;
+  autofire: boolean;
 }
 
 export interface NewGitService {
@@ -90,6 +91,7 @@ export interface NewGitService {
   token: string;
   webhook_secret: string;
   bot_username: string;
+  autofire: boolean;
 }
 
 export interface UpdateGitService {
@@ -98,6 +100,7 @@ export interface UpdateGitService {
   token?: string;
   webhook_secret?: string;
   bot_username?: string;
+  autofire?: boolean;
 }
 
 export interface BranchEntry {

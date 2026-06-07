@@ -17,6 +17,7 @@ pub struct GitServiceView {
     pub display_name: String,
     pub base_url: String,
     pub bot_username: String,
+    pub autofire: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Webhook URL operators paste into GitLab/GitHub. Built from request host.
@@ -34,6 +35,7 @@ impl GitServiceView {
             display_name: svc.display_name,
             base_url: svc.base_url,
             bot_username: svc.bot_username,
+            autofire: svc.autofire,
             created_at: svc.created_at,
             updated_at: svc.updated_at,
             webhook_path,

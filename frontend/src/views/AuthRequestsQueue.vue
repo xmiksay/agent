@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useStreamStore } from "../stores/stream";
+import { useTasksStore } from "../stores/tasks";
 import { authApi } from "../api/auth";
 import StatusPill from "../components/StatusPill.vue";
 import AuthApprovalForm from "../components/AuthApprovalForm.vue";
-import type { AuthRequest } from "../types/api";
+import type { AuthRequest, Task } from "../types/api";
 
 // Approvals stream in live over the single app-wide socket (the same store that
 // powers the nav badge). Seed once from REST to cover any raised before this
 // client connected — no polling.
 const stream = useStreamStore();
+const tasks = useTasksStore();
 
 onMounted(async () => {
   try {
@@ -17,7 +19,25 @@ onMounted(async () => {
   } catch {
     /* ignore — list just stays as whatever the socket has delivered */
   }
+  // Task context (project / trigger / origin link) for each pending approval.
+  tasks.refresh().catch(() => {
+    /* ignore — approvals still render without task context */
+  });
 });
+
+const taskById = computed(() => {
+  const m = new Map<string, Task>();
+  for (const t of tasks.tasks) m.set(t.id, t);
+  return m;
+});
+
+// trigger_data is a serialized TriggerReason; every variant carries `url`.
+function triggerUrl(t: Task): string | null {
+  const d = t.trigger_data;
+  if (!d || typeof d !== "object") return null;
+  const u = (d as Record<string, unknown>).url;
+  return typeof u === "string" && u.length > 0 ? u : null;
+}
 
 const pending = computed<AuthRequest[]>(() =>
   [...stream.approvals.values()]
@@ -51,6 +71,24 @@ function onResolved(r: AuthRequest) {
           <StatusPill :status="r.status" />
           <span class="font-mono">{{ new Date(r.created_at).toLocaleTimeString() }}</span>
           <RouterLink :to="`/tasks/${r.task_id}`" class="ml-auto">task</RouterLink>
+        </div>
+
+        <div
+          v-if="taskById.get(r.task_id)"
+          class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+        >
+          <span class="font-medium text-ink">{{ taskById.get(r.task_id)!.project_path }}</span>
+          <a
+            v-if="triggerUrl(taskById.get(r.task_id)!)"
+            :href="triggerUrl(taskById.get(r.task_id)!) ?? undefined"
+            target="_blank"
+            rel="noopener"
+            class="text-accent hover:underline"
+            :title="triggerUrl(taskById.get(r.task_id)!) ?? ''"
+          >
+            {{ taskById.get(r.task_id)!.trigger_type }} ↗
+          </a>
+          <span v-else class="text-muted">{{ taskById.get(r.task_id)!.trigger_type }}</span>
         </div>
         <pre class="whitespace-pre-wrap rounded-md border border-line bg-canvas px-3 py-2 font-mono text-xs text-ink">{{ r.requested_op }}</pre>
         <p class="text-sm text-muted">{{ r.prompt_to_operator }}</p>

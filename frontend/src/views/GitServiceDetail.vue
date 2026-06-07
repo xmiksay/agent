@@ -25,6 +25,7 @@ async function reload() {
       display_name: store.detail.display_name,
       base_url: store.detail.base_url,
       bot_username: store.detail.bot_username,
+      autofire: store.detail.autofire,
     };
     tokenDraft.value = "";
     webhookSecretDraft.value = "";
@@ -145,6 +146,15 @@ function extractMessage(e: unknown): string {
             autocomplete="new-password"
             class="input font-mono"
           />
+        </div>
+        <div class="col-span-2">
+          <label class="flex items-center gap-2">
+            <input v-model="draft.autofire" type="checkbox" class="h-4 w-4" />
+            <span class="text-sm text-ink">Autofire</span>
+          </label>
+          <p class="mt-1 text-xs text-muted">
+            Auto-confirms and runs new tasks from this service immediately, instead of leaving them pending.
+          </p>
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
 import StatusPill from "../components/StatusPill.vue";
@@ -40,6 +40,48 @@ function triggerUrl(t: Task): string | null {
   const u = (d as Record<string, unknown>).url;
   return typeof u === "string" && u.length > 0 ? u : null;
 }
+
+// --- Client-side column sort -------------------------------------------------
+type SortKey = "created" | "project" | "branch" | "trigger" | "status" | "spent";
+const sortKey = ref<SortKey>("created");
+const sortAsc = ref(false); // default: newest first
+
+function sortBy(key: SortKey) {
+  if (sortKey.value === key) {
+    sortAsc.value = !sortAsc.value;
+  } else {
+    sortKey.value = key;
+    sortAsc.value = true;
+  }
+}
+
+function sortValue(t: Task, key: SortKey): string | number {
+  switch (key) {
+    case "created":
+      return new Date(t.created_at).getTime();
+    case "project":
+      return t.project_path ?? "";
+    case "branch":
+      return t.branch ?? "";
+    case "trigger":
+      return t.trigger_type ?? "";
+    case "status":
+      return t.status ?? "";
+    case "spent":
+      return taskSpentSecs(t, now.value);
+  }
+}
+
+const sortedTasks = computed(() => {
+  const dir = sortAsc.value ? 1 : -1;
+  return [...store.tasks].sort((a, b) => {
+    const av = sortValue(a, sortKey.value);
+    const bv = sortValue(b, sortKey.value);
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
+  });
+});
 
 async function onCreated(id: string) {
   newTaskOpen.value = false;
@@ -180,20 +222,32 @@ async function saveEdit(t: Task) {
       <table class="tbl">
         <thead>
           <tr>
-            <th>Created</th>
+            <th class="cursor-pointer select-none" @click="sortBy('created')">
+              Created<span v-if="sortKey === 'created'"> {{ sortAsc ? "▲" : "▼" }}</span>
+            </th>
             <th>Provider</th>
-            <th>Project</th>
-            <th>Branch</th>
-            <th>Trigger</th>
-            <th>Status</th>
-            <th class="text-right">Spent</th>
+            <th class="cursor-pointer select-none" @click="sortBy('project')">
+              Project<span v-if="sortKey === 'project'"> {{ sortAsc ? "▲" : "▼" }}</span>
+            </th>
+            <th class="cursor-pointer select-none" @click="sortBy('branch')">
+              Branch<span v-if="sortKey === 'branch'"> {{ sortAsc ? "▲" : "▼" }}</span>
+            </th>
+            <th class="cursor-pointer select-none" @click="sortBy('trigger')">
+              Trigger<span v-if="sortKey === 'trigger'"> {{ sortAsc ? "▲" : "▼" }}</span>
+            </th>
+            <th class="cursor-pointer select-none" @click="sortBy('status')">
+              Status<span v-if="sortKey === 'status'"> {{ sortAsc ? "▲" : "▼" }}</span>
+            </th>
+            <th class="cursor-pointer select-none text-right" @click="sortBy('spent')">
+              Spent<span v-if="sortKey === 'spent'"> {{ sortAsc ? "▲" : "▼" }}</span>
+            </th>
             <th class="text-right">PID</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           <tr
-            v-for="t in store.tasks"
+            v-for="t in sortedTasks"
             :key="t.id"
             class="cursor-pointer"
             @click="openTask(t)"

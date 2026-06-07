@@ -95,6 +95,14 @@ pub async fn dispatch(
         )
         .await?;
 
+    // Autofire services skip the manual confirm step: start the task immediately.
+    // A failed confirm must not fail dispatch — the task stays pending for a retry.
+    if service.autofire
+        && let Err(e) = state.task_store.confirm_task(id).await
+    {
+        warn!(%id, error = %e, "autofire confirm failed; leaving task pending");
+    }
+
     Ok(vec![id])
 }
 

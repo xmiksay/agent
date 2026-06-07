@@ -119,7 +119,7 @@ Tables (current set, see migration files for canonical schemas):
 - `projects` — discovered repos, per-project `allowed_operations` glob list and `env_file` (a `.env`-style minijinja template injected as env vars at agent spawn)
 - `project_branches` — branches the agent has touched, with `issue_iid` / `pr_iid` linkage and status
 - `auth_requests` — operator-approval items raised by the in-process permission handler
-- `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret
+- `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret, `autofire` (when true, a newly-created task from this service's webhook is auto-confirmed — started running immediately instead of left pending for a manual confirm)
 
 ### HTTP surface
 
