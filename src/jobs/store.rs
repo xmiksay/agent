@@ -13,7 +13,6 @@ use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::entity::{task_results, tasks};
 use crate::jobs::hub::LiveSessions;
-use crate::jobs::output_log::TaskOutputLog;
 use crate::jobs::registry::RunningTasks;
 use crate::jobs::runner::run_job;
 use crate::jobs::types::{ClaudeOutput, TriggerReason};
@@ -29,7 +28,6 @@ pub struct TaskStore {
     providers: ProviderRegistry,
     project_store: Arc<ProjectStore>,
     workspace: Arc<Workspace>,
-    output_log: TaskOutputLog,
     running: RunningTasks,
     hub: LiveSessions,
     auth_store: Arc<AuthStore>,
@@ -44,7 +42,6 @@ impl TaskStore {
         providers: ProviderRegistry,
         project_store: Arc<ProjectStore>,
         workspace: Arc<Workspace>,
-        output_log: TaskOutputLog,
         running: RunningTasks,
         hub: LiveSessions,
         auth_store: Arc<AuthStore>,
@@ -58,16 +55,11 @@ impl TaskStore {
             providers,
             project_store,
             workspace,
-            output_log,
             running,
             hub,
             auth_store,
             auth_waiter,
         }
-    }
-
-    pub fn output_log(&self) -> &TaskOutputLog {
-        &self.output_log
     }
 
     pub fn hub(&self) -> &LiveSessions {
@@ -622,7 +614,6 @@ impl TaskStore {
                 provider,
                 store.workspace.clone(),
                 store.project_store.clone(),
-                store.output_log.clone(),
                 store.hub.clone(),
                 store.clone(),
                 store.auth_store.clone(),

@@ -27,7 +27,6 @@ use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::git_service::GitServiceStore;
 use crate::jobs::hub::LiveSessions;
-use crate::jobs::output_log::TaskOutputLog;
 use crate::jobs::registry::RunningTasks;
 use crate::jobs::store::TaskStore;
 use crate::project::ProjectStore;
@@ -68,7 +67,6 @@ async fn main() -> anyhow::Result<()> {
     let workspace = Arc::new(Workspace::new(&config.repo_base_path));
     let auth_store = Arc::new(AuthStore::new(db.clone()));
     let auth_waiter = AuthWaiter::new();
-    let output_log = TaskOutputLog::new();
     let running = RunningTasks::new();
     let hub = LiveSessions::new(db.clone());
     let task_store = Arc::new(TaskStore::new(
@@ -77,7 +75,6 @@ async fn main() -> anyhow::Result<()> {
         providers.clone(),
         project_store.clone(),
         workspace.clone(),
-        output_log,
         running,
         hub,
         auth_store.clone(),

@@ -1,5 +1,4 @@
 pub mod hub;
-pub mod output_log;
 pub mod permission;
 pub mod prompt;
 pub mod registry;

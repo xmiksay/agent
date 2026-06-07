@@ -6,43 +6,37 @@ use uuid::Uuid;
 
 use crate::agent::{AgentBackend, PermissionRequest};
 use crate::jobs::hub::LiveSessions;
-use crate::jobs::output_log::LiveEntry;
-
-pub fn tail(s: &str, n: usize) -> &str {
-    if s.len() <= n {
-        s
-    } else {
-        &s[s.len() - n..]
-    }
-}
 
 pub enum Stream {
     Stdout,
     Stderr,
 }
 
-/// Pump a child process pipe into the live output entry, appending each line
-/// and (for stdout) sniffing the session id and output-token usage via the
-/// backend, and publishing each parsed event to the live hub for WebSocket
-/// fan-out + persistence. The session id and budget signals are sent on their
-/// oneshots the moment they're seen.
+/// Pump a child process pipe. For stdout: parse each line into an agent event,
+/// publish it to the live hub for WebSocket fan-out + persistence, sniff the
+/// session id and output-token usage via the backend, route `can_use_tool`
+/// control requests to the permission handler, and signal the per-turn `result`.
+/// For stderr: drain to EOF and log each non-empty line at debug level.
+///
+/// The session id and budget signals are sent on their oneshots the moment
+/// they're seen.
 ///
 /// `perm_tx` (stdout only) receives any `can_use_tool` control request parsed
 /// off the stream; those lines are internal plumbing and are NOT published as
 /// timeline events (the operator sees them via the auth_request side-channel).
 #[allow(clippy::too_many_arguments)]
-pub async fn stream_into_entry<R>(
+pub async fn pump_stream<R>(
     reader: R,
-    entry: LiveEntry,
     which: Stream,
     backend: Arc<dyn AgentBackend>,
     hub: LiveSessions,
     task_id: Uuid,
     mut session_tx: Option<tokio::sync::oneshot::Sender<String>>,
     mut budget: Option<(u64, tokio::sync::oneshot::Sender<u64>)>,
-    // Fires once per turn the moment a `result` event is seen, so the runner's
-    // turn loop knows the current turn finished (and the agent is now idle).
-    result_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    // Carries the `result` event the moment it's seen, so the runner's turn loop
+    // knows the current turn finished (and the agent is now idle) and can
+    // finalize from it.
+    result_tx: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     perm_tx: Option<tokio::sync::mpsc::Sender<PermissionRequest>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
@@ -56,12 +50,14 @@ pub async fn stream_into_entry<R>(
             Ok(0) => break, // EOF
             Ok(_) => {
                 let chunk = String::from_utf8_lossy(&buf).into_owned();
-                {
-                    let mut guard = entry.lock().await;
-                    match which {
-                        Stream::Stdout => guard.stdout.push_str(&chunk),
-                        Stream::Stderr => guard.stderr.push_str(&chunk),
+                // stderr is operational noise: it never enters the event stream.
+                // Drain it so the pipe doesn't block, and log it for diagnostics.
+                if matches!(which, Stream::Stderr) {
+                    let line = chunk.trim();
+                    if !line.is_empty() {
+                        tracing::debug!(%task_id, line, "agent stderr");
                     }
+                    continue;
                 }
                 // A `can_use_tool` control request is internal plumbing: route it
                 // to the permission handler and skip publishing it as a timeline
@@ -73,18 +69,16 @@ pub async fn stream_into_entry<R>(
                     continue;
                 }
                 // Each stdout line is one agent event — fan it out live and
-                // persist it. stderr is operational noise; it stays out of the
-                // event stream (kept only in the output log for the error tail).
-                if matches!(which, Stream::Stdout) {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(chunk.trim()) {
-                        if value.is_object() {
-                            let is_result =
-                                value.get("type").and_then(|t| t.as_str()) == Some("result");
-                            hub.publish_event(task_id, value).await;
-                            if is_result {
-                                if let Some(tx) = result_tx.as_ref() {
-                                    let _ = tx.send(()).await;
-                                }
+                // persist it. When it's the turn's `result`, hand it to the
+                // runner so it can finalize from the event itself.
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(chunk.trim()) {
+                    if value.is_object() {
+                        let is_result =
+                            value.get("type").and_then(|t| t.as_str()) == Some("result");
+                        hub.publish_event(task_id, value.clone()).await;
+                        if is_result {
+                            if let Some(tx) = result_tx.as_ref() {
+                                let _ = tx.send(value).await;
                             }
                         }
                     }
