@@ -96,6 +96,38 @@ export function bashCommand(b: ToolUseBlock): string | null {
   return o && typeof o.command === "string" ? o.command : null;
 }
 
+// A background-task / sub-agent completion notification, lifted out of the
+// timeline and shown in the Outline accordion instead.
+export interface TaskNotification {
+  status: string;
+  summary: string;
+  bgTaskId?: string; // the event's `task_id` (background task slug)
+  toolUseId?: string; // the event's `tool_use_id`
+  outputFile?: string; // the event's `output_file`, omitted when empty
+}
+
+function asString(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+export function extractTaskNotifications(values: Iterable<unknown>): TaskNotification[] {
+  const out: TaskNotification[] = [];
+  for (const v of values) {
+    if (!v || typeof v !== "object") continue;
+    const o = v as Record<string, unknown>;
+    if (o.type !== "system" || o.subtype !== "task_notification") continue;
+    const outputFile = asString(o.output_file);
+    out.push({
+      status: asString(o.status),
+      summary: asString(o.summary),
+      bgTaskId: asString(o.task_id) || undefined,
+      toolUseId: asString(o.tool_use_id) || undefined,
+      outputFile: outputFile || undefined,
+    });
+  }
+  return out;
+}
+
 // The structured questions behind an AskUserQuestion tool_use, if any.
 export function questionList(input: unknown): AuthQuestion[] | null {
   const q = (input as Record<string, unknown> | null)?.questions;
@@ -118,6 +150,9 @@ function parseLines(text: string): Block[] {
     if (v.type === "result") continue;
     // Thinking-token accounting events are noise to the operator — drop them.
     if (v.type === "thinking_tokens" || v.subtype === "thinking_tokens") continue;
+    // Background-task notifications are surfaced separately in the Outline
+    // accordion, not inline in the timeline.
+    if (v.type === "system" && v.subtype === "task_notification") continue;
     if (v.type === "system" && v.subtype === "init") {
       blocks.push({
         kind: "init",
