@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
+import { useGitServicesStore } from "../stores/git_services";
 import StatusPill from "../components/StatusPill.vue";
 import ProviderBadge from "../components/ProviderBadge.vue";
 import NewTaskModal from "../components/NewTaskModal.vue";
@@ -9,8 +10,13 @@ import { formatSecs, taskSpentSecs } from "../util/duration";
 import type { Task } from "../types/api";
 
 const store = useTasksStore();
+const gitServices = useGitServicesStore();
 const router = useRouter();
 const status = ref("");
+// Service + project filters are applied client-side over the loaded set, so
+// changing them is instant and never refetches.
+const serviceId = ref("");
+const projectId = ref("");
 const busy = ref<{ id: string; action: string } | null>(null);
 const newTaskOpen = ref(false);
 // Single shared `now` so the whole table re-renders together; ticks once a
@@ -72,9 +78,33 @@ function sortValue(t: Task, key: SortKey): string | number {
   }
 }
 
+// --- Service / project filters ----------------------------------------------
+// Service options come from the connected services; project options are derived
+// from the tasks actually present, so the dropdown only lists projects with runs.
+const serviceOptions = computed(() =>
+  gitServices.list.map((s) => ({ id: s.id, label: s.display_name })),
+);
+const projectOptions = computed(() => {
+  const seen = new Map<string, string>();
+  for (const t of store.tasks) {
+    if (t.project_id && !seen.has(t.project_id)) seen.set(t.project_id, t.project_path);
+  }
+  return [...seen].map(([id, label]) => ({ id, label })).sort((a, b) =>
+    a.label.localeCompare(b.label),
+  );
+});
+
+const filteredTasks = computed(() =>
+  store.tasks.filter(
+    (t) =>
+      (!serviceId.value || t.git_service_id === serviceId.value) &&
+      (!projectId.value || t.project_id === projectId.value),
+  ),
+);
+
 const sortedTasks = computed(() => {
   const dir = sortAsc.value ? 1 : -1;
-  return [...store.tasks].sort((a, b) => {
+  return [...filteredTasks.value].sort((a, b) => {
     const av = sortValue(a, sortKey.value);
     const bv = sortValue(b, sortKey.value);
     if (av < bv) return -1 * dir;
@@ -90,13 +120,19 @@ async function onCreated(id: string) {
 }
 
 const reload = () => store.refresh(status.value || undefined);
+// Live poll: refresh silently every 10s so the table stays current without
+// flashing the loading placeholder.
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(() => {
   reload();
+  gitServices.refresh();
   nowTimer = setInterval(() => (now.value = new Date()), 1000);
+  pollTimer = setInterval(() => store.refresh(status.value || undefined, true), 10_000);
 });
 onUnmounted(() => {
   if (nowTimer !== null) clearInterval(nowTimer);
+  if (pollTimer !== null) clearInterval(pollTimer);
 });
 watch(status, reload);
 
@@ -203,6 +239,14 @@ async function saveEdit(t: Task) {
         <p class="mt-1 text-sm text-muted">Agent runs across every connected repo.</p>
       </div>
       <div class="flex items-center gap-2">
+        <select v-model="serviceId" class="select w-40">
+          <option value="">All services</option>
+          <option v-for="s in serviceOptions" :key="s.id" :value="s.id">{{ s.label }}</option>
+        </select>
+        <select v-model="projectId" class="select w-44">
+          <option value="">All projects</option>
+          <option v-for="p in projectOptions" :key="p.id" :value="p.id">{{ p.label }}</option>
+        </select>
         <select v-model="status" class="select w-40">
           <option value="">All statuses</option>
           <option value="pending">Pending</option>
@@ -370,8 +414,10 @@ async function saveEdit(t: Task) {
               </div>
             </td>
           </tr>
-          <tr v-if="!store.tasks.length">
-            <td colspan="9" class="py-10 text-center text-faint">No tasks yet.</td>
+          <tr v-if="!sortedTasks.length">
+            <td colspan="9" class="py-10 text-center text-faint">
+              {{ store.tasks.length ? "No tasks match these filters." : "No tasks yet." }}
+            </td>
           </tr>
         </tbody>
       </table>

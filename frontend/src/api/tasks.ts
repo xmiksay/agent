@@ -11,7 +11,12 @@ import type {
 
 export const tasksApi = {
   list(status?: string): Promise<Task[]> {
-    return api("/api/tasks", { params: status ? { status } : undefined });
+    // `no-store`: the task list is a live view, so never serve a stale cached
+    // response — every poll must hit the server.
+    return api("/api/tasks", {
+      params: status ? { status } : undefined,
+      cache: "no-store",
+    });
   },
   create(body: NewTaskBody): Promise<{ task_id: string }> {
     return api("/api/tasks", { method: "POST", body });
