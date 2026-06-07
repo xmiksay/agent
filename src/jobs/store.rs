@@ -778,16 +778,19 @@ impl TaskStore {
         Ok(row.map(|t| t.id))
     }
 
-    /// Persisted agent event history from `task_events`, ordered by `seq`.
-    pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<serde_json::Value>> {
+    /// Persisted hub-frame history from `task_events`, ordered by `seq`. Carries
+    /// every frame kind (event / auth_request / status) with its `seq` + `kind`.
+    pub async fn task_events(
+        &self,
+        task_id: Uuid,
+    ) -> Result<Vec<crate::entity::task_events::Model>> {
         use crate::entity::task_events;
-        let rows = task_events::Entity::find()
+        task_events::Entity::find()
             .filter(task_events::Column::TaskId.eq(task_id))
             .order_by_asc(task_events::Column::Seq)
             .all(&self.db)
             .await
-            .context("loading task events")?;
-        Ok(rows.into_iter().map(|r| r.payload).collect())
+            .context("loading task events")
     }
 
     pub async fn get_task(

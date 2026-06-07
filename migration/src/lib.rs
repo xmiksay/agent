@@ -15,6 +15,7 @@ mod m20260605_000012_add_task_pending_message;
 mod m20260605_000013_create_task_events;
 mod m20260606_000014_add_project_env_vars;
 mod m20260607_000015_add_git_service_autofire;
+mod m20260607_000016_add_task_event_kind;
 
 pub struct Migrator;
 
@@ -37,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260605_000013_create_task_events::Migration),
             Box::new(m20260606_000014_add_project_env_vars::Migration),
             Box::new(m20260607_000015_add_git_service_autofire::Migration),
+            Box::new(m20260607_000016_add_task_event_kind::Migration),
         ]
     }
 }

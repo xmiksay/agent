@@ -1,7 +1,12 @@
 import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
 import { useSessionStore } from "./session";
-import type { AuthRequest, StreamEnvelope } from "../types/api";
+import type {
+  AuthRequest,
+  EnvelopeKind,
+  PersistedEvent,
+  StreamEnvelope,
+} from "../types/api";
 
 /** Operator → agent messages on the single global socket (each names its task). */
 export type OutboundMessage =
@@ -48,10 +53,14 @@ export const useStreamStore = defineStore("stream", () => {
     return events.get(taskId);
   }
 
-  /** Seed a task's history (array index = seq) from the REST /events endpoint. */
-  function seedEvents(taskId: string, items: unknown[]) {
-    const m = ensure(taskId);
-    items.forEach((e, i) => m.set(i, e));
+  /**
+   * Seed a task's persisted history from GET /events. Each row is a full frame
+   * ({seq, kind, payload}) — the same kinds the live socket delivers — so route
+   * it through the identical logic. Event frames key by their real `seq`, so a
+   * later live frame with the same seq merges cleanly (dedupe across seed+live).
+   */
+  function seedEvents(taskId: string, items: PersistedEvent[]) {
+    for (const it of items) applyFrame(taskId, it.kind, it.seq, it.payload);
   }
 
   /** Seed pending approvals fetched over REST (so they show before any frame). */
@@ -63,17 +72,27 @@ export const useStreamStore = defineStore("stream", () => {
     approvals.delete(id);
   }
 
-  function apply(env: StreamEnvelope) {
-    if (env.kind === "event") {
-      ensure(env.task_id).set(env.seq, env.payload);
-    } else if (env.kind === "auth_request") {
-      const r = env.payload as AuthRequest;
+  /** Route one frame (live or seeded) into the right slice of store state. */
+  function applyFrame(
+    taskId: string,
+    kind: EnvelopeKind,
+    seq: number,
+    payload: unknown,
+  ) {
+    if (kind === "event") {
+      ensure(taskId).set(seq, payload);
+    } else if (kind === "auth_request") {
+      const r = payload as AuthRequest;
       if (r.status === "pending") approvals.set(r.id, r);
       else approvals.delete(r.id);
-    } else if (env.kind === "status") {
-      const s = (env.payload as { status?: string }).status;
-      if (s) statusByTask.set(env.task_id, s);
+    } else if (kind === "status") {
+      const s = (payload as { status?: string }).status;
+      if (s) statusByTask.set(taskId, s);
     }
+  }
+
+  function apply(env: StreamEnvelope) {
+    applyFrame(env.task_id, env.kind, env.seq, env.payload);
   }
 
   function connect() {

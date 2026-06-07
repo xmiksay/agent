@@ -10,12 +10,13 @@
 //! hasn't registered yet — so a socket opened during a Resume race still attaches
 //! to the same channel the runner fills moments later.
 //!
-//! Events keep a single monotonic `seq` per task. The in-memory `history` holds
+//! Frames keep a single monotonic `seq` per task. The in-memory `history` holds
 //! the whole active session; `flushed` tracks how much of it is already in the
-//! DB. The persisted array index equals `seq` (the seq counter is seeded from the
-//! persisted length), so the frontend can dedupe REST history against live frames
-//! by `seq` with no gaps. Only `Event` frames consume a `seq` and are persisted;
-//! `auth_request` / `status` frames are UI side-channels and do neither.
+//! DB. Every frame kind (agent event, auth_request, status) consumes a `seq` and
+//! is persisted to `task_events` with its `kind`, so the persisted history is a
+//! complete, contiguous (seqs 0..N-1) record of both directions of the session.
+//! The seq counter is seeded from the persisted length, so the frontend can
+//! dedupe REST history against live frames by `seq` with no gaps.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,6 +52,18 @@ pub enum EnvelopeKind {
     Status,
 }
 
+impl EnvelopeKind {
+    /// Stored in the `task_events.kind` column; matches the serde snake_case
+    /// wire form so REST history and live frames share one vocabulary.
+    fn as_db_str(&self) -> &'static str {
+        match self {
+            EnvelopeKind::Event => "event",
+            EnvelopeKind::AuthRequest => "auth_request",
+            EnvelopeKind::Status => "status",
+        }
+    }
+}
+
 /// One frame sent to WebSocket subscribers.
 #[derive(Clone, Serialize)]
 pub struct Envelope {
@@ -62,9 +75,9 @@ pub struct Envelope {
 }
 
 struct History {
-    /// `(seq, payload)` for the whole active session; `flushed` counts how many
-    /// leading entries are already persisted in `task_events`.
-    items: Vec<(u64, Value)>,
+    /// `(seq, kind, payload)` for the whole active session; `flushed` counts how
+    /// many leading entries are already persisted in `task_events`.
+    items: Vec<(u64, EnvelopeKind, Value)>,
     flushed: usize,
 }
 
@@ -150,23 +163,39 @@ impl LiveSessions {
         *ch.control.lock().await = Some(control);
     }
 
-    /// Publish a raw agent event: assign a seq, broadcast, capture `result`
-    /// events for the end-of-session parse, append to history, and flush a batch
-    /// to the DB once `FLUSH_BATCH` events are pending. Called sequentially by a
+    /// Publish a raw agent event. See [`Self::publish`]. Called sequentially by a
     /// single stdout reader per session.
     pub async fn publish_event(&self, task_id: Uuid, value: Value) {
+        self.publish(task_id, EnvelopeKind::Event, value).await;
+    }
+
+    /// Publish a side-channel frame (approval / status). Like `publish_event`, it
+    /// now consumes a `seq` and persists — every frame is durable history.
+    pub async fn publish_aux(&self, task_id: Uuid, kind: EnvelopeKind, payload: Value) {
+        self.publish(task_id, kind, payload).await;
+    }
+
+    /// Assign a seq, broadcast the envelope, append to history, and flush a batch
+    /// to the DB once `FLUSH_BATCH` frames are pending. No-op if nobody is
+    /// watching this task.
+    ///
+    /// May run concurrently (stdout reader, permission handler, HTTP resolve, and
+    /// `set_status` all publish): `fetch_add` keeps seqs unique and the history
+    /// `Mutex` serializes appends. Broadcast order may differ slightly from seq
+    /// order, but consumers key by `seq`.
+    async fn publish(&self, task_id: Uuid, kind: EnvelopeKind, value: Value) {
         let Some(ch) = self.get(task_id) else { return };
         let seq = ch.next_seq.fetch_add(1, Ordering::SeqCst);
         let _ = self.all.send(Envelope {
             task_id,
             agent: ch.agent(),
             seq,
-            kind: EnvelopeKind::Event,
+            kind,
             payload: value.clone(),
         });
         let batch = {
             let mut h = ch.history.lock().await;
-            h.items.push((seq, value));
+            h.items.push((seq, kind, value));
             if h.items.len() - h.flushed >= FLUSH_BATCH {
                 let batch = h.items[h.flushed..].to_vec();
                 h.flushed = h.items.len();
@@ -178,20 +207,6 @@ impl LiveSessions {
         if let Some(batch) = batch {
             self.append_to_db(task_id, &batch).await;
         }
-    }
-
-    /// Broadcast a non-event side-channel frame (approval / status). Does not
-    /// consume a `seq` or persist — no-op if nobody is watching this task.
-    pub async fn publish_aux(&self, task_id: Uuid, kind: EnvelopeKind, payload: Value) {
-        let Some(ch) = self.get(task_id) else { return };
-        let seq = ch.next_seq.load(Ordering::SeqCst);
-        let _ = self.all.send(Envelope {
-            task_id,
-            agent: ch.agent(),
-            seq,
-            kind,
-            payload,
-        });
     }
 
     /// Encode an operator message in the backend's stdin format and write it to
@@ -262,8 +277,9 @@ impl LiveSessions {
         self.channels.remove(&task_id);
     }
 
-    /// Persisted event count for a task — the seq seed for a (re)starting
-    /// session, so live `seq`s continue past the durable history.
+    /// Persisted frame count for a task — the seq seed for a (re)starting
+    /// session. Equals the next seq because every frame is persisted
+    /// contiguously, so live `seq`s continue past the durable history.
     async fn persisted_len(&self, task_id: Uuid) -> u64 {
         task_events::Entity::find()
             .filter(task_events::Column::TaskId.eq(task_id))
@@ -275,23 +291,53 @@ impl LiveSessions {
             })
     }
 
-    /// Append a batch of events to `task_events` (one row per event). Best-effort:
-    /// a failed flush is logged, and the events remain available live — history
+    /// Append a batch of frames to `task_events` (one row per frame). Best-effort:
+    /// a failed flush is logged, and the frames remain available live — history
     /// just isn't durable for those.
-    async fn append_to_db(&self, task_id: Uuid, batch: &[(u64, Value)]) {
+    async fn append_to_db(&self, task_id: Uuid, batch: &[(u64, EnvelopeKind, Value)]) {
         if batch.is_empty() {
             return;
         }
         let rows: Vec<task_events::ActiveModel> = batch
             .iter()
-            .map(|(seq, payload)| task_events::ActiveModel {
+            .map(|(seq, kind, payload)| task_events::ActiveModel {
                 task_id: Set(task_id),
                 seq: Set(*seq as i64),
+                kind: Set(kind.as_db_str().to_string()),
                 payload: Set(payload.clone()),
             })
             .collect();
         if let Err(e) = task_events::Entity::insert_many(rows).exec(&self.db).await {
             error!(%task_id, error = %e, "failed to flush event batch to task_events");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn db_str_matches_serde_wire_form() {
+        for kind in [EnvelopeKind::Event, EnvelopeKind::AuthRequest, EnvelopeKind::Status] {
+            let wire = serde_json::to_value(kind).unwrap();
+            assert_eq!(Value::String(kind.as_db_str().to_string()), wire);
+        }
+        assert_eq!(EnvelopeKind::Event.as_db_str(), "event");
+        assert_eq!(EnvelopeKind::AuthRequest.as_db_str(), "auth_request");
+        assert_eq!(EnvelopeKind::Status.as_db_str(), "status");
+    }
+
+    /// The flush trigger fires exactly when `FLUSH_BATCH` unflushed frames have
+    /// accumulated — mirrors the threshold check in `publish`.
+    #[test]
+    fn batching_threshold_triggers_at_flush_batch() {
+        let mut h = History { items: Vec::new(), flushed: 0 };
+        for i in 0..FLUSH_BATCH - 1 {
+            h.items.push((i as u64, EnvelopeKind::Event, Value::Null));
+            assert!(h.items.len() - h.flushed < FLUSH_BATCH);
+        }
+        h.items.push((FLUSH_BATCH as u64 - 1, EnvelopeKind::Status, Value::Null));
+        assert_eq!(h.items.len() - h.flushed, FLUSH_BATCH);
     }
 }

@@ -1,6 +1,7 @@
 import { api } from "./client";
 import type {
   NewTaskBody,
+  PersistedEvent,
   StatsQuery,
   StatsResponse,
   Task,
@@ -33,7 +34,7 @@ export const tasksApi = {
   remove(id: string): Promise<void> {
     return api(`/api/tasks/${id}`, { method: "DELETE" });
   },
-  events(id: string): Promise<{ events: unknown[] }> {
+  events(id: string): Promise<{ events: PersistedEvent[] }> {
     return api(`/api/tasks/${id}/events`);
   },
   pushMessage(id: string, body: string): Promise<void> {
