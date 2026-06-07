@@ -9,9 +9,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::agent::AgentBackend;
-use crate::jobs::output_log::LiveEntry;
 use crate::jobs::store::TaskStore;
-use crate::jobs::stream::tail;
 use crate::jobs::types::{ClaudeOutput, TriggerReason};
 use crate::provider::GitProvider;
 
@@ -21,7 +19,7 @@ use crate::provider::GitProvider;
 /// best-effort: a turn's bookkeeping failure must not tear down the session.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finalize_turn(
-    entry: &LiveEntry,
+    result_event: serde_json::Value,
     backend: &dyn AgentBackend,
     store: &Arc<TaskStore>,
     trigger: &TriggerReason,
@@ -31,15 +29,10 @@ pub(crate) async fn finalize_turn(
     task_id: Uuid,
     code_trigger: bool,
 ) {
-    let (stdout, stderr) = {
-        let guard = entry.lock().await;
-        (guard.stdout.clone(), guard.stderr.clone())
-    };
-    let result = match backend.parse_result(&stdout) {
+    let result = match backend.parse_result(&result_event.to_string()) {
         Ok(r) => r,
         Err(e) => {
-            let tail = tail(stderr.trim(), 600);
-            warn!(%task_id, error = %e, stderr_tail = %tail, "turn produced no result event");
+            warn!(%task_id, error = %e, "turn produced no parseable result event");
             return;
         }
     };

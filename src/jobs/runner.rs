@@ -13,11 +13,10 @@ use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::git_service::GitService;
 use crate::jobs::hub::LiveSessions;
-use crate::jobs::output_log::TaskOutputLog;
 use crate::jobs::permission::handle_permission;
 use crate::jobs::prompt::build_prompt;
 use crate::jobs::store::TaskStore;
-use crate::jobs::stream::{Stream, stream_into_entry};
+use crate::jobs::stream::{Stream, pump_stream};
 use crate::jobs::types::TriggerReason;
 use crate::project::{
     BranchStatus, EnvContext, NewBranchEntry, ProjectStore, ProviderKind, build_env_vars,
@@ -40,7 +39,6 @@ pub async fn run_job(
     provider: Arc<dyn GitProvider>,
     workspace: Arc<Workspace>,
     project_store: Arc<ProjectStore>,
-    output_log: TaskOutputLog,
     hub: LiveSessions,
     store: Arc<TaskStore>,
     auth_store: Arc<AuthStore>,
@@ -109,13 +107,6 @@ pub async fn run_job(
     info!(%prompt, program = backend.program(), "running agent");
 
     let agent_args = backend.build_args(resume_session_id.as_deref());
-    let command_line = format!("{} {}", backend.program(), agent_args.join(" "));
-
-    let entry = if resume_session_id.is_some() {
-        output_log.resume_or_start(task_id, command_line.clone()).await
-    } else {
-        output_log.start(task_id, command_line.clone()).await
-    };
 
     // So `gh`/`glab` inside the worktree authenticate against the same PAT the
     // agent uses to clone and post notes — picked by provider kind.
@@ -211,8 +202,8 @@ pub async fn run_job(
     let (budget_tx, mut budget_rx) = tokio::sync::oneshot::channel::<u64>();
     let token_limit = config.task_token_budget / 2;
 
-    // One signal per turn, the moment a `result` event is seen on stdout.
-    let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<()>(8);
+    // Carries the turn's `result` event, the moment it's seen on stdout.
+    let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(8);
 
     // Permission prompts (`can_use_tool`) sniffed off stdout. The sender is owned
     // ONLY by the stdout reader so it drops at stdout EOF and ends the consumer.
@@ -239,9 +230,8 @@ pub async fn run_job(
         })
     };
 
-    let stdout_reader = tokio::spawn(stream_into_entry(
+    let stdout_reader = tokio::spawn(pump_stream(
         stdout_pipe,
-        entry.clone(),
         Stream::Stdout,
         backend.clone(),
         hub.clone(),
@@ -251,9 +241,8 @@ pub async fn run_job(
         Some(result_tx),
         Some(perm_tx),
     ));
-    let stderr_reader = tokio::spawn(stream_into_entry(
+    let stderr_reader = tokio::spawn(pump_stream(
         stderr_pipe,
-        entry.clone(),
         Stream::Stderr,
         backend.clone(),
         hub.clone(),
@@ -281,6 +270,7 @@ pub async fn run_job(
     // stuck turn.
     let mut pending = Some(backend.encode_user_message(&prompt));
     let mut killed_for_budget = false;
+    let mut last_result: Option<serde_json::Value> = None;
     loop {
         let msg = match pending.take() {
             Some(m) => m,
@@ -312,7 +302,7 @@ pub async fn run_job(
 
         let mut turn_exited = false;
         tokio::select! {
-            _ = result_rx.recv() => {} // this turn finished
+            r = result_rx.recv() => last_result = r, // this turn finished
             _ = child.wait() => turn_exited = true,
             used = &mut budget_rx => {
                 let used = used.unwrap_or_default();
@@ -325,18 +315,22 @@ pub async fn run_job(
         }
         drop(permit); // released between turns — an idle agent holds no slot
 
-        crate::jobs::turn::finalize_turn(
-            &entry,
-            backend.as_ref(),
-            &store,
-            &trigger,
-            &project_path,
-            provider.as_ref(),
-            &work_dir_str,
-            task_id,
-            code_trigger,
-        )
-        .await;
+        // Only finalize when the turn produced a result event; a turn that ended
+        // via child exit/budget before its result has nothing to parse.
+        if let Some(rv) = last_result.take() {
+            crate::jobs::turn::finalize_turn(
+                rv,
+                backend.as_ref(),
+                &store,
+                &trigger,
+                &project_path,
+                provider.as_ref(),
+                &work_dir_str,
+                task_id,
+                code_trigger,
+            )
+            .await;
+        }
 
         if turn_exited {
             break;
@@ -351,16 +345,23 @@ pub async fn run_job(
     drop(to_agent_tx);
     hub.end(task_id).await;
     let _ = writer.await;
-    let _ = child.wait().await;
+    let exit_status = child.wait().await.ok();
     let _ = stdout_reader.await;
     let _ = stderr_reader.await;
     let _ = perm_consumer.await;
-    {
-        let mut guard = entry.lock().await;
-        guard.finished = true;
-    }
 
-    let final_status = if killed_for_budget { "killed" } else { "completed" };
+    // Final status from the child exit code. Operator Pause aborts this runner
+    // task before reaching here (kill_task sets the status), so exit-code→failed
+    // applies only to natural exits / crashes; a graceful Stop makes claude exit
+    // 0 → completed. `unwrap_or(true)`: an unreadable status must not falsely
+    // mark the task failed.
+    let final_status = if killed_for_budget {
+        "killed"
+    } else if exit_status.map(|s| s.success()).unwrap_or(true) {
+        "completed"
+    } else {
+        "failed"
+    };
     let _ = store.finish_task(task_id, final_status).await;
     info!(%task_id, status = final_status, "agent session ended");
     Ok(())
