@@ -26,6 +26,7 @@ function blank(): NewGitService {
     token: "",
     webhook_secret: "",
     bot_username: "",
+    autofire: false,
   };
 }
 
@@ -154,6 +155,10 @@ onMounted(() => store.refresh());
             autocomplete="new-password"
             class="input font-mono"
           />
+        </label>
+        <label class="col-span-2 flex items-center gap-2">
+          <input v-model="form.autofire" type="checkbox" class="h-4 w-4" />
+          <span class="text-sm text-ink">Autofire (run new tasks immediately)</span>
         </label>
       </div>
 

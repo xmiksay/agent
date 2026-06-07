@@ -25,9 +25,22 @@ const {
 // Accordion open state (view-only).
 const showApprovals = ref(false);
 const showDiff = ref(false);
-const showDescription = ref(true);
+// Description starts collapsed; opened on first load only when the task is
+// pending (the operator is most likely reviewing what's about to run).
+const showDescription = ref(false);
 const showOutput = ref(true);
 const showRaw = ref(false);
+
+let didInitDescription = false;
+watch(
+  () => store.detail?.status,
+  (status) => {
+    if (didInitDescription || !status) return;
+    didInitDescription = true;
+    showDescription.value = status === "pending";
+  },
+  { immediate: true },
+);
 
 // trigger_data is a serialized TriggerReason; every variant carries `url`.
 const originUrl = computed<string | null>(() => {

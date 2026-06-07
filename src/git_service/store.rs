@@ -17,6 +17,7 @@ pub struct GitService {
     pub token: String,
     pub webhook_secret: String,
     pub bot_username: String,
+    pub autofire: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -32,6 +33,7 @@ impl GitService {
             token: m.token,
             webhook_secret: m.webhook_secret,
             bot_username: m.bot_username,
+            autofire: m.autofire,
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
         })
@@ -47,6 +49,8 @@ pub struct NewGitService {
     pub token: String,
     pub webhook_secret: String,
     pub bot_username: String,
+    #[serde(default)]
+    pub autofire: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -56,6 +60,7 @@ pub struct UpdateGitService {
     pub token: Option<String>,
     pub webhook_secret: Option<String>,
     pub bot_username: Option<String>,
+    pub autofire: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -114,6 +119,7 @@ impl GitServiceStore {
             token: Set(new.token),
             webhook_secret: Set(new.webhook_secret),
             bot_username: Set(new.bot_username),
+            autofire: Set(new.autofire),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
         };
@@ -149,6 +155,9 @@ impl GitServiceStore {
         if let Some(v) = upd.bot_username {
             active.bot_username = Set(v);
         }
+        if let Some(v) = upd.autofire {
+            active.autofire = Set(v);
+        }
         active.updated_at = Set(Utc::now().into());
         active.update(&self.db).await?;
 
@@ -180,4 +189,40 @@ fn validate_slug(slug: &str) -> Result<()> {
         bail!("slug must be ASCII alphanumeric, '-' or '_'");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_git_service_defaults_autofire_to_false() {
+        let json = r#"{
+            "kind": "github",
+            "slug": "acme",
+            "display_name": "Acme",
+            "base_url": "https://github.com",
+            "token": "t",
+            "webhook_secret": "s",
+            "bot_username": "bot"
+        }"#;
+        let new: NewGitService = serde_json::from_str(json).unwrap();
+        assert!(!new.autofire);
+    }
+
+    #[test]
+    fn new_git_service_parses_explicit_autofire() {
+        let json = r#"{
+            "kind": "gitlab",
+            "slug": "acme",
+            "display_name": "Acme",
+            "base_url": "https://gitlab.com",
+            "token": "t",
+            "webhook_secret": "s",
+            "bot_username": "bot",
+            "autofire": true
+        }"#;
+        let new: NewGitService = serde_json::from_str(json).unwrap();
+        assert!(new.autofire);
+    }
 }

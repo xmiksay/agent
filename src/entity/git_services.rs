@@ -16,6 +16,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub webhook_secret: String,
     pub bot_username: String,
+    pub autofire: bool,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }
