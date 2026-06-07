@@ -27,8 +27,16 @@ export type EnvelopeKind = "event" | "auth_request" | "status";
 export interface StreamEnvelope {
   task_id: string;
   agent: string;
-  /** Monotonic per-task sequence. Only `event` frames carry a meaningful seq;
-   *  it lines up with the index in the persisted /events history for dedupe. */
+  /** Monotonic per-task sequence. `event` frames dedupe against the persisted
+   *  /events history by this seq. */
+  seq: number;
+  kind: EnvelopeKind;
+  payload: unknown;
+}
+
+/** One persisted live-stream frame from GET /api/tasks/{id}/events — the same
+ *  shape as a `StreamEnvelope`, minus the task/agent routing fields. */
+export interface PersistedEvent {
   seq: number;
   kind: EnvelopeKind;
   payload: unknown;

@@ -161,14 +161,24 @@ pub async fn kill_task(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// One persisted hub frame, as seen by the SPA. `kind` is `event`,
+/// `auth_request`, or `status`; rows of different kinds are interleaved in `seq`
+/// order. The explicit `seq` (not the array index) is authoritative for deduping
+/// REST history against live WebSocket frames.
 #[derive(Serialize)]
-pub struct EventsResponse {
-    /// Persisted agent events for the task, in order. The array index is the
-    /// event `seq`, so the SPA can dedupe these against live WebSocket frames.
-    pub events: Vec<serde_json::Value>,
+pub struct PersistedEvent {
+    pub seq: i64,
+    pub kind: String,
+    pub payload: serde_json::Value,
 }
 
-/// Durable event history from `tasks.event_log`. Live events for an active task
+#[derive(Serialize)]
+pub struct EventsResponse {
+    /// Persisted hub frames for the task, ordered by `seq` ascending.
+    pub events: Vec<PersistedEvent>,
+}
+
+/// Durable frame history from `task_events`. Live frames for an active task
 /// arrive over the WebSocket; this seeds the timeline (and is the only source
 /// once a task has finished and its in-memory session is gone).
 pub async fn task_events(
@@ -179,7 +189,10 @@ pub async fn task_events(
         .task_store
         .task_events(id)
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?
+        .into_iter()
+        .map(|r| PersistedEvent { seq: r.seq, kind: r.kind, payload: r.payload })
+        .collect();
     Ok(Json(EventsResponse { events }))
 }
 
