@@ -8,12 +8,14 @@ export const useTasksStore = defineStore("tasks", () => {
   const detail = ref<TaskDetail | null>(null);
   const loading = ref(false);
 
-  async function refresh(status?: string) {
-    loading.value = true;
+  // `silent` skips the loading flag so the 10s live poll doesn't flash the
+  // table back to a "Loading…" placeholder on every tick.
+  async function refresh(status?: string, silent = false) {
+    if (!silent) loading.value = true;
     try {
       tasks.value = await tasksApi.list(status);
     } finally {
-      loading.value = false;
+      if (!silent) loading.value = false;
     }
   }
 
