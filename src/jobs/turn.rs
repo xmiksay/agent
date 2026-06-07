@@ -85,7 +85,7 @@ async fn post_result(
 
     let status = if result.is_error { "error" } else { "completed" };
     let body = format!(
-        "**Claude Agent** ({status})\n\n\
+        "**Agent** ({status})\n\n\
          Cost: ${:.4} | Turns: {}\n\n\
          {}",
         result.total_cost_usd,
