@@ -1,28 +1,8 @@
-# CLAUDE.md — agent project context
+# agent — architecture
 
-This file is the project-specific brief loaded into Claude Code sessions that work *on this repo*. Read it before making changes.
+Deep reference for the agent service. The project brief [`.claude/CLAUDE.md`](../.claude/CLAUDE.md) carries the engineering rules and points here. **Keep this file current:** when a change adds/removes/renames a module, route, entity, env var, or the way two modules talk to each other, edit the relevant section here in the same change.
 
-Note: this is **not** the CLAUDE.md the agent ships into the worktrees it manages. The agent never writes `CLAUDE.md` or `.claude/` into project checkouts — those repos own their own context (see memory: *No agent files in worktrees*).
-
-## What this project is
-
-A Rust/Axum HTTP service that listens for GitLab + GitHub webhooks and runs the local `claude` CLI against the affected repository. Output is parsed from `--output-format stream-json` and posted back as an issue/MR/PR comment. A Vue 3 SPA on the same port shows live task status, captured stdout, branch diff, and pending operator approvals.
-
-Single-operator deployment by design — there is no multi-tenancy. Bearer-token auth on `/api/*` is the only access control.
-
-## Engineering rules (apply to every change in this repo)
-
-- **KISS.** Prefer the most direct expression. No premature abstraction, no future-proofing scaffolds, no DI-flavored indirection where a plain function works. Three similar lines beats a clever helper.
-- **DRY.** If the same logic is starting to appear in two places, extract it — but only after the second occurrence, not before.
-- **File size cap: 400 lines.** When a `.rs`/`.vue`/`.ts` file crosses 400 lines, split it along a natural seam (per-route handlers, per-trigger workflows, per-component slot). `src/jobs/store.rs` and `src/jobs/runner.rs` already exceed this by a wide margin — split them as soon as a non-trivial change lands; never grow a file that's already over.
-- **Git workflow.** Rebase onto the latest `master` before starting work and never commit to `master` (derive a branch from the issue if none is given). Integrate fast-forward only — no merge commits. Commit/task messages use the **What / Why / How** format. Never add a `Co-Authored-By` trailer. See the `git` agent (`.claude/agents/git.md`).
-- **Specialized agents.** `.claude/agents/` holds the subagents for working in this repo: `backend` (Rust, with unit + integration tests), `frontend` (Vue/TS), `git` (workflow above), and `review` (security + performance). Delegate stack-specific work to them.
-- **Auto-update this file when architecture changes.** If a change adds/removes/renames a module, route, entity, environment variable, or the way two modules talk to each other, edit the relevant section of `CLAUDE.md` in the same PR. The architecture sections below should always describe the current code, not an aspirational shape.
-- **Verify before declaring done.** `cargo check` after Rust changes, `npm run typecheck` (in `frontend/`) after TS/Vue changes. UI changes ideally exercised in a browser.
-- **Comments: WHY, not WHAT.** Only write a comment when removing it would confuse a future reader (subtle invariant, surprising behavior, deliberate workaround). Don't narrate code.
-- **No backwards-compat shims for internal callers.** Rename, delete, and rewrite freely — the API surface that matters is the HTTP routes and the DB schema (and those are governed by migrations).
-
-## Architecture
+## Flow
 
 ```
 GitLab / GitHub
@@ -63,7 +43,7 @@ Operator (SPA)                    approves/denies via
                                   POST /api/auth_requests/{id}/resolve
 ```
 
-### Module map
+## Module map
 
 | Path | Responsibility |
 |---|---|
@@ -107,7 +87,7 @@ Operator (SPA)                    approves/denies via
 | `frontend/` | Vue 3 + Vite + Pinia + Tailwind SPA — `npm run build` must run before `cargo build` so the bundle is on disk when the embed derive picks it up |
 | `frontend/public/` | PWA assets copied verbatim into `dist/` by Vite: `manifest.webmanifest`, icons (`icon-192/512.png`, `maskable-512.png`, `apple-touch-icon.png`, `favicon.svg/ico`), and `sw.js` — a **network-first** service worker (cache is offline-only fallback) so an installed home-screen app always reflects the live site. Registered in prod by `frontend/src/pwa.ts`; served by the `/`-fallback (no bearer gate), so install works regardless of `API_BEARER_TOKEN` |
 
-### Database
+## Database
 
 PostgreSQL via SeaORM. Migrations live in `migration/src/` and run automatically on startup (`migration::Migrator::up(&db, None)` in `main.rs`). Adding a column means a new migration file; never mutate an old one.
 
@@ -121,7 +101,7 @@ Tables (current set, see migration files for canonical schemas):
 - `auth_requests` — operator-approval items raised by the in-process permission handler
 - `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret, `autofire` (when true, a newly-created task from this service's webhook is auto-confirmed — started running immediately instead of left pending for a manual confirm)
 
-### HTTP surface
+## HTTP surface
 
 Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webhook/*`, `/health`, and `/ws` are outside that middleware; the `/ws` handler authenticates in-band (the client's first frame carries the token), so it never lands in URLs/proxy logs.
 
@@ -149,7 +129,7 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 | `GET` | `/api/auth/check` | 204 probe used by the SPA to validate the token |
 | `GET` | `/health` | 200 |
 
-### Workspace layout on disk
+## Workspace layout on disk
 
 ```
 $REPO_BASE_PATH/
@@ -169,7 +149,7 @@ The process is **long-lived and turn-based**. The runner's turn loop, per turn: 
 
 The spawned `claude` inherits a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services. The project's `env_file` is rendered (minijinja, against runtime vars `branch`/`default_branch`/`url`/`project`/`service`/`task_id` — see `src/project/env.rs`) and applied **before** this reserved var, so a project env can never clobber the PAT.
 
-### How an operator approval works
+## How an operator approval works
 
 Tool gating runs entirely over the stream-json **control protocol** — the same stdin/stdout the runner already owns — so there is no hook script, no `/internal/authcheck` loopback, and no `CLAUDE_TASK_ID`/`AGENT_PORT`. `--permission-mode default --permission-prompt-tool stdio` makes the CLI emit a `can_use_tool` `control_request` on stdout for every non-trivially-safe tool and wait for a `control_response` on stdin.
 
@@ -178,51 +158,3 @@ Tool gating runs entirely over the stream-json **control protocol** — the same
 3. For `Bash`, the command is matched against the project's `allowed_operations` glob list (`auth/operations.rs`). On hit it allows immediately.
 4. On miss (or for `AskUserQuestion`), it creates an `auth_requests` row, **publishes it to the task's live hub** (so the task page shows the pending approval instantly over the WS), and parks on `AuthWaiter.register(id).notified()` for up to `OPERATOR_TIMEOUT_SECS` (600s).
 5. The operator resolves via `POST /api/auth_requests/{id}/resolve`. The store wakes the waiter and publishes the resolution to the hub; the handler encodes the decision (allow, or deny-with-message — `AskUserQuestion` is always a deny whose message the model reads as the answer) and `hub.respond_permission` writes the `control_response` straight to the agent's stdin, bypassing the per-turn pacing so a mid-turn prompt is answered without waiting for the turn to end.
-
-## Configuration
-
-Read by `src/config.rs::from_env`. Defaults in parentheses.
-
-| Var | Default | Purpose |
-|---|---|---|
-| `DATABASE_URL` | required | Postgres DSN |
-| `REPO_BASE_PATH` | `/tmp/claude-jobs` | worktree base |
-| `LISTEN_ADDR` | `0.0.0.0:3000` | bind address |
-| `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size — gates **actively-processing turns**, acquired/released per turn so idle warm agents hold no slot |
-| `TASK_TOKEN_BUDGET` | `1_000_000` | soft cap; runner kills `claude` when cumulative `output_tokens ≥ budget/2` and the operator can Resume |
-| `API_BEARER_TOKEN` | unset | when set, gates `/api/*`; SPA prompts and stores in `localStorage` |
-| `RUST_LOG` | `agent=info` | `tracing-subscriber` filter |
-
-The Vue SPA is baked into the binary by `rust-embed` (`src/spa.rs`) at compile time. There is no runtime path override — to swap the bundle, rebuild.
-
-GitLab/GitHub credentials live in the `git_services` table, **not** in env. Managed via `/api/git_services` and the SPA.
-
-## Build / run
-
-```bash
-cd frontend && npm install && npm run build   # produce frontend/dist
-cargo run                                     # rust-embed bakes the dist in; migrations run on startup
-```
-
-Dev loop (hot-reload SPA against an already-running agent):
-
-```bash
-cd frontend && npm run dev                    # vite on 5173, with API proxy to the agent
-```
-
-After Rust changes: `cargo check`. After frontend changes: `npm run typecheck`.
-
-## Conventions
-
-- **Errors:** `anyhow::Result` everywhere except where typed errors leave the binary (HTTP response codes). `.context("…")` on every I/O boundary.
-- **Logging:** `tracing` — `info!` for state transitions, `warn!`/`error!` for things that survived but shouldn't have. Spans not currently used.
-- **Concurrency:** Tokio. Per-branch worktree setup uses `Workspace::lock_branch` (in-process `Mutex` + cross-process advisory file lock); tasks on different branches of the same project run concurrently. `confirm_task` blocks only when another task on the **same project+branch** is already running. Per-task work is just owned values.
-- **SeaORM:** entity Model is the read shape; mutations go through `ActiveModel` + `Set(...)`. Cross-row consistency relies on individual statements being short — no explicit transactions today.
-- **Idempotence:** dedupe at the event level via `seen_events: HashSet<String>` in `TaskStore`, keyed by `TriggerReason::event_id`. The set is in-memory; restarts re-deliver, but `created_at + trigger_data` makes duplicates easy to spot.
-- **Bot-comment marker:** every comment posted via `GitProvider::post_note` gets `BOT_NOTE_MARKER` (`<!-- agent -->`) appended. The provider-side webhook normalizers drop incoming notes that contain the marker, so the bot never reacts to its own posts. This is the loop guard — the dispatcher no longer compares actor to `bot_username`, which means a same-account operator/bot setup still works.
-- **Comments:** rule above; current code follows it inconsistently — bring new edits into line, don't write new "what" comments.
-
-## Memory rules (for future Claude sessions)
-
-- Clone repos over SSH only — see memory: *SSH only for git clones*.
-- Never write `.claude/` or `CLAUDE.md` into the *project* worktrees the agent manages — see memory: *No agent files in worktrees*. (This `CLAUDE.md` is the agent's own, at the agent repo root — that is allowed.)
