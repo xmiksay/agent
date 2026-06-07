@@ -105,6 +105,7 @@ Operator (SPA)                    approves/denies via
 | `migration/src/*.rs` | SeaORM migrations — append-only, numbered `mYYYYMMDD_NNNNNN_*` |
 | `src/spa.rs` | `rust-embed` handler — bakes `frontend/dist/` into the binary and serves it as the `/`-fallback (SPA paths fall through to `index.html`) |
 | `frontend/` | Vue 3 + Vite + Pinia + Tailwind SPA — `npm run build` must run before `cargo build` so the bundle is on disk when the embed derive picks it up |
+| `frontend/public/` | PWA assets copied verbatim into `dist/` by Vite: `manifest.webmanifest`, icons (`icon-192/512.png`, `maskable-512.png`, `apple-touch-icon.png`, `favicon.svg/ico`), and `sw.js` — a **network-first** service worker (cache is offline-only fallback) so an installed home-screen app always reflects the live site. Registered in prod by `frontend/src/pwa.ts`; served by the `/`-fallback (no bearer gate), so install works regardless of `API_BEARER_TOKEN` |
 
 ### Database
 
