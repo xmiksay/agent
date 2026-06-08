@@ -370,6 +370,12 @@ mod tests {
                 webhook_secret: "s".into(),
                 bot_username: "bot".into(),
                 autofire: false,
+                auth_kind: Default::default(),
+                app_id: None,
+                app_installation_id: None,
+                app_private_key: None,
+                app_client_secret: None,
+                app_refresh_token: None,
             })
             .await
             .expect("seed git_service")

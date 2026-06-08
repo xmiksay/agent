@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use tokio::sync::RwLock;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::git_service::{GitService, GitServiceStore};
@@ -37,14 +38,20 @@ impl ProviderRegistry {
         let services = self.store.list().await.context("listing git_services")?;
         let mut map = HashMap::with_capacity(services.len());
         for svc in services {
-            let client = build_client(&svc);
-            map.insert(
-                svc.id,
-                Entry {
-                    service: svc,
-                    client,
-                },
-            );
+            match build_client(&svc) {
+                Ok(client) => {
+                    map.insert(
+                        svc.id,
+                        Entry {
+                            service: svc,
+                            client,
+                        },
+                    );
+                }
+                Err(e) => {
+                    warn!(slug = %svc.slug, error = %e, "skipping git_service: cannot build client");
+                }
+            }
         }
         let mut guard = self.by_id.write().await;
         *guard = map;
@@ -73,7 +80,7 @@ impl ProviderRegistry {
         let mut guard = self.by_id.write().await;
         match svc {
             Some(svc) => {
-                let client = build_client(&svc);
+                let client = build_client(&svc)?;
                 guard.insert(
                     service_id,
                     Entry {
@@ -90,13 +97,14 @@ impl ProviderRegistry {
     }
 }
 
-fn build_client(svc: &GitService) -> Arc<dyn GitProvider> {
-    match svc.kind {
+fn build_client(svc: &GitService) -> Result<Arc<dyn GitProvider>> {
+    let creds = svc.credentials()?;
+    Ok(match svc.kind {
         ProviderKind::Gitlab => {
-            Arc::new(GitLabClient::new(svc.id, &svc.base_url, &svc.token)) as Arc<dyn GitProvider>
+            Arc::new(GitLabClient::new(svc.id, &svc.base_url, creds)) as Arc<dyn GitProvider>
         }
         ProviderKind::Github => {
-            Arc::new(GitHubClient::new(svc.id, &svc.base_url, &svc.token)) as Arc<dyn GitProvider>
+            Arc::new(GitHubClient::new(svc.id, &svc.base_url, creds)) as Arc<dyn GitProvider>
         }
-    }
+    })
 }
