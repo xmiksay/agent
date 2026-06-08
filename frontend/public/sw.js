@@ -29,6 +29,28 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Clicking a "cmd ask" notification focuses an existing app window (navigating
+// it to the auth queue) or opens one. The target rides in the notification's
+// data.url (set by src/notifications.ts).
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        for (const client of clients) {
+          if ("focus" in client) {
+            client.focus();
+            if ("navigate" in client) client.navigate(target).catch(() => {});
+            return undefined;
+          }
+        }
+        return self.clients.openWindow(target);
+      }),
+  );
+});
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;

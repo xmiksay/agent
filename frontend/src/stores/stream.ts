@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
 import { useSessionStore } from "./session";
+import { syncAuthNotification } from "../notifications";
 import type {
   AgentState,
   AuthRequest,
@@ -106,6 +107,16 @@ export const useStreamStore = defineStore("stream", () => {
 
   function apply(env: StreamEnvelope) {
     applyFrame(env.task_id, env.kind, env.seq, env.payload);
+    // A live cmd-ask arriving (or resolving) refreshes the grouped browser
+    // notification. Only the live socket triggers it — seeding from REST must
+    // not re-notify on already-seen approvals at startup.
+    if (env.kind === "auth_request") {
+      const r = env.payload as AuthRequest;
+      syncAuthNotification(
+        approvals.size,
+        r.status === "pending" ? r.requested_op : undefined,
+      );
+    }
   }
 
   function connect() {

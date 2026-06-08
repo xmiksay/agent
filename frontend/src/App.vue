@@ -8,6 +8,7 @@ import TokenGate from "./components/TokenGate.vue";
 import Logo from "./components/Logo.vue";
 import Background from "./components/Background.vue";
 import Switcher from "./components/Switcher.vue";
+import NotifyToggle from "./components/NotifyToggle.vue";
 import { layout } from "./layout";
 
 const session = useSessionStore();
@@ -84,6 +85,7 @@ const showGate = computed(() => session.validated === false);
       </nav>
       <div class="space-y-2 border-t border-line px-4 py-3">
         <Switcher compact />
+        <NotifyToggle class="block" />
         <div class="flex items-center gap-2 font-mono text-[11px] text-faint">
           <span class="led text-signal-ok" /> ~/projects/agent
           <button
@@ -126,6 +128,7 @@ const showGate = computed(() => session.validated === false);
         </nav>
         <div class="ml-auto flex items-center gap-3">
           <Switcher />
+          <NotifyToggle />
           <button
             v-if="session.hasToken"
             class="font-mono text-xs text-faint hover:text-signal-danger"
@@ -185,8 +188,9 @@ const showGate = computed(() => session.validated === false);
           >
             sign out
           </button>
-          <div class="border-t border-line px-3 pt-2.5">
+          <div class="space-y-2 border-t border-line px-3 pt-2.5">
             <Switcher compact />
+            <NotifyToggle class="block" />
           </div>
         </nav>
       </header>
