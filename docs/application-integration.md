@@ -6,10 +6,11 @@ identity**. This is the reference for issues
 [#9](https://github.com/xmiksay/agent/issues/9) (GitHub App) and
 [#10](https://github.com/xmiksay/agent/issues/10) (GitLab bot + Group/Project
 Access Token). Issue [#15](https://github.com/xmiksay/agent/issues/15) laid the
-`auth_kind`/`app_credentials` groundwork.
+`auth_kind`/`app_credentials` groundwork. **GitHub App (#9) is now wired** (see
+*What #9 implemented* below and `docs/architecture.md` → *GitHub App auth*).
 
-The two providers diverge: GitHub gets a first-class **App** install (#9, not
-wired yet). GitLab gets a **bot/service account** authenticating with a
+The two providers diverge: GitHub gets a first-class **App** install (#9, now
+wired). GitLab gets a **bot/service account** authenticating with a
 **Group/Project Access Token** (#10) — which is just a `pat`, so it needs no new
 credential code. The earlier "GitLab OAuth application" framing was dropped (see
 [Why a bot, not OAuth](#why-a-bot-not-oauth-10)).
@@ -88,13 +89,25 @@ explicitly as `app_credentials.installation_id`.
 `api_base` already drives the REST host (`base_url`), so GHES works by pointing
 it at `https://ghes.example.com/api/v3`.
 
-### What #9 must implement
-- A JWT signer (RS256 over the stored PEM) + the access-token exchange in
-  `resolve_token` for the `GitHubApp` variant.
-- An in-memory token cache keyed by `service_id`, refreshing ~5 min before
-  `expires_at` (the clients call `resolve_token` per request, so caching there is
-  the only change they need).
-- Crates: a JWT lib (e.g. `jsonwebtoken`) — not yet a dependency.
+### What #9 implemented (`src/provider/github/app.rs`)
+- A JWT signer (RS256 over the stored PEM, via `jsonwebtoken`) + the
+  installation access-token exchange, driven from `resolve_token`'s `GitHubApp`
+  arm. `api_base` is threaded into `GitHubAppConfig` from the service's
+  `base_url`, so GHES works.
+- An in-memory token cache keyed by `{api_base}#{installation_id}`, refreshing
+  ~5 min before `expires_at` (the clients call `resolve_token` per request, so
+  caching there is the only change they needed).
+- HTTPS clone/push already works unchanged: token-HTTPS transport (#22) auths
+  GitHub as `x-access-token:<token>`, and an installation token slots straight
+  in.
+- The **install flow**: `GET /api/git_services/{id}/github_app/install` resolves
+  the App's install URL (`GET /app` → `html_url`, with the service id as
+  `state`); `GET /github_app/callback` captures `installation_id` back into
+  `app_credentials`. App-auth services **skip** per-repo `ensure_webhook` in
+  favor of the App's single app-level webhook.
+- `installation_id` is optional at create/validate time — blank until the
+  install callback writes it; minting fails with a clear "not installed" error
+  until then.
 
 ## GitLab bot identity (#10)
 

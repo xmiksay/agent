@@ -6,7 +6,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::git_service::GitService;
+use crate::git_service::{AuthKind, GitService};
 use crate::jobs::types::TriggerReason;
 use crate::project::NewProjectConfig;
 use crate::webhook::normalized::{EventKind, NormalizedEvent, NoteTargetRef};
@@ -129,6 +129,13 @@ pub async fn dispatch(
 /// when `PUBLIC_BASE_URL` is unset — operators then wire hooks by hand. Runs in
 /// the background so it never delays or fails the inbound webhook delivery.
 fn ensure_project_webhook(state: &AppState, service: &GitService, full_name: &str) {
+    // App-backed services receive events via a single app-level webhook (set on
+    // the App itself), so per-repo registration is both unnecessary and outside
+    // the App-token's scope.
+    if service.auth_kind == AuthKind::App {
+        debug!(project = %full_name, "app-auth service; using app-level webhook, skipping per-repo registration");
+        return;
+    }
     let Some(base) = state.config.public_base_url.clone() else {
         debug!(project = %full_name, "PUBLIC_BASE_URL unset; skipping webhook auto-registration");
         return;

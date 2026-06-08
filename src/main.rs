@@ -122,6 +122,10 @@ async fn main() -> anyhow::Result<()> {
                 .delete(api::git_services::delete),
         )
         .route(
+            "/api/git_services/{id}/github_app/install",
+            get(api::git_services::github_app_install),
+        )
+        .route(
             "/api/auth_requests",
             get(api::auth_requests::list_auth_requests),
         )
@@ -149,6 +153,13 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/webhook/gitlab/{slug}", post(webhook::gitlab::handle))
         .route("/webhook/github/{slug}", post(webhook::github::handle))
+        // GitHub redirects the operator's browser here after an App install; it
+        // carries no bearer, so it sits outside the `/api/*` middleware (trust is
+        // the `state` param naming an existing service).
+        .route(
+            "/github_app/callback",
+            get(api::git_services::github_app_callback),
+        )
         // Single app-wide live stream. Auth is in-band (the client's first frame
         // is its token), so it sits outside the `/api/*` bearer middleware.
         .route("/ws", get(ws::global_stream))

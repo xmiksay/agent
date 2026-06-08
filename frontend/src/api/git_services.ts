@@ -21,4 +21,7 @@ export const gitServicesApi = {
   remove(id: string): Promise<void> {
     return api(`/api/git_services/${id}`, { method: "DELETE" });
   },
+  githubAppInstallUrl(id: string): Promise<{ install_url: string }> {
+    return api(`/api/git_services/${id}/github_app/install`);
+  },
 };

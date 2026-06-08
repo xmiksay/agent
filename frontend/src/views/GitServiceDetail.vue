@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useGitServicesStore } from "../stores/git_services";
+import { gitServicesApi } from "../api/git_services";
 import ProviderBadge from "../components/ProviderBadge.vue";
 import type { UpdateGitService } from "../types/api";
 
@@ -12,11 +13,15 @@ const router = useRouter();
 const draft = ref<UpdateGitService>({});
 const tokenDraft = ref("");
 const webhookSecretDraft = ref("");
+const appIdDraft = ref("");
+const privateKeyDraft = ref("");
 const saving = ref(false);
+const installing = ref(false);
 const error = ref<string | null>(null);
 const copied = ref(false);
 
 const detail = computed(() => store.detail);
+const isApp = computed(() => detail.value?.auth_kind === "app");
 
 async function reload() {
   await store.load(props.id);
@@ -29,6 +34,8 @@ async function reload() {
     };
     tokenDraft.value = "";
     webhookSecretDraft.value = "";
+    appIdDraft.value = "";
+    privateKeyDraft.value = "";
   }
 }
 
@@ -58,13 +65,35 @@ async function save() {
     const body: UpdateGitService = { ...draft.value };
     if (tokenDraft.value) body.token = tokenDraft.value;
     if (webhookSecretDraft.value) body.webhook_secret = webhookSecretDraft.value;
+    if (isApp.value && (appIdDraft.value || privateKeyDraft.value)) {
+      if (!appIdDraft.value || !privateKeyDraft.value) {
+        throw new Error("provide both App ID and private key to update App credentials");
+      }
+      // Replacing the bundle drops the recorded installation — the operator
+      // reinstalls afterward.
+      body.app_credentials = { app_id: appIdDraft.value, private_key: privateKeyDraft.value };
+    }
     await store.update(props.id, body);
     tokenDraft.value = "";
     webhookSecretDraft.value = "";
+    appIdDraft.value = "";
+    privateKeyDraft.value = "";
   } catch (e: unknown) {
     error.value = extractMessage(e);
   } finally {
     saving.value = false;
+  }
+}
+
+async function installApp() {
+  installing.value = true;
+  error.value = null;
+  try {
+    const { install_url } = await gitServicesApi.githubAppInstallUrl(props.id);
+    window.location.href = install_url;
+  } catch (e: unknown) {
+    error.value = extractMessage(e);
+    installing.value = false;
   }
 }
 
@@ -114,6 +143,26 @@ function extractMessage(e: unknown): string {
       </div>
     </section>
 
+    <section v-if="isApp" class="card space-y-3 p-5">
+      <div class="flex items-center gap-2">
+        <h2 class="text-sm font-semibold">GitHub App</h2>
+        <span
+          class="rounded px-2 py-0.5 text-xs font-medium"
+          :class="detail.app_installed ? 'bg-signal-ok/15 text-signal-ok' : 'bg-signal-auth/15 text-signal-auth'"
+        >
+          {{ detail.app_installed ? "Installed" : "Not installed" }}
+        </span>
+      </div>
+      <p class="text-xs text-muted">
+        Install the App on the repos it should act on — that records the installation id used to
+        mint short-lived tokens. Configure the webhook once at the app level (URL above + secret);
+        per-repo hooks are skipped for App services.
+      </p>
+      <button type="button" class="btn btn-primary" :disabled="installing" @click="installApp">
+        {{ installing ? "Redirecting…" : detail.app_installed ? "Reinstall / manage" : "Install GitHub App" }}
+      </button>
+    </section>
+
     <form class="card space-y-3 p-5" @submit.prevent="save">
       <h2 class="text-sm font-semibold">Settings</h2>
       <div class="grid grid-cols-2 gap-3">
@@ -129,13 +178,29 @@ function extractMessage(e: unknown): string {
           <label class="label">Bot username</label>
           <input v-model="draft.bot_username" class="input font-mono" />
         </div>
-        <div>
+        <div v-if="!isApp">
           <label class="label">Personal access token <span class="text-faint">(leave blank to keep)</span></label>
           <input
             v-model="tokenDraft"
             type="password"
             autocomplete="new-password"
             class="input font-mono"
+          />
+        </div>
+        <div v-if="isApp">
+          <label class="label">App ID <span class="text-faint">(leave blank to keep)</span></label>
+          <input v-model="appIdDraft" class="input font-mono" placeholder="123456" />
+        </div>
+        <div v-if="isApp" class="col-span-2">
+          <label class="label">
+            Private key (PEM) <span class="text-faint">(leave blank to keep — replacing it resets the install)</span>
+          </label>
+          <textarea
+            v-model="privateKeyDraft"
+            rows="4"
+            autocomplete="new-password"
+            class="input font-mono text-xs"
+            placeholder="-----BEGIN RSA PRIVATE KEY-----"
           />
         </div>
         <div class="col-span-2">
