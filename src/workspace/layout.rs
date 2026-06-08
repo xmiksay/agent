@@ -7,8 +7,7 @@
 pub fn slugify(s: &str) -> String {
     let lowered = s.to_lowercase();
     let mut out = String::with_capacity(lowered.len());
-    let mut chars = lowered.chars().peekable();
-    while let Some(c) = chars.next() {
+    for c in lowered.chars() {
         match c {
             '/' => out.push_str("__"),
             'a'..='z' | '0'..='9' | '_' | '-' => out.push(c),

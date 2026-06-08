@@ -19,11 +19,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(ProjectBranches::ProjectId)
-                            .uuid()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(ProjectBranches::ProjectId).uuid().not_null())
                     .col(
                         ColumnDef::new(ProjectBranches::BranchName)
                             .string_len(255)

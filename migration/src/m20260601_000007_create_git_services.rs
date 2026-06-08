@@ -20,11 +20,7 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(GitServices::Kind).string_len(16).not_null())
-                    .col(
-                        ColumnDef::new(GitServices::Slug)
-                            .string_len(64)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(GitServices::Slug).string_len(64).not_null())
                     .col(
                         ColumnDef::new(GitServices::DisplayName)
                             .string_len(255)
@@ -32,11 +28,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(GitServices::BaseUrl).text().not_null())
                     .col(ColumnDef::new(GitServices::Token).text().not_null())
-                    .col(
-                        ColumnDef::new(GitServices::WebhookSecret)
-                            .text()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(GitServices::WebhookSecret).text().not_null())
                     .col(
                         ColumnDef::new(GitServices::BotUsername)
                             .string_len(255)

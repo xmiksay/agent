@@ -19,10 +19,23 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(TaskResults::TaskId).uuid().not_null().unique_key())
+                    .col(
+                        ColumnDef::new(TaskResults::TaskId)
+                            .uuid()
+                            .not_null()
+                            .unique_key(),
+                    )
                     .col(ColumnDef::new(TaskResults::CostUsd).double().not_null())
-                    .col(ColumnDef::new(TaskResults::InputTokens).big_integer().not_null())
-                    .col(ColumnDef::new(TaskResults::OutputTokens).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(TaskResults::InputTokens)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(TaskResults::OutputTokens)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(TaskResults::NumTurns).integer().not_null())
                     .col(ColumnDef::new(TaskResults::IsError).boolean().not_null())
                     .col(ColumnDef::new(TaskResults::ResultText).text().not_null())

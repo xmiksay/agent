@@ -42,17 +42,31 @@ impl TriggerReason {
         match self {
             // Hash title+description so editing the issue creates a new task,
             // but a no-op re-fire (same content twice in a row) is deduped.
-            Self::Issue { iid, title, description, .. } => {
-                format!("issue-{iid}-{}", hash_str(&format!("{title}\n{description}")))
+            Self::Issue {
+                iid,
+                title,
+                description,
+                ..
+            } => {
+                format!(
+                    "issue-{iid}-{}",
+                    hash_str(&format!("{title}\n{description}"))
+                )
             }
             Self::ReviewMR { iid, .. } => format!("review-mr-{iid}"),
-            Self::FixReview { iid, review_body, .. } => {
+            Self::FixReview {
+                iid, review_body, ..
+            } => {
                 format!("fix-review-{iid}-{}", hash_str(review_body))
             }
-            Self::MRComment { mr_iid, comment, .. } => {
+            Self::MRComment {
+                mr_iid, comment, ..
+            } => {
                 format!("mr-comment-{mr_iid}-{}", hash_str(comment))
             }
-            Self::IssueComment { issue_iid, comment, .. } => {
+            Self::IssueComment {
+                issue_iid, comment, ..
+            } => {
                 format!("issue-comment-{issue_iid}-{}", hash_str(comment))
             }
         }

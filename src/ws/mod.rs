@@ -8,8 +8,8 @@
 //! Auth is a `?token=` query param checked in-handler (browsers can't set headers
 //! on a WebSocket), so this route sits outside the `/api/*` bearer middleware.
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -52,7 +52,10 @@ async fn handle_global(mut socket: WebSocket, state: AppState) {
             .and_then(|a| a.token),
         _ => None,
     };
-    if !crate::auth::token_ok(state.config.api_bearer_token.as_deref(), presented.as_deref()) {
+    if !crate::auth::token_ok(
+        state.config.api_bearer_token.as_deref(),
+        presented.as_deref(),
+    ) {
         let _ = socket.send(Message::Close(None)).await;
         return;
     }
@@ -89,13 +92,16 @@ async fn handle_global(mut socket: WebSocket, state: AppState) {
 }
 
 async fn handle_inbound_global(hub: &crate::jobs::hub::LiveSessions, text: &str) {
-    let Ok(msg) = serde_json::from_str::<InboundGlobal>(text) else { return };
+    let Ok(msg) = serde_json::from_str::<InboundGlobal>(text) else {
+        return;
+    };
     match msg {
         InboundGlobal::Chat { task_id, text } => {
             hub.send_to_agent(task_id, &text).await;
         }
         InboundGlobal::Redefine { task_id, text } => {
-            hub.send_to_agent(task_id, &format!("New goal: {text}")).await;
+            hub.send_to_agent(task_id, &format!("New goal: {text}"))
+                .await;
         }
         InboundGlobal::Stop { task_id } => {
             hub.stop(task_id).await;
@@ -105,5 +111,8 @@ async fn handle_inbound_global(hub: &crate::jobs::hub::LiveSessions, text: &str)
 
 async fn send_envelope(socket: &mut WebSocket, env: &crate::jobs::hub::Envelope) -> Result<(), ()> {
     let json = serde_json::to_string(env).map_err(|_| ())?;
-    socket.send(Message::Text(json.into())).await.map_err(|_| ())
+    socket
+        .send(Message::Text(json.into()))
+        .await
+        .map_err(|_| ())
 }

@@ -1,9 +1,9 @@
 //! Parse + verify GitHub webhooks → NormalizedEvent.
 
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::Json;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -16,7 +16,7 @@ use crate::provider::github::payload::*;
 use crate::webhook::dispatch::dispatch;
 use crate::webhook::gitlab::WebhookResponse;
 use crate::webhook::normalized::{
-    EventKind, NoteTargetRef, NormalizedEvent, ProjectRef, ReviewState,
+    EventKind, NormalizedEvent, NoteTargetRef, ProjectRef, ReviewState,
 };
 use crate::workspace::layout::slugify;
 
@@ -75,8 +75,7 @@ fn verify_signature(secret: &str, headers: &HeaderMap, body: &[u8]) -> Result<()
     let provided = header.strip_prefix("sha256=").ok_or(())?;
     let provided_bytes = hex::decode(provided).map_err(|_| ())?;
 
-    let mut mac =
-        <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()).map_err(|_| ())?;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()).map_err(|_| ())?;
     mac.update(body);
     let expected = mac.finalize().into_bytes();
 

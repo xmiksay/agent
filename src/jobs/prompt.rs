@@ -81,7 +81,13 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
         ProviderKind::Github => "GitHub",
     };
     match trigger {
-        TriggerReason::Issue { iid, title, description, url, .. } => {
+        TriggerReason::Issue {
+            iid,
+            title,
+            description,
+            url,
+            ..
+        } => {
             format!(
                 "Implement {service} issue #{iid}: {title}\n\n\
                  Description:\n{description}\n\n\
@@ -97,7 +103,14 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
                 create = c.create_pr(branch),
             )
         }
-        TriggerReason::ReviewMR { iid, title, source_branch, target_branch, url, .. } => {
+        TriggerReason::ReviewMR {
+            iid,
+            title,
+            source_branch,
+            target_branch,
+            url,
+            ..
+        } => {
             format!(
                 "Review {pr_noun} {pr_ref}{iid}: {title}\n\
                  Branch: {source_branch} -> {target_branch}\n\
@@ -113,7 +126,14 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
                 approve = c.approve_pr(*iid),
             )
         }
-        TriggerReason::FixReview { iid, title, source_branch, url, review_body, .. } => {
+        TriggerReason::FixReview {
+            iid,
+            title,
+            source_branch,
+            url,
+            review_body,
+            ..
+        } => {
             let review_section = if review_body.trim().is_empty() {
                 String::new()
             } else {
@@ -133,7 +153,12 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
                 view = c.view_pr_comments(*iid),
             )
         }
-        TriggerReason::MRComment { mr_iid, comment, url, .. } => {
+        TriggerReason::MRComment {
+            mr_iid,
+            comment,
+            url,
+            ..
+        } => {
             format!(
                 "A reviewer commented on {pr_abbr} {pr_ref}{mr_iid}\n\
                  Comment: {comment}\n\
@@ -149,7 +174,12 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
                 note = c.note_pr(*mr_iid),
             )
         }
-        TriggerReason::IssueComment { issue_iid, comment, url, .. } => {
+        TriggerReason::IssueComment {
+            issue_iid,
+            comment,
+            url,
+            ..
+        } => {
             format!(
                 "A new comment was posted on issue #{issue_iid} (assigned to the bot)\n\
                  Comment: {comment}\n\

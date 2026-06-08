@@ -39,20 +39,12 @@ impl GitProvider for GitHubClient {
         self.service_id
     }
 
-    async fn post_note(
-        &self,
-        full_name: &str,
-        target: NoteTarget,
-        body: &str,
-    ) -> Result<()> {
+    async fn post_note(&self, full_name: &str, target: NoteTarget, body: &str) -> Result<()> {
         let iid = match target {
             NoteTarget::Issue(iid) | NoteTarget::MergeRequest(iid) => iid,
         };
         // GitHub treats PR review comments at /issues/<num>/comments too.
-        let url = format!(
-            "{}/repos/{full_name}/issues/{iid}/comments",
-            self.api_base,
-        );
+        let url = format!("{}/repos/{full_name}/issues/{iid}/comments", self.api_base,);
         info!(%url, "posting comment to GitHub");
         let stamped = format!("{body}\n\n{BOT_NOTE_MARKER}");
         let resp = self
@@ -72,5 +64,4 @@ impl GitProvider for GitHubClient {
         }
         Ok(())
     }
-
 }

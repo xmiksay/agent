@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::Serialize;
 use tracing::warn;
 use uuid::Uuid;
@@ -43,14 +43,14 @@ impl GitServiceView {
     }
 }
 
-pub async fn list(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<GitServiceView>>, StatusCode> {
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<GitServiceView>>, StatusCode> {
     let services = state.git_service_store.list().await.map_err(|e| {
         warn!(error = %e, "list git_services failed");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    Ok(Json(services.into_iter().map(GitServiceView::from).collect()))
+    Ok(Json(
+        services.into_iter().map(GitServiceView::from).collect(),
+    ))
 }
 
 pub async fn get(
@@ -75,9 +75,11 @@ pub async fn create(
         .create(req)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    state.providers.refresh(svc.id).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?;
+    state
+        .providers
+        .refresh(svc.id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok((StatusCode::CREATED, Json(GitServiceView::from(svc))))
 }
 
@@ -91,9 +93,11 @@ pub async fn update(
         .update(id, req)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    state.providers.refresh(svc.id).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?;
+    state
+        .providers
+        .refresh(svc.id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(GitServiceView::from(svc)))
 }
 
@@ -106,8 +110,10 @@ pub async fn delete(
         .delete(id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    state.providers.refresh(id).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?;
+    state
+        .providers
+        .refresh(id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }

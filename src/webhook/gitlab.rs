@@ -1,8 +1,8 @@
 //! Parse + verify GitLab webhooks → NormalizedEvent.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::Json;
 use serde::Serialize;
 use subtle::ConstantTimeEq;
 use tracing::{debug, info, warn};
@@ -11,7 +11,9 @@ use crate::AppState;
 use crate::project::ProviderKind;
 use crate::provider::BOT_NOTE_MARKER;
 use crate::webhook::dispatch::dispatch;
-use crate::webhook::normalized::{EventKind, NoteTargetRef, NormalizedEvent, ProjectRef, ReviewState};
+use crate::webhook::normalized::{
+    EventKind, NormalizedEvent, NoteTargetRef, ProjectRef, ReviewState,
+};
 use crate::webhook::types::*;
 
 use crate::workspace::layout::slugify;
@@ -54,12 +56,10 @@ pub async fn handle(
     };
     info!(kind = ?std::mem::discriminant(&normalized.kind), "dispatching gitlab event");
 
-    let task_ids = dispatch(&state, &service, normalized)
-        .await
-        .map_err(|e| {
-            warn!(error = %e, "dispatch error");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let task_ids = dispatch(&state, &service, normalized).await.map_err(|e| {
+        warn!(error = %e, "dispatch error");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok((StatusCode::CREATED, Json(WebhookResponse { task_ids })))
 }
@@ -84,11 +84,7 @@ fn project_ref(p: &Project) -> ProjectRef {
 fn normalize_issue(e: &IssueEvent) -> Option<NormalizedEvent> {
     let attrs = &e.object_attributes;
     let action = attrs.action.as_deref()?;
-    let assignees: Vec<String> = e
-        .assignees
-        .iter()
-        .map(|a| a.username.clone())
-        .collect();
+    let assignees: Vec<String> = e.assignees.iter().map(|a| a.username.clone()).collect();
     let kind = match action {
         "open" => EventKind::IssueAssigned {
             iid: attrs.iid,

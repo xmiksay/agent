@@ -19,11 +19,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(TaskEvents::TaskId).uuid().not_null())
                     .col(ColumnDef::new(TaskEvents::Seq).big_integer().not_null())
                     .col(ColumnDef::new(TaskEvents::Payload).json_binary().not_null())
-                    .primary_key(
-                        Index::create()
-                            .col(TaskEvents::TaskId)
-                            .col(TaskEvents::Seq),
-                    )
+                    .primary_key(Index::create().col(TaskEvents::TaskId).col(TaskEvents::Seq))
                     .foreign_key(
                         ForeignKey::create()
                             .from(TaskEvents::Table, TaskEvents::TaskId)

@@ -107,7 +107,10 @@ mod tests {
     #[test]
     fn keeps_value_with_equals_sign() {
         let pairs = parse_env_file("DSN=postgres://u:p@h/db?x=1");
-        assert_eq!(pairs, vec![("DSN".into(), "postgres://u:p@h/db?x=1".into())]);
+        assert_eq!(
+            pairs,
+            vec![("DSN".into(), "postgres://u:p@h/db?x=1".into())]
+        );
     }
 
     #[test]

@@ -11,12 +11,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Projects::Table)
                     .if_not_exists()
-                    .col(
-                        ColumnDef::new(Projects::Id)
-                            .uuid()
-                            .not_null()
-                            .primary_key(),
-                    )
+                    .col(ColumnDef::new(Projects::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Projects::Provider).string_len(16).not_null())
                     .col(
                         ColumnDef::new(Projects::ProjectSlug)

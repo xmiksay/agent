@@ -12,7 +12,11 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(AuthRequests::Table)
-                    .add_column(ColumnDef::new(AuthRequestsExt::Metadata).json_binary().null())
+                    .add_column(
+                        ColumnDef::new(AuthRequestsExt::Metadata)
+                            .json_binary()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await

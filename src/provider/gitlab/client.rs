@@ -69,12 +69,7 @@ impl GitProvider for GitLabClient {
         self.service_id
     }
 
-    async fn post_note(
-        &self,
-        project_path: &str,
-        target: NoteTarget,
-        body: &str,
-    ) -> Result<()> {
+    async fn post_note(&self, project_path: &str, target: NoteTarget, body: &str) -> Result<()> {
         let (noteable_type, iid) = match target {
             NoteTarget::Issue(iid) => ("issues", iid),
             NoteTarget::MergeRequest(iid) => ("merge_requests", iid),
@@ -82,5 +77,4 @@ impl GitProvider for GitLabClient {
         self.post_note_raw(project_path, noteable_type, iid, body)
             .await
     }
-
 }

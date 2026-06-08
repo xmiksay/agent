@@ -9,7 +9,7 @@ use crate::AppState;
 use crate::git_service::GitService;
 use crate::jobs::types::TriggerReason;
 use crate::project::NewProjectConfig;
-use crate::webhook::normalized::{EventKind, NoteTargetRef, NormalizedEvent};
+use crate::webhook::normalized::{EventKind, NormalizedEvent, NoteTargetRef};
 use crate::workspace::layout::slugify;
 
 pub async fn dispatch(
@@ -36,13 +36,25 @@ pub async fn dispatch(
     // Lifecycle: close events release the branch and exit early.
     match &ev.kind {
         EventKind::IssueClosed { iid, .. } => {
-            release_for_issue(state, project.id, &service.slug, &project.project_slug, *iid as i64)
-                .await?;
+            release_for_issue(
+                state,
+                project.id,
+                &service.slug,
+                &project.project_slug,
+                *iid as i64,
+            )
+            .await?;
             return Ok(vec![]);
         }
         EventKind::PrClosed { source_branch, .. } => {
-            release_for_branch(state, project.id, &service.slug, &project.project_slug, source_branch)
-                .await?;
+            release_for_branch(
+                state,
+                project.id,
+                &service.slug,
+                &project.project_slug,
+                source_branch,
+            )
+            .await?;
             return Ok(vec![]);
         }
         _ => {}
@@ -146,7 +158,10 @@ async fn release_for_issue(
         .find_branch_for_issue(project_id, issue_iid)
         .await?
     else {
-        debug!(issue_iid, "no checked-out branch bound to this issue, nothing to release");
+        debug!(
+            issue_iid,
+            "no checked-out branch bound to this issue, nothing to release"
+        );
         return Ok(());
     };
     // Stop any live agent on this branch before reclaiming the worktree.
@@ -180,7 +195,10 @@ async fn release_for_branch(
         .find_branch(project_id, &branch_slug)
         .await?
     else {
-        debug!(branch = branch_name, "branch not tracked, nothing to release");
+        debug!(
+            branch = branch_name,
+            "branch not tracked, nothing to release"
+        );
         return Ok(());
     };
     // Stop any live agent on this branch before reclaiming the worktree.
@@ -320,7 +338,12 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
             let mention = format!("@{my_username}");
             let mentioned = body.contains(&mention);
             match target {
-                NoteTargetRef::PullRequest { iid, source_branch, author, reviewers } => {
+                NoteTargetRef::PullRequest {
+                    iid,
+                    source_branch,
+                    author,
+                    reviewers,
+                } => {
                     // Mentions always count. Otherwise only act if the bot owns
                     // (authored) the MR or is a reviewer on it. The bot's own
                     // posts are stamped with BOT_NOTE_MARKER and filtered at

@@ -56,11 +56,8 @@ pub trait AgentBackend: Send + Sync {
     fn parse_permission_request(&self, line: &str) -> Option<PermissionRequest>;
 
     /// Encode a permission decision as a single stdin `control_response` line.
-    fn encode_permission_response(
-        &self,
-        request_id: &str,
-        decision: &PermissionDecision,
-    ) -> String;
+    fn encode_permission_response(&self, request_id: &str, decision: &PermissionDecision)
+    -> String;
 
     /// Parse the final normalized result from the process's full stdout.
     fn parse_result(&self, stdout: &str) -> Result<ClaudeOutput>;

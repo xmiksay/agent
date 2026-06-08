@@ -34,13 +34,9 @@ impl Workspace {
         self.base.join(service_slug).join(project_slug)
     }
 
-    pub fn branch_dir(
-        &self,
-        service_slug: &str,
-        project_slug: &str,
-        branch_slug: &str,
-    ) -> PathBuf {
-        self.project_root(service_slug, project_slug).join(branch_slug)
+    pub fn branch_dir(&self, service_slug: &str, project_slug: &str, branch_slug: &str) -> PathBuf {
+        self.project_root(service_slug, project_slug)
+            .join(branch_slug)
     }
 
     /// Acquire both the in-process mutex and the cross-process advisory lock

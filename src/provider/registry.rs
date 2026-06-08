@@ -38,7 +38,13 @@ impl ProviderRegistry {
         let mut map = HashMap::with_capacity(services.len());
         for svc in services {
             let client = build_client(&svc);
-            map.insert(svc.id, Entry { service: svc, client });
+            map.insert(
+                svc.id,
+                Entry {
+                    service: svc,
+                    client,
+                },
+            );
         }
         let mut guard = self.by_id.write().await;
         *guard = map;
@@ -68,7 +74,13 @@ impl ProviderRegistry {
         match svc {
             Some(svc) => {
                 let client = build_client(&svc);
-                guard.insert(service_id, Entry { service: svc, client });
+                guard.insert(
+                    service_id,
+                    Entry {
+                        service: svc,
+                        client,
+                    },
+                );
             }
             None => {
                 guard.remove(&service_id);

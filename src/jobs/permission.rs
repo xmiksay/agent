@@ -40,21 +40,35 @@ pub async fn handle_permission(
     // Any tool other than Bash / AskUserQuestion runs autonomously — the old
     // "auto" permission mode let edits/reads through without prompting.
     if req.tool_name != "Bash" && !is_question {
-        respond(&hub, task_id, &req.request_id, PermissionDecision::Allow {
-            updated_input: req.input.clone(),
-        })
+        respond(
+            &hub,
+            task_id,
+            &req.request_id,
+            PermissionDecision::Allow {
+                updated_input: req.input.clone(),
+            },
+        )
         .await;
         return;
     }
 
     // Bash on the project allowlist is allowed without bothering the operator.
     if req.tool_name == "Bash" {
-        let command = req.input.get("command").and_then(|c| c.as_str()).unwrap_or("");
+        let command = req
+            .input
+            .get("command")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
         if command_allowed(project_id, command, &project_store).await {
             info!(%task_id, command, "command allowed by policy");
-            respond(&hub, task_id, &req.request_id, PermissionDecision::Allow {
-                updated_input: req.input.clone(),
-            })
+            respond(
+                &hub,
+                task_id,
+                &req.request_id,
+                PermissionDecision::Allow {
+                    updated_input: req.input.clone(),
+                },
+            )
             .await;
             return;
         }
@@ -96,9 +110,14 @@ pub async fn handle_permission(
         Ok(a) => a,
         Err(e) => {
             warn!(%task_id, error = %e, "failed to create auth_request; denying tool");
-            respond(&hub, task_id, &req.request_id, PermissionDecision::Deny {
-                message: "Approval could not be recorded.".to_string(),
-            })
+            respond(
+                &hub,
+                task_id,
+                &req.request_id,
+                PermissionDecision::Deny {
+                    message: "Approval could not be recorded.".to_string(),
+                },
+            )
             .await;
             return;
         }
@@ -106,7 +125,8 @@ pub async fn handle_permission(
     let notifier = auth_waiter.register(auth.id);
 
     if let Ok(payload) = serde_json::to_value(&auth) {
-        hub.publish_aux(task_id, EnvelopeKind::AuthRequest, payload).await;
+        hub.publish_aux(task_id, EnvelopeKind::AuthRequest, payload)
+            .await;
     }
     info!(auth_id = %auth.id, %task_id, "awaiting operator approval");
 
@@ -154,7 +174,9 @@ fn map_decision(
         return PermissionDecision::Deny { message };
     }
     if approved {
-        PermissionDecision::Allow { updated_input: input.clone() }
+        PermissionDecision::Allow {
+            updated_input: input.clone(),
+        }
     } else {
         PermissionDecision::Deny {
             message: reply.unwrap_or_else(|| "Operator denied this command.".to_string()),
@@ -204,7 +226,11 @@ fn summarize_questions(questions: &Value) -> String {
         .iter()
         .map(|q| {
             let question = q.get("question").and_then(|v| v.as_str()).unwrap_or("");
-            let multi = if q.get("multiSelect").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let multi = if q
+                .get("multiSelect")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 " (multi-select)"
             } else {
                 ""
@@ -242,7 +268,12 @@ mod tests {
     fn bash_approve_allows_with_input() {
         let input = serde_json::json!({"command": "ls"});
         let d = map_decision(false, true, None, &input);
-        assert_eq!(d, PermissionDecision::Allow { updated_input: input });
+        assert_eq!(
+            d,
+            PermissionDecision::Allow {
+                updated_input: input
+            }
+        );
     }
 
     #[test]
@@ -250,11 +281,15 @@ mod tests {
         let input = serde_json::json!({"command": "rm -rf /"});
         assert_eq!(
             map_decision(false, false, Some("too dangerous".into()), &input),
-            PermissionDecision::Deny { message: "too dangerous".into() }
+            PermissionDecision::Deny {
+                message: "too dangerous".into()
+            }
         );
         assert_eq!(
             map_decision(false, false, None, &input),
-            PermissionDecision::Deny { message: "Operator denied this command.".into() }
+            PermissionDecision::Deny {
+                message: "Operator denied this command.".into()
+            }
         );
     }
 
@@ -263,12 +298,16 @@ mod tests {
         let input = serde_json::json!({"questions": []});
         assert_eq!(
             map_decision(true, true, Some("use option B".into()), &input),
-            PermissionDecision::Deny { message: "use option B".into() }
+            PermissionDecision::Deny {
+                message: "use option B".into()
+            }
         );
         // Approved with no reply text still denies-with-message (the answer).
         assert_eq!(
             map_decision(true, true, None, &input),
-            PermissionDecision::Deny { message: "Approved.".into() }
+            PermissionDecision::Deny {
+                message: "Approved.".into()
+            }
         );
     }
 
@@ -277,12 +316,16 @@ mod tests {
         let input = serde_json::json!({"questions": []});
         assert_eq!(
             map_decision(true, false, None, &input),
-            PermissionDecision::Deny { message: "Operator declined to answer.".into() }
+            PermissionDecision::Deny {
+                message: "Operator declined to answer.".into()
+            }
         );
         // An explicit reply still wins over the decline fallback.
         assert_eq!(
             map_decision(true, false, Some("go with A".into()), &input),
-            PermissionDecision::Deny { message: "go with A".into() }
+            PermissionDecision::Deny {
+                message: "go with A".into()
+            }
         );
     }
 

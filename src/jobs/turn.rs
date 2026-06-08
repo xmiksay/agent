@@ -83,7 +83,11 @@ async fn post_result(
         | TriggerReason::MRComment { mr_iid: iid, .. } => NoteTarget::MergeRequest(*iid),
     };
 
-    let status = if result.is_error { "error" } else { "completed" };
+    let status = if result.is_error {
+        "error"
+    } else {
+        "completed"
+    };
     let body = format!(
         "**Agent** ({status})\n\n\
          Cost: ${:.4} | Turns: {}\n\n\

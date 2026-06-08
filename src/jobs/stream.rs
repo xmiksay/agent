@@ -71,16 +71,13 @@ pub async fn pump_stream<R>(
                 // Each stdout line is one agent event — fan it out live and
                 // persist it. When it's the turn's `result`, hand it to the
                 // runner so it can finalize from the event itself.
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(chunk.trim()) {
-                    if value.is_object() {
-                        let is_result =
-                            value.get("type").and_then(|t| t.as_str()) == Some("result");
-                        hub.publish_event(task_id, value.clone()).await;
-                        if is_result {
-                            if let Some(tx) = result_tx.as_ref() {
-                                let _ = tx.send(value).await;
-                            }
-                        }
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(chunk.trim())
+                    && value.is_object()
+                {
+                    let is_result = value.get("type").and_then(|t| t.as_str()) == Some("result");
+                    hub.publish_event(task_id, value.clone()).await;
+                    if is_result && let Some(tx) = result_tx.as_ref() {
+                        let _ = tx.send(value).await;
                     }
                 }
                 // Sniff session_id from the first stream line that has it. The
@@ -95,14 +92,14 @@ pub async fn pump_stream<R>(
                     }
                 }
                 // Track output tokens for budget abort.
-                if let Some((limit, _)) = budget.as_ref() {
-                    if let Some(delta) = backend.extract_output_tokens(chunk.trim()) {
-                        output_tokens = output_tokens.saturating_add(delta);
-                        if output_tokens >= *limit {
-                            if let Some((_, tx)) = budget.take() {
-                                let _ = tx.send(output_tokens);
-                            }
-                        }
+                if let Some((limit, _)) = budget.as_ref()
+                    && let Some(delta) = backend.extract_output_tokens(chunk.trim())
+                {
+                    output_tokens = output_tokens.saturating_add(delta);
+                    if output_tokens >= *limit
+                        && let Some((_, tx)) = budget.take()
+                    {
+                        let _ = tx.send(output_tokens);
                     }
                 }
             }

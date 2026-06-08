@@ -116,8 +116,7 @@ impl AuthStore {
         status: Option<AuthStatus>,
         task_id: Option<Uuid>,
     ) -> Result<Vec<AuthRequest>> {
-        let mut q = auth_requests::Entity::find()
-            .order_by_desc(auth_requests::Column::CreatedAt);
+        let mut q = auth_requests::Entity::find().order_by_desc(auth_requests::Column::CreatedAt);
         if let Some(s) = status {
             q = q.filter(auth_requests::Column::Status.eq(s.as_str()));
         }

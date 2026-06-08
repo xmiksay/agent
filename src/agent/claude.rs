@@ -71,8 +71,14 @@ impl AgentBackend for ClaudeCode {
         }
         Some(PermissionRequest {
             request_id: v.get("request_id").and_then(|r| r.as_str())?.to_string(),
-            tool_name: request.get("tool_name").and_then(|t| t.as_str())?.to_string(),
-            input: request.get("input").cloned().unwrap_or(serde_json::Value::Null),
+            tool_name: request
+                .get("tool_name")
+                .and_then(|t| t.as_str())?
+                .to_string(),
+            input: request
+                .get("input")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         })
     }
 
@@ -116,8 +122,7 @@ impl AgentBackend for ClaudeCode {
                 Err(_) => continue,
             };
             if v.get("type").and_then(|t| t.as_str()) == Some("result") {
-                return serde_json::from_value::<ClaudeOutput>(v)
-                    .context("parsing result event");
+                return serde_json::from_value::<ClaudeOutput>(v).context("parsing result event");
             }
         }
         anyhow::bail!("no result event found in stream-json output")
@@ -128,7 +133,9 @@ impl AgentBackend for ClaudeCode {
             return None;
         }
         let v: serde_json::Value = serde_json::from_str(line).ok()?;
-        v.get("session_id").and_then(|s| s.as_str()).map(String::from)
+        v.get("session_id")
+            .and_then(|s| s.as_str())
+            .map(String::from)
     }
 
     fn extract_output_tokens(&self, line: &str) -> Option<u64> {
@@ -201,15 +208,18 @@ mod tests {
 
     #[test]
     fn parse_permission_request_ignores_normal_events() {
-        assert!(ClaudeCode
-            .parse_permission_request(r#"{"type":"assistant","message":{}}"#)
-            .is_none());
+        assert!(
+            ClaudeCode
+                .parse_permission_request(r#"{"type":"assistant","message":{}}"#)
+                .is_none()
+        );
         assert!(ClaudeCode.parse_permission_request("not json").is_none());
     }
 
     #[test]
     fn parse_permission_request_ignores_other_control_requests() {
-        let line = r#"{"type":"control_request","request_id":"req-2","request":{"subtype":"interrupt"}}"#;
+        let line =
+            r#"{"type":"control_request","request_id":"req-2","request":{"subtype":"interrupt"}}"#;
         assert!(ClaudeCode.parse_permission_request(line).is_none());
     }
 
@@ -218,7 +228,9 @@ mod tests {
         let input = serde_json::json!({"command": "ls"});
         let line = ClaudeCode.encode_permission_response(
             "req-9",
-            &PermissionDecision::Allow { updated_input: input.clone() },
+            &PermissionDecision::Allow {
+                updated_input: input.clone(),
+            },
         );
         assert!(!line.contains('\n'));
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -233,7 +245,9 @@ mod tests {
     fn encode_permission_response_deny_carries_message() {
         let line = ClaudeCode.encode_permission_response(
             "req-10",
-            &PermissionDecision::Deny { message: "nope".into() },
+            &PermissionDecision::Deny {
+                message: "nope".into(),
+            },
         );
         assert!(!line.contains('\n'));
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -269,7 +283,10 @@ mod tests {
     #[test]
     fn extract_session_id_reads_top_level_field() {
         let line = r#"{"type":"system","session_id":"sess-9"}"#;
-        assert_eq!(ClaudeCode.extract_session_id(line).as_deref(), Some("sess-9"));
+        assert_eq!(
+            ClaudeCode.extract_session_id(line).as_deref(),
+            Some("sess-9")
+        );
         assert_eq!(ClaudeCode.extract_session_id(r#"{"type":"x"}"#), None);
         assert_eq!(ClaudeCode.extract_session_id(""), None);
     }

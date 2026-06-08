@@ -5,9 +5,9 @@ use crate::project::ProviderKind;
 /// Where the change lives — enough to seed a `projects` row and clone the repo.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectRef {
-    pub full_name: String,           // "mygroup/myrepo"
-    pub project_slug: String,        // "mygroup__myrepo"
-    pub ssh_url: String,             // git@host:path.git — internal SSH is configured
+    pub full_name: String,    // "mygroup/myrepo"
+    pub project_slug: String, // "mygroup__myrepo"
+    pub ssh_url: String,      // git@host:path.git — internal SSH is configured
     pub default_branch: String,
 }
 
@@ -15,7 +15,7 @@ pub struct ProjectRef {
 pub struct NormalizedEvent {
     pub provider: ProviderKind,
     pub project: ProjectRef,
-    pub actor: String,               // username of whoever triggered the event
+    pub actor: String, // username of whoever triggered the event
     pub kind: EventKind,
 }
 
@@ -96,4 +96,3 @@ pub enum EventKind {
         url: String,
     },
 }
-

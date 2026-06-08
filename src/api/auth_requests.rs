@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -82,7 +82,11 @@ pub async fn resolve_auth_request(
         state
             .task_store
             .hub()
-            .publish_aux(resolved.task_id, crate::jobs::hub::EnvelopeKind::AuthRequest, payload)
+            .publish_aux(
+                resolved.task_id,
+                crate::jobs::hub::EnvelopeKind::AuthRequest,
+                payload,
+            )
             .await;
     }
     Ok(Json(ResolveResponse { request: resolved }))
