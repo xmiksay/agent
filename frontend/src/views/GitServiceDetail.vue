@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { useGitServicesStore } from "../stores/git_services";
 import { gitServicesApi } from "../api/git_services";
 import ProviderBadge from "../components/ProviderBadge.vue";
-import type { UpdateGitService } from "../types/api";
+import type { AuthKind, UpdateGitService } from "../types/api";
 
 const props = defineProps<{ id: string }>();
 const store = useGitServicesStore();
@@ -15,13 +15,23 @@ const tokenDraft = ref("");
 const webhookSecretDraft = ref("");
 const appIdDraft = ref("");
 const privateKeyDraft = ref("");
+const authKindDraft = ref<AuthKind>("pat");
 const saving = ref(false);
 const installing = ref(false);
+const syncing = ref(false);
+const syncResult = ref<{ ok: boolean; text: string } | null>(null);
 const error = ref<string | null>(null);
 const copied = ref(false);
+const generatedSecret = ref<string | null>(null);
 
 const detail = computed(() => store.detail);
-const isApp = computed(() => detail.value?.auth_kind === "app");
+// GitHub-only: `app` is rejected for GitLab, so the selector is hidden there.
+const isGithub = computed(() => detail.value?.kind === "github");
+// The currently *selected* auth kind drives which credential inputs show, so a
+// PAT service can be converted to App in place. The install section below keys
+// off the *saved* kind instead — you install only after the switch is saved.
+const isAppDraft = computed(() => isGithub.value && authKindDraft.value === "app");
+const isAppSaved = computed(() => detail.value?.auth_kind === "app");
 
 async function reload() {
   await store.load(props.id);
@@ -31,7 +41,10 @@ async function reload() {
       base_url: store.detail.base_url,
       bot_username: store.detail.bot_username,
       autofire: store.detail.autofire,
+      trigger_mode: store.detail.trigger_mode,
+      trigger_label: store.detail.trigger_label,
     };
+    authKindDraft.value = store.detail.auth_kind;
     tokenDraft.value = "";
     webhookSecretDraft.value = "";
     appIdDraft.value = "";
@@ -65,15 +78,21 @@ async function save() {
     const body: UpdateGitService = { ...draft.value };
     if (tokenDraft.value) body.token = tokenDraft.value;
     if (webhookSecretDraft.value) body.webhook_secret = webhookSecretDraft.value;
-    if (isApp.value && (appIdDraft.value || privateKeyDraft.value)) {
-      if (!appIdDraft.value || !privateKeyDraft.value) {
-        throw new Error("provide both App ID and private key to update App credentials");
+    if (isGithub.value) body.auth_kind = authKindDraft.value;
+    if (isAppDraft.value) {
+      // Switching PAT → App needs fresh credentials; an existing App can leave
+      // them blank to keep. Replacing the bundle drops the recorded installation
+      // (operator reinstalls afterward).
+      const switchingToApp = !isAppSaved.value;
+      if (switchingToApp || appIdDraft.value || privateKeyDraft.value) {
+        if (!appIdDraft.value || !privateKeyDraft.value) {
+          throw new Error("provide both App ID and private key");
+        }
+        body.app_credentials = { app_id: appIdDraft.value, private_key: privateKeyDraft.value };
       }
-      // Replacing the bundle drops the recorded installation — the operator
-      // reinstalls afterward.
-      body.app_credentials = { app_id: appIdDraft.value, private_key: privateKeyDraft.value };
     }
-    await store.update(props.id, body);
+    const updated = await store.update(props.id, body);
+    generatedSecret.value = updated.generated_webhook_secret ?? null;
     tokenDraft.value = "";
     webhookSecretDraft.value = "";
     appIdDraft.value = "";
@@ -94,6 +113,20 @@ async function installApp() {
   } catch (e: unknown) {
     error.value = extractMessage(e);
     installing.value = false;
+  }
+}
+
+async function syncApp() {
+  syncing.value = true;
+  syncResult.value = null;
+  try {
+    const res = await gitServicesApi.githubAppSync(props.id);
+    syncResult.value = { ok: true, text: res.message };
+    await reload();
+  } catch (e: unknown) {
+    syncResult.value = { ok: false, text: extractMessage(e) };
+  } finally {
+    syncing.value = false;
   }
 }
 
@@ -143,7 +176,7 @@ function extractMessage(e: unknown): string {
       </div>
     </section>
 
-    <section v-if="isApp" class="card space-y-3 p-5">
+    <section v-if="isAppSaved" class="card space-y-3 p-5">
       <div class="flex items-center gap-2">
         <h2 class="text-sm font-semibold">GitHub App</h2>
         <span
@@ -158,9 +191,26 @@ function extractMessage(e: unknown): string {
         mint short-lived tokens. Configure the webhook once at the app level (URL above + secret);
         per-repo hooks are skipped for App services.
       </p>
-      <button type="button" class="btn btn-primary" :disabled="installing" @click="installApp">
-        {{ installing ? "Redirecting…" : detail.app_installed ? "Reinstall / manage" : "Install GitHub App" }}
-      </button>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" class="btn btn-primary" :disabled="installing" @click="installApp">
+          {{ installing ? "Redirecting…" : detail.app_installed ? "Reinstall / manage" : "Install GitHub App" }}
+        </button>
+        <button type="button" class="btn btn-ghost" :disabled="syncing" @click="syncApp">
+          {{ syncing ? "Syncing…" : "Sync App" }}
+        </button>
+      </div>
+      <p class="text-xs text-muted">
+        <strong>Sync App</strong> lets the bot finish setup itself with the App key: it discovers the
+        installation (no redirect needed) and registers the app-level webhook (URL + secret) for you.
+        Install the App on your repos first.
+      </p>
+      <p
+        v-if="syncResult"
+        class="text-xs"
+        :class="syncResult.ok ? 'text-signal-ok' : 'text-signal-danger'"
+      >
+        {{ syncResult.text }}
+      </p>
     </section>
 
     <form class="card space-y-3 p-5" @submit.prevent="save">
@@ -178,7 +228,14 @@ function extractMessage(e: unknown): string {
           <label class="label">Bot username</label>
           <input v-model="draft.bot_username" class="input font-mono" />
         </div>
-        <div v-if="!isApp">
+        <div v-if="isGithub">
+          <label class="label">Authentication</label>
+          <select v-model="authKindDraft" class="select">
+            <option value="pat">Personal access token</option>
+            <option value="app">GitHub App</option>
+          </select>
+        </div>
+        <div v-if="!isAppDraft">
           <label class="label">Personal access token <span class="text-faint">(leave blank to keep)</span></label>
           <input
             v-model="tokenDraft"
@@ -187,11 +244,14 @@ function extractMessage(e: unknown): string {
             class="input font-mono"
           />
         </div>
-        <div v-if="isApp">
-          <label class="label">App ID <span class="text-faint">(leave blank to keep)</span></label>
+        <div v-if="isAppDraft">
+          <label class="label">
+            App ID
+            <span class="text-faint">{{ isAppSaved ? "(leave blank to keep)" : "" }}</span>
+          </label>
           <input v-model="appIdDraft" class="input font-mono" placeholder="123456" />
         </div>
-        <div v-if="isApp" class="col-span-2">
+        <div v-if="isAppDraft" class="col-span-2">
           <label class="label">
             Private key (PEM) <span class="text-faint">(leave blank to keep — replacing it resets the install)</span>
           </label>
@@ -211,6 +271,22 @@ function extractMessage(e: unknown): string {
             autocomplete="new-password"
             class="input font-mono"
           />
+        </div>
+        <div>
+          <label class="label">Trigger</label>
+          <select v-model="draft.trigger_mode" class="select">
+            <option value="assignee">Assignee</option>
+            <option value="label">Label</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+        <div v-if="draft.trigger_mode !== 'assignee'">
+          <label class="label">Trigger label</label>
+          <input v-model="draft.trigger_label" class="input font-mono" placeholder="agent" />
+          <p class="mt-1 text-xs text-muted">
+            Issues with this label trigger the agent — works for GitHub App identities, which can't
+            be assignees.
+          </p>
         </div>
         <div class="col-span-2">
           <label class="flex items-center gap-2">
@@ -232,6 +308,18 @@ function extractMessage(e: unknown): string {
         <RouterLink :to="{ name: 'git-services' }" class="btn btn-ghost">Back</RouterLink>
       </div>
     </form>
+
+    <div v-if="generatedSecret" class="card space-y-2 border border-signal-auth/40 p-5">
+      <h2 class="text-sm font-semibold text-signal-auth">Webhook secret generated</h2>
+      <p class="text-xs text-muted">
+        Save this now — it's shown once and never again. For a GitHub App, paste it into the App's
+        webhook settings.
+      </p>
+      <div class="flex gap-2">
+        <input readonly :value="generatedSecret" class="input flex-1 font-mono text-xs" />
+        <button type="button" class="btn btn-ghost" @click="generatedSecret = null">Dismiss</button>
+      </div>
+    </div>
 
     <p class="font-mono text-xs text-faint">
       Updated {{ new Date(detail.updated_at).toLocaleString() }} ·

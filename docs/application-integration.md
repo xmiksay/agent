@@ -109,6 +109,14 @@ it at `https://ghes.example.com/api/v3`.
   install callback writes it; minting fails with a clear "not installed" error
   until then.
 
+### Triggering an App (label mode)
+A GitHub App is a bot account that **cannot be assigned to an issue**, so the
+default `assignee` trigger mode never fires for an App service. Set the service's
+`trigger_mode` to `label` (or `both`) with a `trigger_label` (e.g. `agent`): the
+App then fires whenever an issue carries that label, which an operator or
+automation can add. See the trigger-mode note in
+[`docs/architecture.md`](architecture.md) (`git_services` config).
+
 ## GitLab bot identity (#10)
 
 GitLab gets its own **independent identity** as a bot/service account

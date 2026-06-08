@@ -18,6 +18,7 @@ const appId = ref("");
 const privateKey = ref("");
 const saving = ref(false);
 const error = ref<string | null>(null);
+const generatedSecret = ref<string | null>(null);
 
 function blank(): NewGitService {
   return {
@@ -30,10 +31,11 @@ function blank(): NewGitService {
     bot_username: "",
     autofire: false,
     auth_kind: "pat",
+    trigger_mode: "assignee",
+    trigger_label: "",
   };
 }
 
-const hasGithub = computed(() => store.list.some((s) => s.kind === "github"));
 // App auth is a GitHub-only flow today; force PAT for GitLab.
 const isApp = computed(() => form.value.kind === "github" && form.value.auth_kind === "app");
 
@@ -62,7 +64,8 @@ async function submit() {
     } else {
       body.auth_kind = "pat";
     }
-    await store.create(body);
+    const created = await store.create(body);
+    generatedSecret.value = created.generated_webhook_secret ?? null;
     form.value = blank();
     appId.value = "";
     privateKey.value = "";
@@ -121,9 +124,7 @@ onMounted(() => store.refresh());
           <span class="label">Kind</span>
           <select v-model="form.kind" class="select" @change="onKindChange">
             <option value="gitlab">GitLab</option>
-            <option value="github" :disabled="hasGithub">
-              GitHub{{ hasGithub ? " (already configured)" : "" }}
-            </option>
+            <option value="github">GitHub</option>
           </select>
         </label>
         <label class="flex flex-col">
@@ -194,14 +195,30 @@ onMounted(() => store.refresh());
           </p>
         </template>
         <label class="col-span-2 flex flex-col">
-          <span class="label">Webhook secret</span>
+          <span class="label">Webhook secret <span class="text-faint">(blank = auto-generate)</span></span>
           <input
             v-model="form.webhook_secret"
-            required
             type="password"
             autocomplete="new-password"
+            placeholder="leave blank to auto-generate a strong secret"
             class="input font-mono"
           />
+        </label>
+        <label class="flex flex-col">
+          <span class="label">Trigger</span>
+          <select v-model="form.trigger_mode" class="select">
+            <option value="assignee">Assignee</option>
+            <option value="label">Label</option>
+            <option value="both">Both</option>
+          </select>
+        </label>
+        <label v-if="form.trigger_mode !== 'assignee'" class="flex flex-col">
+          <span class="label">Trigger label</span>
+          <input v-model="form.trigger_label" placeholder="agent" class="input font-mono" />
+          <span class="mt-1 text-xs text-muted">
+            Issues with this label trigger the agent — works for GitHub App identities, which can't
+            be assignees.
+          </span>
         </label>
         <label class="col-span-2 flex items-center gap-2">
           <input v-model="form.autofire" type="checkbox" class="h-4 w-4" />
@@ -220,6 +237,18 @@ onMounted(() => store.refresh());
         <button type="button" class="btn btn-ghost" @click="showForm = false">Cancel</button>
       </div>
     </form>
+
+    <div v-if="generatedSecret" class="card space-y-2 border border-signal-auth/40 p-5">
+      <h2 class="text-sm font-semibold text-signal-auth">Webhook secret generated</h2>
+      <p class="text-xs text-muted">
+        Save this now — it's shown once and never again. For a GitHub App, paste it into the App's
+        webhook settings. For per-repo (PAT) hooks the agent registers it for you.
+      </p>
+      <div class="flex gap-2">
+        <input readonly :value="generatedSecret" class="input flex-1 font-mono text-xs" />
+        <button type="button" class="btn btn-ghost" @click="generatedSecret = null">Dismiss</button>
+      </div>
+    </div>
 
     <div v-if="store.loading" class="text-muted">Loading…</div>
     <div v-else-if="!store.list.length" class="card p-10 text-center text-faint">

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { useProjectsStore } from "../stores/projects";
+import { projectsApi } from "../api/projects";
 import ProviderBadge from "../components/ProviderBadge.vue";
 import StatusPill from "../components/StatusPill.vue";
 
@@ -11,6 +12,8 @@ const saving = ref(false);
 const envDraft = ref("");
 const savingEnv = ref(false);
 const envPlaceholder = "DEPLOY_ENV={{ branch }}\nREPO_URL={{ url }}";
+const registering = ref(false);
+const hookResult = ref<{ ok: boolean; text: string } | null>(null);
 
 const reload = async () => {
   await store.load(props.id);
@@ -40,6 +43,22 @@ async function saveEnv() {
     await store.updateEnvFile(props.id, envDraft.value);
   } finally {
     savingEnv.value = false;
+  }
+}
+
+async function registerWebhook() {
+  registering.value = true;
+  hookResult.value = null;
+  try {
+    const res = await projectsApi.registerWebhook(props.id);
+    hookResult.value = { ok: true, text: res.message };
+  } catch (e: unknown) {
+    const err = e as { data?: unknown; message?: string };
+    const text =
+      typeof err.data === "string" ? err.data : (err.message ?? String(e));
+    hookResult.value = { ok: false, text };
+  } finally {
+    registering.value = false;
   }
 }
 </script>
@@ -80,6 +99,29 @@ async function saveEnv() {
         <dd v-else class="text-xs text-faint">unlinked</dd>
       </div>
     </dl>
+
+    <section class="card space-y-3 p-5">
+      <h2 class="text-sm font-semibold">Webhook</h2>
+      <p class="text-xs text-muted">
+        Register the inbound webhook on the provider for this repo. Use it for repos that
+        existed before the agent — auto-registration only fires on a repo's first event.
+        (App services use a single app-level webhook; nothing to register here.)
+      </p>
+      <button
+        class="btn btn-primary btn-sm"
+        :disabled="registering || !store.detail.git_service_id"
+        @click="registerWebhook"
+      >
+        {{ registering ? "Registering…" : "Register webhook" }}
+      </button>
+      <p
+        v-if="hookResult"
+        class="text-xs"
+        :class="hookResult.ok ? 'text-signal-ok' : 'text-signal-danger'"
+      >
+        {{ hookResult.text }}
+      </p>
+    </section>
 
     <section class="card space-y-3 p-5">
       <h2 class="text-sm font-semibold">Allowed operations</h2>

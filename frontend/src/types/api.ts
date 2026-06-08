@@ -86,6 +86,11 @@ export interface ProjectConfig {
 // groundwork for GitHub App (#9). GitLab has no 'app' flow.
 export type AuthKind = "pat" | "app";
 
+// Which issue signal triggers the agent: the bot being an assignee, a watched
+// label, or either. Label mode is how a GitHub App identity (which can't be an
+// assignee) gets triggered.
+export type TriggerMode = "assignee" | "label" | "both";
+
 export interface GitServiceView {
   id: string;
   kind: ProviderKind;
@@ -101,6 +106,19 @@ export interface GitServiceView {
   auth_kind: AuthKind;
   // True once a GitHub App install has been recorded (installation_id present).
   app_installed: boolean;
+  trigger_mode: TriggerMode;
+  // The label name watched when trigger_mode includes labels; "" otherwise.
+  trigger_label: string;
+  // Present only on a create/update response when the webhook secret was just
+  // auto-generated (left blank). Revealed once; never returned by list/get.
+  generated_webhook_secret?: string | null;
+}
+
+export interface GitHubAppSyncResult {
+  installation_id: string;
+  webhook_registered: boolean;
+  webhook_url: string | null;
+  message: string;
 }
 
 // Provider-specific app secret bundle stored under `app_credentials` when
@@ -120,6 +138,8 @@ export interface NewGitService {
   autofire: boolean;
   auth_kind?: AuthKind;
   app_credentials?: AppCredentials;
+  trigger_mode?: TriggerMode;
+  trigger_label?: string;
 }
 
 export interface UpdateGitService {
@@ -131,6 +151,8 @@ export interface UpdateGitService {
   autofire?: boolean;
   auth_kind?: AuthKind;
   app_credentials?: AppCredentials;
+  trigger_mode?: TriggerMode;
+  trigger_label?: string;
 }
 
 export interface BranchEntry {
@@ -151,6 +173,12 @@ export interface ProjectListItem extends ProjectConfig {
 
 export interface ProjectDetailResponse extends ProjectConfig {
   branches: BranchEntry[];
+}
+
+export interface RegisterWebhookResponse {
+  status: "registered" | "skipped";
+  message: string;
+  webhook_url: string | null;
 }
 
 export interface AuthQuestionOption {

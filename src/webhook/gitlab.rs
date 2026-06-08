@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Serialize;
 use subtle::ConstantTimeEq;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::AppState;
 use crate::project::ProviderKind;
@@ -40,26 +40,34 @@ pub async fn handle(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    let event_name = match &event {
+        GitLabEvent::Issue(_) => "issue",
+        GitLabEvent::MergeRequest(_) => "merge_request",
+        GitLabEvent::Note(_) => "note",
+    };
+    info!(slug = %slug, event = %event_name, "gitlab webhook received");
+
     let expected = service.webhook_secret.as_bytes();
     let actual = headers
         .get("X-Gitlab-Token")
         .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?
+        .unwrap_or("")
         .as_bytes();
     if expected.ct_eq(actual).unwrap_u8() != 1 {
+        warn!(slug = %slug, event = %event_name, "gitlab webhook REJECTED: X-Gitlab-Token mismatch (webhook secret differs from the service's)");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
     let Some(normalized) = normalize(&event) else {
-        debug!("event ignored: no normalized form");
+        info!(slug = %slug, event = %event_name, "gitlab event ignored (no normalized form)");
         return Ok((StatusCode::OK, Json(WebhookResponse { task_ids: vec![] })));
     };
-    info!(kind = ?std::mem::discriminant(&normalized.kind), "dispatching gitlab event");
 
     let task_ids = dispatch(&state, &service, normalized).await.map_err(|e| {
         warn!(error = %e, "dispatch error");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    info!(slug = %slug, event = %event_name, tasks = task_ids.len(), "gitlab webhook handled");
 
     Ok((StatusCode::CREATED, Json(WebhookResponse { task_ids })))
 }
@@ -85,10 +93,12 @@ fn normalize_issue(e: &IssueEvent) -> Option<NormalizedEvent> {
     let attrs = &e.object_attributes;
     let action = attrs.action.as_deref()?;
     let assignees: Vec<String> = e.assignees.iter().map(|a| a.username.clone()).collect();
+    let labels: Vec<String> = e.labels.iter().map(|l| l.title.clone()).collect();
     let kind = match action {
         "open" => EventKind::IssueAssigned {
             iid: attrs.iid,
             assignees,
+            labels,
             title: attrs.title.clone(),
             body: attrs.description.clone().unwrap_or_default(),
             url: attrs.url.clone(),
@@ -96,6 +106,7 @@ fn normalize_issue(e: &IssueEvent) -> Option<NormalizedEvent> {
         "update" => EventKind::IssueUpdated {
             iid: attrs.iid,
             assignees,
+            labels,
             title: attrs.title.clone(),
             body: attrs.description.clone().unwrap_or_default(),
             url: attrs.url.clone(),
@@ -200,4 +211,40 @@ fn normalize_note(e: &NoteEvent) -> Option<NormalizedEvent> {
             url: String::new(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issue_labels_land_in_normalized_event() {
+        let payload = serde_json::json!({
+            "object_kind": "issue",
+            "user": { "username": "operator" },
+            "project": {
+                "path_with_namespace": "acme/repo",
+                "git_ssh_url": "git@gitlab.com:acme/repo.git",
+                "default_branch": "main"
+            },
+            "object_attributes": {
+                "iid": 5,
+                "title": "Add a thing",
+                "description": "please",
+                "action": "update",
+                "url": "https://gitlab.com/acme/repo/-/issues/5"
+            },
+            "assignees": [],
+            "labels": [{ "title": "agent" }, { "title": "bug" }]
+        })
+        .to_string();
+        let event: GitLabEvent = serde_json::from_str(&payload).unwrap();
+        let ev = normalize(&event).unwrap();
+        match ev.kind {
+            EventKind::IssueUpdated { labels, .. } => {
+                assert_eq!(labels, vec!["agent".to_string(), "bug".to_string()]);
+            }
+            other => panic!("expected IssueUpdated, got {other:?}"),
+        }
+    }
 }

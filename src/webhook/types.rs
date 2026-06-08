@@ -18,6 +18,10 @@ pub struct IssueEvent {
     /// `assignee_ids`).
     #[serde(default)]
     pub assignees: Vec<Assignee>,
+    /// GitLab puts the issue's labels at the top level too, as objects with a
+    /// `title` (object_attributes only has `label_ids`).
+    #[serde(default)]
+    pub labels: Vec<GitlabLabel>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,4 +87,9 @@ pub struct Reviewer {
 #[derive(Debug, Deserialize)]
 pub struct Assignee {
     pub username: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitlabLabel {
+    pub title: String,
 }

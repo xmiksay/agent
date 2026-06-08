@@ -54,6 +54,14 @@ dev:
 run: frontend
 	cargo run
 
+## Build the release binary and restart the systemd service
+deploy: frontend
+	touch src/lib.rs
+	cargo build --release
+	sudo systemctl stop agent
+	sudo cp target/release/agent /usr/local/bin/agent
+	sudo systemctl start agent
+
 clean:
 	cargo clean
 	rm -rf $(FRONTEND)/dist

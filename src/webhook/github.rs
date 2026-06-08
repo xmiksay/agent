@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::AppState;
 use crate::project::ProviderKind;
@@ -36,35 +36,50 @@ pub async fn handle(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    verify_signature(&service.webhook_secret, &headers, &body)
-        .map_err(|()| StatusCode::UNAUTHORIZED)?;
-
     let event_type = headers
         .get("X-GitHub-Event")
         .and_then(|v| v.to_str().ok())
-        .ok_or(StatusCode::BAD_REQUEST)?
+        .unwrap_or("")
         .to_string();
+    let action = parse_action(&body);
+    info!(slug = %slug, event = %event_type, action = %action, "github webhook received");
+
+    if verify_signature(&service.webhook_secret, &headers, &body).is_err() {
+        // No secrets in the log — just the fact and the likely cause.
+        warn!(slug = %slug, event = %event_type, "github webhook REJECTED: X-Hub-Signature-256 mismatch (webhook secret differs from the service's)");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if event_type.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     let normalized = match parse(&event_type, &body) {
         Ok(Some(n)) => n,
         Ok(None) => {
-            debug!(event_type, "github event ignored");
+            info!(slug = %slug, event = %event_type, action = %action, "github event ignored (no normalized form)");
             return Ok((StatusCode::OK, Json(WebhookResponse { task_ids: vec![] })));
         }
         Err(e) => {
-            warn!(error = %e, event_type, "failed to parse github payload");
+            warn!(error = %e, event = %event_type, "failed to parse github payload");
             return Err(StatusCode::BAD_REQUEST);
         }
     };
-
-    info!(?event_type, "dispatching github event");
 
     let task_ids = dispatch(&state, &service, normalized).await.map_err(|e| {
         warn!(error = %e, "dispatch error");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    info!(slug = %slug, event = %event_type, action = %action, tasks = task_ids.len(), "github webhook handled");
 
     Ok((StatusCode::CREATED, Json(WebhookResponse { task_ids })))
+}
+
+/// Best-effort `action` field for logging (`opened`, `labeled`, …); `-` if absent.
+fn parse_action(body: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("action").and_then(|a| a.as_str()).map(String::from))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn verify_signature(secret: &str, headers: &HeaderMap, body: &[u8]) -> Result<(), ()> {
@@ -101,11 +116,13 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
             let ev: IssuesEvent = serde_json::from_slice(body)?;
             let assignees: Vec<String> =
                 ev.issue.assignees.iter().map(|u| u.login.clone()).collect();
+            let labels: Vec<String> = ev.issue.labels.iter().map(|l| l.name.clone()).collect();
             let body = ev.issue.body.unwrap_or_default();
             let kind = match ev.action.as_str() {
                 "assigned" | "opened" => EventKind::IssueAssigned {
                     iid: ev.issue.number,
                     assignees,
+                    labels,
                     title: ev.issue.title,
                     body,
                     url: ev.issue.html_url,
@@ -113,6 +130,7 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
                 "edited" | "labeled" => EventKind::IssueUpdated {
                     iid: ev.issue.number,
                     assignees,
+                    labels,
                     title: ev.issue.title,
                     body,
                     url: ev.issue.html_url,
@@ -237,4 +255,38 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issue_labels_land_in_normalized_event() {
+        let payload = serde_json::json!({
+            "action": "labeled",
+            "issue": {
+                "number": 12,
+                "title": "Add a thing",
+                "body": "please",
+                "html_url": "https://github.com/acme/repo/issues/12",
+                "assignees": [],
+                "labels": [{ "name": "agent" }, { "name": "bug" }]
+            },
+            "repository": {
+                "full_name": "acme/repo",
+                "ssh_url": "git@github.com:acme/repo.git",
+                "default_branch": "main"
+            },
+            "sender": { "login": "operator" }
+        })
+        .to_string();
+        let ev = parse("issues", payload.as_bytes()).unwrap().unwrap();
+        match ev.kind {
+            EventKind::IssueUpdated { labels, .. } => {
+                assert_eq!(labels, vec!["agent".to_string(), "bug".to_string()]);
+            }
+            other => panic!("expected IssueUpdated, got {other:?}"),
+        }
+    }
 }
