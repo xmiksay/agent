@@ -2,11 +2,19 @@ import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
 import { useSessionStore } from "./session";
 import type {
+  AgentState,
   AuthRequest,
   EnvelopeKind,
   PersistedEvent,
   StreamEnvelope,
+  TaskState,
 } from "../types/api";
+
+/** Latest pushed state for a task — the two orthogonal axes from a `status` frame. */
+export interface TaskStateFrame {
+  task_state: TaskState;
+  agent_state: AgentState;
+}
 
 /** Operator → agent messages on the single global socket (each names its task). */
 export type OutboundMessage =
@@ -26,8 +34,8 @@ export const useStreamStore = defineStore("stream", () => {
   const events = reactive(new Map<string, Map<number, unknown>>());
   // authId → AuthRequest, across all tasks (drops out when resolved).
   const approvals = reactive(new Map<string, AuthRequest>());
-  // taskId → latest status pushed over the wire.
-  const statusByTask = reactive(new Map<string, string>());
+  // taskId → latest {task_state, agent_state} pushed over the wire.
+  const statusByTask = reactive(new Map<string, TaskStateFrame>());
   const connected = ref(false);
 
   let ws: WebSocket | null = null;
@@ -86,8 +94,13 @@ export const useStreamStore = defineStore("stream", () => {
       if (r.status === "pending") approvals.set(r.id, r);
       else approvals.delete(r.id);
     } else if (kind === "status") {
-      const s = (payload as { status?: string }).status;
-      if (s) statusByTask.set(taskId, s);
+      const p = payload as Partial<TaskStateFrame>;
+      if (p.task_state && p.agent_state) {
+        statusByTask.set(taskId, {
+          task_state: p.task_state,
+          agent_state: p.agent_state,
+        });
+      }
     }
   }
 

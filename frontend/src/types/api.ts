@@ -2,9 +2,15 @@ export type ProviderKind = "gitlab" | "github";
 export type BranchStatus = "active" | "idle" | "releasing";
 export type AuthStatus = "pending" | "approved" | "denied";
 
+/** Persisted operator lifecycle of a task. */
+export type TaskState = "pending" | "working_on" | "completed" | "failed";
+/** Derived runtime disposition — the live hub overlaid on the durable column. */
+export type AgentState = "cold" | "warm" | "pending" | "running" | "failed";
+
 export interface Task {
   id: string;
-  status: string;
+  task_state: TaskState;
+  agent_state: AgentState;
   trigger_type: string;
   trigger_data: unknown;
   project_path: string;
@@ -57,8 +63,6 @@ export interface TaskResult {
 export interface TaskDetail extends Task {
   result: TaskResult | null;
   work_dir: string | null;
-  /** An agent process is attached and warm (idle between turns or running). */
-  live: boolean;
 }
 
 export interface ProjectConfig {
@@ -181,10 +185,12 @@ export interface NewTaskBody {
   trigger: TriggerReason;
 }
 
-/** Editable fields of a pending task. Only provided keys are changed. */
+/** Editable task fields. `branch`/`default_branch` are pending-only; `task_state`
+ *  (the operator lifecycle) can be set on any task. Only provided keys change. */
 export interface TaskEdits {
   branch?: string;
   default_branch?: string;
+  task_state?: TaskState;
 }
 
 export type StatsGroupBy = "project" | "service" | "branch" | "trigger_type";

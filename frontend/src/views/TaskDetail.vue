@@ -34,11 +34,11 @@ const showRaw = ref(false);
 
 let didInitDescription = false;
 watch(
-  () => store.detail?.status,
-  (status) => {
-    if (didInitDescription || !status) return;
+  () => store.detail?.task_state,
+  (taskState) => {
+    if (didInitDescription || !taskState) return;
     didInitDescription = true;
-    showDescription.value = status === "pending";
+    showDescription.value = taskState === "pending";
   },
   { immediate: true },
 );
@@ -67,7 +67,8 @@ watch(pendingApprovals, (p) => {
       <div class="flex flex-wrap items-center gap-3">
         <ProviderBadge :provider="store.detail.provider" />
         <h1 class="font-display text-xl font-bold">{{ store.detail.project_path }}</h1>
-        <StatusPill :status="store.detail.status" />
+        <StatusPill :status="store.detail.task_state" />
+        <StatusPill :status="store.detail.agent_state" />
         <span
           v-if="isLive"
           class="inline-flex items-center gap-1.5 text-xs"
@@ -126,10 +127,10 @@ watch(pendingApprovals, (p) => {
         <button
           :disabled="!!busy"
           class="btn btn-danger btn-sm ml-auto"
-          :title="isRunning ? 'Force-kill claude and delete' : 'Delete'"
+          :title="isLive ? 'Force-kill claude and delete' : 'Delete'"
           @click="remove"
         >
-          {{ busy === "delete" ? "Deleting…" : isRunning ? "Kill & delete" : "Delete" }}
+          {{ busy === "delete" ? "Deleting…" : isLive ? "Kill & delete" : "Delete" }}
         </button>
       </div>
 
