@@ -23,6 +23,7 @@ use crate::project::{
 };
 use crate::provider::{GitProvider, resolve_token};
 use crate::workspace::Workspace;
+use crate::workspace::git::HttpsAuth;
 use crate::workspace::layout::slugify;
 
 #[allow(clippy::too_many_arguments)]
@@ -72,11 +73,20 @@ pub async fn run_job(
         .await
         .context("locking branch workspace")?;
 
+    // Resolve the per-service token once (PAT today; app flows arrive with
+    // #9/#10) and reuse it for git transport, the agent's `gh`/`glab`, and notes.
+    let provider_token_value = resolve_token(&service.credentials()?).await?;
+    let provider_token_var = match service.kind {
+        ProviderKind::Github => "GH_TOKEN",
+        ProviderKind::Gitlab => "GITLAB_TOKEN",
+    };
+
     // git_url is the SSH URL (git@host:path.git) populated by the webhook
-    // normalizers. The agent host has SSH keys configured for the bot user, so
-    // we clone/fetch directly — no token injection.
+    // normalizers; derive a token-HTTPS remote from it so clone/push need no host
+    // SSH key and no secret is written into .git/config.
+    let https_auth = HttpsAuth::from_ssh_url(&git_url, service.kind, &provider_token_value)?;
     workspace
-        .clone_or_fetch(&work_dir, &git_url, &branch, &default_branch)
+        .clone_or_fetch(&work_dir, &https_auth, &branch, &default_branch)
         .await?;
 
     // Hardcoded to Claude Code for now; a future per-task config will choose.
@@ -110,15 +120,8 @@ pub async fn run_job(
 
     let agent_args = backend.build_args(resume_session_id.as_deref());
 
-    // So `gh`/`glab` inside the worktree authenticate against the same token the
-    // agent uses to clone and post notes — picked by provider kind. Resolved via
-    // the shared credential seam (PAT today; app flows arrive with #9/#10).
-    let provider_token_value = resolve_token(&service.credentials()?).await?;
-    let provider_token_var = match service.kind {
-        ProviderKind::Github => "GH_TOKEN",
-        ProviderKind::Gitlab => "GITLAB_TOKEN",
-    };
-
+    // `gh`/`glab` and the agent's own `git push` inside the worktree authenticate
+    // against the same token (already resolved above for git transport).
     let mut cmd = Command::new(backend.program());
     cmd.args(&agent_args).current_dir(&work_dir);
     // Project-configured env first, so reserved vars below always win. The stored
@@ -146,7 +149,7 @@ pub async fn run_job(
         }
     }
     let mut child = cmd
-        .env(provider_token_var, provider_token_value)
+        .env(provider_token_var, &provider_token_value)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -343,6 +346,8 @@ pub async fn run_job(
                 &work_dir_str,
                 task_id,
                 code_trigger,
+                provider_token_var,
+                &provider_token_value,
             )
             .await;
         }

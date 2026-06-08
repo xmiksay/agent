@@ -9,6 +9,10 @@ pub struct Config {
     pub repo_base_path: String,
     pub max_concurrent_jobs: usize,
     pub listen_addr: String,
+    /// Externally reachable base URL of this agent (e.g. `https://agent.example.com`),
+    /// used to build the callback URL when auto-registering provider webhooks. When
+    /// unset, auto-registration is skipped (operators wire hooks by hand).
+    pub public_base_url: Option<String>,
     /// Per-task soft budget on output tokens. The runner aborts claude when
     /// cumulative output_tokens reaches 50% of this number (so half is the
     /// safety margin for the active 5h window). Aborted tasks finish as
@@ -31,6 +35,10 @@ impl Config {
                 .parse()
                 .context("MAX_CONCURRENT_JOBS must be a number")?,
             listen_addr: env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
+            public_base_url: env::var("PUBLIC_BASE_URL")
+                .ok()
+                .map(|v| v.trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty()),
             task_token_budget: env::var("TASK_TOKEN_BUDGET")
                 .unwrap_or_else(|_| "1000000".to_string())
                 .parse()

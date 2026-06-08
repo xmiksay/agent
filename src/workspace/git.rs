@@ -1,8 +1,78 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use tokio::process::Command;
 use tracing::{debug, info};
+
+use crate::project::ProviderKind;
+
+/// HTTPS token transport for a repo. Replaces the old host-SSH dependency: the
+/// persisted `origin` is a clean `https://host/path.git` with no secret, and a
+/// git credential helper supplies the token from `token_env` at call time — so
+/// the token is never written into `.git/config`. Both our own git children
+/// (clone/fetch/push) and the agent's own `git push` inherit `token_env`, so
+/// both authenticate transparently.
+#[derive(Clone)]
+pub struct HttpsAuth {
+    /// Secret-free remote, e.g. `https://github.com/owner/repo.git`.
+    pub remote_url: String,
+    /// `git credential.helper` value: a shell snippet that echoes the username
+    /// and reads the password from `token_env` at call time.
+    pub credential_helper: String,
+    /// Env var the helper reads (`GH_TOKEN` / `GITLAB_TOKEN`).
+    pub token_env: String,
+    /// Token value, exported into our own git children's environment.
+    pub token: String,
+}
+
+impl HttpsAuth {
+    /// Build from the repo's SSH URL (`git@host:path.git` or
+    /// `ssh://git@host[:port]/path.git`), the provider kind (selects the HTTPS
+    /// username + token env var), and a resolved access token.
+    pub fn from_ssh_url(ssh_url: &str, kind: ProviderKind, token: &str) -> Result<Self> {
+        let (host, path) =
+            parse_ssh_url(ssh_url).with_context(|| format!("parsing ssh url {ssh_url}"))?;
+        let remote_url = format!("https://{host}/{path}");
+        let (user, token_env) = match kind {
+            ProviderKind::Github => ("x-access-token", "GH_TOKEN"),
+            ProviderKind::Gitlab => ("oauth2", "GITLAB_TOKEN"),
+        };
+        // `!f` runs the snippet as a shell command; git appends the operation
+        // (get/store/erase) as $1, which we ignore. The token is interpolated by
+        // the shell at call time from the env var, so it stays out of .git/config.
+        let credential_helper =
+            format!("!f() {{ echo username={user}; echo \"password=${token_env}\"; }}; f");
+        Ok(Self {
+            remote_url,
+            credential_helper,
+            token_env: token_env.to_string(),
+            token: token.to_string(),
+        })
+    }
+}
+
+/// Split an SSH remote into `(host, path-without-leading-slash)`. Handles both
+/// the scp-like `[user@]host:path` and the `ssh://[user@]host[:port]/path` forms.
+fn parse_ssh_url(url: &str) -> Result<(String, String)> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let rest = rest.split_once('@').map(|(_, h)| h).unwrap_or(rest);
+        let (authority, path) = rest
+            .split_once('/')
+            .ok_or_else(|| anyhow!("ssh url missing path: {url}"))?;
+        let host = authority.split(':').next().unwrap_or(authority);
+        return Ok((host.to_string(), path.trim_start_matches('/').to_string()));
+    }
+    let rest = url.split_once('@').map(|(_, h)| h).unwrap_or(url);
+    let (host, path) = rest
+        .split_once(':')
+        .ok_or_else(|| anyhow!("not an ssh url: {url}"))?;
+    // Reject scheme URLs (`https://…`): in scp form the path after `:` is a repo
+    // path, never an authority — so a leading `/` (from `://`) means not-scp.
+    if host.is_empty() || path.starts_with('/') {
+        bail!("not an ssh url: {url}");
+    }
+    Ok((host.to_string(), path.to_string()))
+}
 
 /// Ensure `path` is a checkout of `branch`:
 /// - clone the default branch if the repo is missing,
@@ -16,9 +86,13 @@ use tracing::{debug, info};
 /// We deliberately do **not** force-reset a reused worktree: a per-branch
 /// worktree is owned by its task line, so a hard reset would silently discard
 /// the agent's in-progress work.
+///
+/// Transport is token-HTTPS (see [`HttpsAuth`]): every git child gets the token
+/// in its environment and the repo's persisted credential helper reads it, so no
+/// host SSH key is required and no secret lands in `.git/config`.
 pub async fn clone_or_fetch(
     path: &Path,
-    auth_url: &str,
+    auth: &HttpsAuth,
     branch: &str,
     default_branch: &str,
 ) -> Result<()> {
@@ -32,11 +106,14 @@ pub async fn clone_or_fetch(
         }
         info!(path = %path.display(), default_branch, "cloning fresh checkout");
         let output = Command::new("git")
+            .arg("-c")
+            .arg(format!("credential.helper={}", auth.credential_helper))
             .arg("clone")
             .arg("--branch")
             .arg(default_branch)
-            .arg(auth_url)
+            .arg(&auth.remote_url)
             .arg(path)
+            .env(&auth.token_env, &auth.token)
             .output()
             .await
             .context("spawning git clone")?;
@@ -49,8 +126,23 @@ pub async fn clone_or_fetch(
         }
     }
 
+    // Persist the clean remote + credential helper. Idempotent, and it also
+    // migrates pre-existing worktrees off the old SSH remote.
+    run_git(
+        path,
+        auth,
+        &["remote", "set-url", "origin", &auth.remote_url],
+    )
+    .await?;
+    run_git(
+        path,
+        auth,
+        &["config", "credential.helper", &auth.credential_helper],
+    )
+    .await?;
+
     info!(path = %path.display(), branch, "fetching");
-    run_git(path, &["fetch", "origin", "--prune"]).await?;
+    run_git(path, auth, &["fetch", "origin", "--prune"]).await?;
 
     // Already on the target branch → keep the worktree exactly as it is.
     if !fresh && current_branch(path).await?.as_deref() == Some(branch) {
@@ -68,7 +160,7 @@ pub async fn clone_or_fetch(
         format!("origin/{default_branch}")
     };
 
-    run_git(path, &["checkout", "-B", branch, &start_ref]).await?;
+    run_git(path, auth, &["checkout", "-B", branch, &start_ref]).await?;
     Ok(())
 }
 
@@ -105,12 +197,15 @@ async fn git_ref_exists(path: &Path, refname: &str) -> Result<bool> {
     Ok(output.status.success())
 }
 
-async fn run_git(path: &Path, args: &[&str]) -> Result<()> {
+/// Run `git -C <path> <args>` with the token in the environment so the persisted
+/// credential helper can authenticate networked operations (fetch).
+async fn run_git(path: &Path, auth: &HttpsAuth, args: &[&str]) -> Result<()> {
     debug!(path = %path.display(), ?args, "git");
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
         .args(args)
+        .env(&auth.token_env, &auth.token)
         .output()
         .await
         .with_context(|| format!("spawning git {args:?}"))?;
@@ -122,4 +217,55 @@ async fn run_git(path: &Path, args: &[&str]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn https_auth_from_scp_style_github() {
+        let a =
+            HttpsAuth::from_ssh_url("git@github.com:owner/repo.git", ProviderKind::Github, "tok")
+                .unwrap();
+        assert_eq!(a.remote_url, "https://github.com/owner/repo.git");
+        assert_eq!(a.token_env, "GH_TOKEN");
+        assert!(a.credential_helper.contains("username=x-access-token"));
+        assert!(a.credential_helper.contains("password=$GH_TOKEN"));
+    }
+
+    #[test]
+    fn https_auth_from_scp_style_gitlab_subgroup() {
+        let a = HttpsAuth::from_ssh_url(
+            "git@gitlab.example.com:group/sub/repo.git",
+            ProviderKind::Gitlab,
+            "tok",
+        )
+        .unwrap();
+        assert_eq!(
+            a.remote_url,
+            "https://gitlab.example.com/group/sub/repo.git"
+        );
+        assert_eq!(a.token_env, "GITLAB_TOKEN");
+        assert!(a.credential_helper.contains("username=oauth2"));
+    }
+
+    #[test]
+    fn https_auth_from_ssh_scheme_with_port() {
+        let a = HttpsAuth::from_ssh_url(
+            "ssh://git@gitlab.example.com:2222/group/repo.git",
+            ProviderKind::Gitlab,
+            "tok",
+        )
+        .unwrap();
+        assert_eq!(a.remote_url, "https://gitlab.example.com/group/repo.git");
+    }
+
+    #[test]
+    fn https_auth_rejects_non_ssh() {
+        assert!(
+            HttpsAuth::from_ssh_url("https://github.com/o/r.git", ProviderKind::Github, "t")
+                .is_err()
+        );
+    }
 }

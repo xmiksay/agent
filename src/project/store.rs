@@ -273,7 +273,9 @@ impl ProjectStore {
         Self { db }
     }
 
-    pub async fn upsert_project(&self, new: NewProjectConfig) -> Result<ProjectConfig> {
+    /// Upsert a project row. The returned bool is `true` only when a new row was
+    /// inserted (the caller uses it to auto-register the webhook once).
+    pub async fn upsert_project(&self, new: NewProjectConfig) -> Result<(ProjectConfig, bool)> {
         if let Some(existing) = self
             .get_project(new.git_service_id, &new.project_slug)
             .await?
@@ -308,12 +310,13 @@ impl ProjectStore {
             if changed {
                 active.updated_at = Set(Utc::now().into());
                 active.update(&self.db).await?;
-                return self
+                let updated = self
                     .get_project(new.git_service_id, &new.project_slug)
                     .await?
-                    .ok_or_else(|| anyhow!("project disappeared after update"));
+                    .ok_or_else(|| anyhow!("project disappeared after update"))?;
+                return Ok((updated, false));
             }
-            return Ok(existing);
+            return Ok((existing, false));
         }
 
         let now: DateTime<Utc> = Utc::now();
@@ -338,9 +341,11 @@ impl ProjectStore {
             .await
             .context("failed to insert project")?;
 
-        self.get_project(new.git_service_id, &new.project_slug)
+        let created = self
+            .get_project(new.git_service_id, &new.project_slug)
             .await?
-            .ok_or_else(|| anyhow!("project disappeared after insert"))
+            .ok_or_else(|| anyhow!("project disappeared after insert"))?;
+        Ok((created, true))
     }
 
     pub async fn get_project(

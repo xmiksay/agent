@@ -28,6 +28,8 @@ pub(crate) async fn finalize_turn(
     work_dir: &str,
     task_id: Uuid,
     code_trigger: bool,
+    token_env: &str,
+    token: &str,
 ) {
     let result = match backend.parse_result(&result_event.to_string()) {
         Ok(r) => r,
@@ -48,7 +50,7 @@ pub(crate) async fn finalize_turn(
     }
 
     let pushed = if code_trigger {
-        match push_changes(work_dir).await {
+        match push_changes(work_dir, token_env, token).await {
             Ok(p) => p,
             Err(e) => {
                 error!(%task_id, error = %e, "failed to push turn changes");
@@ -106,7 +108,7 @@ async fn post_result(
 
 /// Push the branch if there's anything new. Returns whether a push actually
 /// happened (used to decide whether a turn is worth a reply note).
-async fn push_changes(work_dir: &str) -> Result<bool> {
+async fn push_changes(work_dir: &str, token_env: &str, token: &str) -> Result<bool> {
     let has_changes = Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(work_dir)
@@ -133,9 +135,12 @@ async fn push_changes(work_dir: &str) -> Result<bool> {
     // `-u origin HEAD` pushes the current branch to a same-named remote branch
     // and sets upstream — required for a freshly created issue branch that has
     // no upstream yet; idempotent for branches that already track a remote.
+    // The token lives only in this child's environment; the repo's persisted
+    // credential helper reads it (token-HTTPS transport, see workspace::git).
     let push = Command::new("git")
         .args(["push", "-u", "origin", "HEAD"])
         .current_dir(work_dir)
+        .env(token_env, token)
         .status()
         .await
         .context("failed to git push")?;

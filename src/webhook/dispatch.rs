@@ -20,7 +20,7 @@ pub async fn dispatch(
     let my_username = service.bot_username.clone();
 
     // Always upsert the project so we have a row + allowlist regardless of action.
-    let project = state
+    let (project, created) = state
         .project_store
         .upsert_project(NewProjectConfig {
             provider: ev.provider,
@@ -32,6 +32,13 @@ pub async fn dispatch(
             my_username: my_username.clone(),
         })
         .await?;
+
+    // First time we see a project, auto-register its webhook (idempotent on the
+    // provider side). Best-effort and backgrounded so it never delays — or fails
+    // — the inbound delivery; logged on error.
+    if created {
+        ensure_project_webhook(state, service, &project.full_name);
+    }
 
     // Lifecycle: close events release the branch and exit early.
     match &ev.kind {
@@ -116,6 +123,34 @@ pub async fn dispatch(
     }
 
     Ok(vec![id])
+}
+
+/// Spawn idempotent webhook registration for a newly-seen project. No-op (logged)
+/// when `PUBLIC_BASE_URL` is unset — operators then wire hooks by hand. Runs in
+/// the background so it never delays or fails the inbound webhook delivery.
+fn ensure_project_webhook(state: &AppState, service: &GitService, full_name: &str) {
+    let Some(base) = state.config.public_base_url.clone() else {
+        debug!(project = %full_name, "PUBLIC_BASE_URL unset; skipping webhook auto-registration");
+        return;
+    };
+    let webhook_url = format!("{base}/webhook/{}/{}", service.kind.as_str(), service.slug);
+    let secret = service.webhook_secret.clone();
+    let service_id = service.id;
+    let full_name = full_name.to_string();
+    let providers = state.providers.clone();
+    tokio::spawn(async move {
+        let Some(provider) = providers.get(service_id).await else {
+            warn!(%service_id, "provider not loaded; cannot auto-register webhook");
+            return;
+        };
+        match provider
+            .ensure_webhook(&full_name, &webhook_url, &secret)
+            .await
+        {
+            Ok(()) => info!(project = %full_name, %webhook_url, "auto-registered webhook"),
+            Err(e) => warn!(project = %full_name, error = %e, "webhook auto-registration failed"),
+        }
+    });
 }
 
 /// For a comment trigger, the existing task on the issue/MR branch that can take
