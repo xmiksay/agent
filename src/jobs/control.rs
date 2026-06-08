@@ -10,7 +10,9 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::entity::{task_results, tasks};
-use crate::jobs::lifecycle::{AGENT_COLD, AGENT_FAILED, AGENT_PENDING, TASK_FAILED, TASK_WORKING_ON};
+use crate::jobs::lifecycle::{
+    AGENT_COLD, AGENT_FAILED, AGENT_PENDING, TASK_FAILED, TASK_WORKING_ON,
+};
 use crate::jobs::store::TaskStore;
 
 impl TaskStore {
@@ -26,7 +28,12 @@ impl TaskStore {
         // session — do it here so the stdin pump stops and the WS detaches.
         self.hub().end(task_id).await;
         let _ = self
-            .finish_task(task_id, AGENT_COLD, TASK_WORKING_ON, Some("paused by operator"))
+            .finish_task(
+                task_id,
+                AGENT_COLD,
+                TASK_WORKING_ON,
+                Some("paused by operator"),
+            )
             .await;
         info!(%task_id, "aborted running task (paused)");
         Ok(())
@@ -48,7 +55,9 @@ impl TaskStore {
                 // Row delete failed after we killed. Leave the row in place but
                 // flip it to failed so it doesn't show as live forever.
                 if was_running {
-                    let _ = self.finish_task(task_id, AGENT_FAILED, TASK_FAILED, None).await;
+                    let _ = self
+                        .finish_task(task_id, AGENT_FAILED, TASK_FAILED, None)
+                        .await;
                 }
                 Err(anyhow::Error::new(e).context("failed to delete task"))
             }
@@ -73,7 +82,9 @@ impl TaskStore {
         // it instead. A never-started task (task_state pending) has nothing to
         // resume yet.
         if self.hub().is_warm(task_id).await || self.hub().is_running(task_id) {
-            anyhow::bail!("agent is still live for this task; send it a message instead of resuming");
+            anyhow::bail!(
+                "agent is still live for this task; send it a message instead of resuming"
+            );
         }
         if task.task_state == "pending" {
             anyhow::bail!("task is still pending; confirm it instead of resuming");

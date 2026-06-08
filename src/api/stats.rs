@@ -8,9 +8,9 @@
 
 use std::collections::HashMap;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use chrono::{DateTime, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -55,9 +55,7 @@ pub async fn task_stats(
     if !["project", "service", "branch", "trigger_type"].contains(&group_by) {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!(
-                "group_by must be project|service|branch|trigger_type, got {group_by}",
-            ),
+            format!("group_by must be project|service|branch|trigger_type, got {group_by}",),
         ));
     }
 

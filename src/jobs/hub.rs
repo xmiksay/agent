@@ -22,12 +22,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use dashmap::DashMap;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tracing::{error, warn};
 use uuid::Uuid;
 
@@ -111,7 +109,10 @@ impl TaskChannel {
             next_seq: AtomicU64::new(start_seq),
             running: AtomicBool::new(false),
             warm: AtomicBool::new(false),
-            history: Mutex::new(History { items: Vec::new(), flushed: 0 }),
+            history: Mutex::new(History {
+                items: Vec::new(),
+                flushed: 0,
+            }),
             stdin: Mutex::new(None),
             control: Mutex::new(None),
         }
@@ -135,7 +136,11 @@ pub struct LiveSessions {
 impl LiveSessions {
     pub fn new(db: DatabaseConnection) -> Self {
         let (all, _) = broadcast::channel(ALL_BROADCAST_CAP);
-        Self { db, channels: Arc::new(DashMap::new()), all }
+        Self {
+            db,
+            channels: Arc::new(DashMap::new()),
+            all,
+        }
     }
 
     /// Subscribe to the process-wide stream of all tasks' frames.
@@ -223,7 +228,9 @@ impl LiveSessions {
     /// Encode an operator message in the backend's stdin format and write it to
     /// the running agent. Returns false if no live session is attached.
     pub async fn send_to_agent(&self, task_id: Uuid, text: &str) -> bool {
-        let Some(ch) = self.get(task_id) else { return false };
+        let Some(ch) = self.get(task_id) else {
+            return false;
+        };
         let line = ch.backend.encode_user_message(text);
         let stdin = ch.stdin.lock().await;
         match stdin.as_ref() {
@@ -241,7 +248,9 @@ impl LiveSessions {
         request_id: &str,
         decision: PermissionDecision,
     ) -> bool {
-        let Some(ch) = self.get(task_id) else { return false };
+        let Some(ch) = self.get(task_id) else {
+            return false;
+        };
         let line = ch.backend.encode_permission_response(request_id, &decision);
         let control = ch.control.lock().await;
         match control.as_ref() {
@@ -295,7 +304,9 @@ impl LiveSessions {
     /// Graceful stop: drop the stdin sender so the agent's ChildStdin hits EOF
     /// and the process exits after finishing the current turn.
     pub async fn stop(&self, task_id: Uuid) -> bool {
-        let Some(ch) = self.get(task_id) else { return false };
+        let Some(ch) = self.get(task_id) else {
+            return false;
+        };
         ch.warm.store(false, Ordering::SeqCst);
         ch.stdin.lock().await.take().is_some()
     }
@@ -391,7 +402,11 @@ mod tests {
 
     #[test]
     fn db_str_matches_serde_wire_form() {
-        for kind in [EnvelopeKind::Event, EnvelopeKind::AuthRequest, EnvelopeKind::Status] {
+        for kind in [
+            EnvelopeKind::Event,
+            EnvelopeKind::AuthRequest,
+            EnvelopeKind::Status,
+        ] {
             let wire = serde_json::to_value(kind).unwrap();
             assert_eq!(Value::String(kind.as_db_str().to_string()), wire);
         }
@@ -404,12 +419,16 @@ mod tests {
     /// accumulated — mirrors the threshold check in `publish`.
     #[test]
     fn batching_threshold_triggers_at_flush_batch() {
-        let mut h = History { items: Vec::new(), flushed: 0 };
+        let mut h = History {
+            items: Vec::new(),
+            flushed: 0,
+        };
         for i in 0..FLUSH_BATCH - 1 {
             h.items.push((i as u64, EnvelopeKind::Event, Value::Null));
             assert!(h.items.len() - h.flushed < FLUSH_BATCH);
         }
-        h.items.push((FLUSH_BATCH as u64 - 1, EnvelopeKind::Status, Value::Null));
+        h.items
+            .push((FLUSH_BATCH as u64 - 1, EnvelopeKind::Status, Value::Null));
         assert_eq!(h.items.len() - h.flushed, FLUSH_BATCH);
     }
 }

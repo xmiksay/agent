@@ -23,16 +23,14 @@ impl Config {
 
         Ok(Self {
             api_bearer_token: env::var("API_BEARER_TOKEN").ok(),
-            database_url: env::var("DATABASE_URL")
-                .context("DATABASE_URL must be set")?,
+            database_url: env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
             repo_base_path: env::var("REPO_BASE_PATH")
                 .unwrap_or_else(|_| "/tmp/claude-jobs".to_string()),
             max_concurrent_jobs: env::var("MAX_CONCURRENT_JOBS")
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
                 .context("MAX_CONCURRENT_JOBS must be a number")?,
-            listen_addr: env::var("LISTEN_ADDR")
-                .unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
+            listen_addr: env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
             task_token_budget: env::var("TASK_TOKEN_BUDGET")
                 .unwrap_or_else(|_| "1000000".to_string())
                 .parse()

@@ -200,7 +200,10 @@ impl TaskStore {
                 };
                 let mut active: task_results::ActiveModel = row.into();
                 active.result_text = Set(combined);
-                active.update(self.db()).await.context("appending result note")?;
+                active
+                    .update(self.db())
+                    .await
+                    .context("appending result note")?;
             }
             None => {
                 let row = task_results::ActiveModel {
@@ -407,7 +410,10 @@ mod tests {
 
         // create → cold / pending → derives cold.
         let (t, _) = store.get_task(id).await.unwrap().unwrap();
-        assert_eq!((t.agent_state.as_str(), t.task_state.as_str()), ("cold", "pending"));
+        assert_eq!(
+            (t.agent_state.as_str(), t.task_state.as_str()),
+            ("cold", "pending")
+        );
         assert_eq!(derive_agent_state(&t.agent_state, id, &hub), "cold");
 
         // confirm pre-spawn: durable agent_state → pending.
@@ -421,7 +427,10 @@ mod tests {
         hub.insert_test_channel(id, true, true);
         store.set_states(id, "cold", "working_on").await.unwrap();
         let (t, _) = store.get_task(id).await.unwrap().unwrap();
-        assert_eq!((t.agent_state.as_str(), t.task_state.as_str()), ("cold", "working_on"));
+        assert_eq!(
+            (t.agent_state.as_str(), t.task_state.as_str()),
+            ("cold", "working_on")
+        );
         assert!(t.started_at.is_some());
         assert_eq!(derive_agent_state(&t.agent_state, id, &hub), "running");
 
@@ -430,7 +439,10 @@ mod tests {
         hub.insert_test_channel(id, true, false);
         store.set_states(id, "cold", "completed").await.unwrap();
         let (t, _) = store.get_task(id).await.unwrap().unwrap();
-        assert_eq!((t.agent_state.as_str(), t.task_state.as_str()), ("cold", "completed"));
+        assert_eq!(
+            (t.agent_state.as_str(), t.task_state.as_str()),
+            ("cold", "completed")
+        );
         assert!(t.finished_at.is_none());
         assert_eq!(derive_agent_state(&t.agent_state, id, &hub), "warm");
 
@@ -454,14 +466,20 @@ mod tests {
 
         // session ends: drop the channel, terminal finish stamps finished_at.
         hub.end(id).await;
-        store.finish_task(id, "cold", "completed", None).await.unwrap();
+        store
+            .finish_task(id, "cold", "completed", None)
+            .await
+            .unwrap();
         let (t, _) = store.get_task(id).await.unwrap().unwrap();
         assert_eq!(t.task_state, "completed");
         assert!(t.finished_at.is_some());
         assert_eq!(derive_agent_state(&t.agent_state, id, &hub), "cold");
 
         // budget kill path records a note + failed/failed.
-        store.finish_task(id, "failed", "failed", Some("killed: token budget")).await.unwrap();
+        store
+            .finish_task(id, "failed", "failed", Some("killed: token budget"))
+            .await
+            .unwrap();
         let (_, result) = store.get_task(id).await.unwrap().unwrap();
         assert!(result.unwrap().result_text.contains("token budget"));
 
@@ -490,40 +508,79 @@ mod tests {
             url: format!("http://x/{iid}"),
         };
         let inflight = store
-            .create_task(mk(1), svc, ProviderKind::Github, None, "p".into(), "git@x:p.git".into(), "main".into())
+            .create_task(
+                mk(1),
+                svc,
+                ProviderKind::Github,
+                None,
+                "p".into(),
+                "git@x:p.git".into(),
+                "main".into(),
+            )
             .await
             .unwrap();
         let confirmed = store
-            .create_task(mk(2), svc, ProviderKind::Github, None, "p".into(), "git@x:p.git".into(), "main".into())
+            .create_task(
+                mk(2),
+                svc,
+                ProviderKind::Github,
+                None,
+                "p".into(),
+                "git@x:p.git".into(),
+                "main".into(),
+            )
             .await
             .unwrap();
         let pending = store
-            .create_task(mk(3), svc, ProviderKind::Github, None, "p".into(), "git@x:p.git".into(), "main".into())
+            .create_task(
+                mk(3),
+                svc,
+                ProviderKind::Github,
+                None,
+                "p".into(),
+                "git@x:p.git".into(),
+                "main".into(),
+            )
             .await
             .unwrap();
         // Simulate a turn in flight (no finished_at).
-        store.set_states(inflight, "cold", "working_on").await.unwrap();
+        store
+            .set_states(inflight, "cold", "working_on")
+            .await
+            .unwrap();
         // Simulate a confirmed-but-unstarted task (durable pending, crashed before
         // its first turn).
-        store.set_states(confirmed, "pending", "pending").await.unwrap();
+        store
+            .set_states(confirmed, "pending", "pending")
+            .await
+            .unwrap();
 
         let n = store.recover_orphans().await.unwrap();
         assert_eq!(n, 2, "in-flight + confirmed-unstarted are orphans");
 
         let (t, result) = store.get_task(inflight).await.unwrap().unwrap();
-        assert_eq!((t.agent_state.as_str(), t.task_state.as_str()), ("failed", "failed"));
+        assert_eq!(
+            (t.agent_state.as_str(), t.task_state.as_str()),
+            ("failed", "failed")
+        );
         assert!(t.finished_at.is_some());
         assert!(result.unwrap().result_text.contains("orphan"));
 
         // Confirmed-but-unstarted → rewound to cold/pending (Run shows again), no
         // finished_at, no orphan note.
         let (c, c_result) = store.get_task(confirmed).await.unwrap().unwrap();
-        assert_eq!((c.agent_state.as_str(), c.task_state.as_str()), ("cold", "pending"));
+        assert_eq!(
+            (c.agent_state.as_str(), c.task_state.as_str()),
+            ("cold", "pending")
+        );
         assert!(c.finished_at.is_none());
         assert!(c_result.is_none());
 
         let (p, _) = store.get_task(pending).await.unwrap().unwrap();
-        assert_eq!((p.agent_state.as_str(), p.task_state.as_str()), ("cold", "pending"));
+        assert_eq!(
+            (p.agent_state.as_str(), p.task_state.as_str()),
+            ("cold", "pending")
+        );
 
         drop(store);
         drop(db);

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tracing::{info, warn};
 use tokio::sync::Semaphore;
+use tracing::{info, warn};
 
 use crate::agent::{AgentBackend, ClaudeCode};
 use crate::auth::store::AuthStore;
@@ -75,7 +75,9 @@ pub async fn run_job(
     // git_url is the SSH URL (git@host:path.git) populated by the webhook
     // normalizers. The agent host has SSH keys configured for the bot user, so
     // we clone/fetch directly — no token injection.
-    workspace.clone_or_fetch(&work_dir, &git_url, &branch, &default_branch).await?;
+    workspace
+        .clone_or_fetch(&work_dir, &git_url, &branch, &default_branch)
+        .await?;
 
     // Hardcoded to Claude Code for now; a future per-task config will choose.
     let backend: Arc<dyn AgentBackend> = Arc::new(ClaudeCode);
@@ -166,7 +168,8 @@ pub async fn run_job(
     let child_stdin = child.stdin.take().expect("piped stdin");
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(32);
     let (to_agent_tx, mut to_agent_rx) = tokio::sync::mpsc::channel::<String>(32);
-    hub.register(task_id, backend.clone(), input_tx, to_agent_tx.clone()).await;
+    hub.register(task_id, backend.clone(), input_tx, to_agent_tx.clone())
+        .await;
 
     let writer = tokio::spawn(async move {
         let mut child_stdin = child_stdin;
@@ -207,8 +210,7 @@ pub async fn run_job(
 
     // Permission prompts (`can_use_tool`) sniffed off stdout. The sender is owned
     // ONLY by the stdout reader so it drops at stdout EOF and ends the consumer.
-    let (perm_tx, mut perm_rx) =
-        tokio::sync::mpsc::channel::<crate::agent::PermissionRequest>(32);
+    let (perm_tx, mut perm_rx) = tokio::sync::mpsc::channel::<crate::agent::PermissionRequest>(32);
     let perm_consumer = {
         let hub = hub.clone();
         let auth_store = auth_store.clone();
@@ -378,7 +380,9 @@ pub async fn run_job(
         ("failed", "failed", Some("agent exited non-zero"))
     };
     hub.mark_idle(task_id);
-    let _ = store.finish_task(task_id, agent_state, task_state, note).await;
+    let _ = store
+        .finish_task(task_id, agent_state, task_state, note)
+        .await;
     info!(%task_id, agent_state, task_state, "agent session ended");
     Ok(())
 }
