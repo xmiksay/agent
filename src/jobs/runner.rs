@@ -191,7 +191,7 @@ pub async fn run_job(
         let store = store.clone();
         tokio::spawn(async move {
             if let Ok(sid) = session_rx.await {
-                let _ = store.set_session_id_pub(task_id, &sid).await;
+                let _ = store.set_session_id(task_id, &sid).await;
             }
         });
     }
@@ -275,7 +275,12 @@ pub async fn run_job(
         let msg = match pending.take() {
             Some(m) => m,
             None => {
-                let _ = store.set_status(task_id, "completed").await;
+                // Turn done → go warm-idle: clear the active-turn flag and mark
+                // the lifecycle completed. Durable agent_state is written `cold`
+                // (so a crash while warm leaves a resumable row, not a stuck
+                // `pending` one); the task can still resume, so no finished_at.
+                hub.mark_idle(task_id);
+                let _ = store.set_states(task_id, "cold", "completed").await;
                 tokio::select! {
                     m = input_rx.recv() => match m {
                         Some(m) => m,
@@ -291,7 +296,13 @@ pub async fn run_job(
             Ok(p) => p,
             Err(_) => break,
         };
-        let _ = store.set_status(task_id, "running").await;
+        // A turn is actively processing: flag it in the hub (overlays as the
+        // derived `running` agent_state) and advance the lifecycle to working_on.
+        // Durable agent_state is written `cold` (warm/running is never persisted),
+        // overwriting the `pending` confirm left behind so a crash mid-run leaves
+        // a resumable row rather than a stuck `pending` one.
+        hub.mark_running(task_id);
+        let _ = store.set_states(task_id, "cold", "working_on").await;
 
         // Forward to the writer task (which owns child stdin). A send error means
         // the writer is gone (stdin closed) — end the session.
@@ -350,19 +361,24 @@ pub async fn run_job(
     let _ = stderr_reader.await;
     let _ = perm_consumer.await;
 
-    // Final status from the child exit code. Operator Pause aborts this runner
-    // task before reaching here (kill_task sets the status), so exit-code→failed
-    // applies only to natural exits / crashes; a graceful Stop makes claude exit
-    // 0 → completed. `unwrap_or(true)`: an unreadable status must not falsely
-    // mark the task failed.
-    let final_status = if killed_for_budget {
-        "killed"
+    // Final disposition from the child exit code. Operator Pause aborts this
+    // runner task before reaching here (kill_task records "paused"), so the
+    // exit-code path covers only natural exits / crashes / budget kill; a
+    // graceful Stop makes claude exit 0 → completed. `unwrap_or(true)`: an
+    // unreadable status must not falsely mark the task failed.
+    //
+    // `killed` is no longer a state — the reason is recorded as a result note,
+    // and the durable axes carry the verdict (cold/completed on success,
+    // failed/failed otherwise).
+    let (agent_state, task_state, note): (&str, &str, Option<&str>) = if killed_for_budget {
+        ("failed", "failed", Some("killed: token budget"))
     } else if exit_status.map(|s| s.success()).unwrap_or(true) {
-        "completed"
+        ("cold", "completed", None)
     } else {
-        "failed"
+        ("failed", "failed", Some("agent exited non-zero"))
     };
-    let _ = store.finish_task(task_id, final_status).await;
-    info!(%task_id, status = final_status, "agent session ended");
+    hub.mark_idle(task_id);
+    let _ = store.finish_task(task_id, agent_state, task_state, note).await;
+    info!(%task_id, agent_state, task_state, "agent session ended");
     Ok(())
 }

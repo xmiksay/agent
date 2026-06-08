@@ -6,7 +6,17 @@ use serde::Serialize;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    pub status: String,
+    /// Durable backing of the derived `agent_state` axis — narrowed to
+    /// `cold | pending | failed`. The volatile `warm`/`running` distinction is
+    /// NOT stored here; it's overlaid at read time from the live hub (see
+    /// `derive_agent_state`). Never serialized to the client — `TaskView` emits
+    /// the derived value under the `agent_state` key instead (`skip_serializing`
+    /// here keeps the flattened entity from colliding with it).
+    #[serde(skip_serializing)]
+    pub agent_state: String,
+    /// Operator-owned human lifecycle: `pending | working_on | completed |
+    /// failed`. Auto-advanced by the runner, freely operator-overridable.
+    pub task_state: String,
     pub trigger_type: String,
     pub trigger_data: Json,
     pub project_path: String,
