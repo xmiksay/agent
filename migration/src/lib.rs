@@ -17,6 +17,7 @@ mod m20260606_000014_add_project_env_vars;
 mod m20260607_000015_add_git_service_autofire;
 mod m20260607_000016_add_task_event_kind;
 mod m20260608_000017_split_task_state;
+mod m20260608_000018_add_git_service_app_auth;
 
 pub struct Migrator;
 
@@ -41,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260607_000015_add_git_service_autofire::Migration),
             Box::new(m20260607_000016_add_task_event_kind::Migration),
             Box::new(m20260608_000017_split_task_state::Migration),
+            Box::new(m20260608_000018_add_git_service_app_auth::Migration),
         ]
     }
 }

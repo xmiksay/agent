@@ -1,3 +1,4 @@
+pub mod credentials;
 pub mod github;
 pub mod gitlab;
 pub mod registry;
@@ -6,6 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+pub use credentials::resolve_token;
 pub use registry::ProviderRegistry;
 
 use crate::project::ProviderKind;

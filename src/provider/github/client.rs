@@ -3,8 +3,9 @@ use async_trait::async_trait;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::git_service::ServiceCredentials;
 use crate::project::ProviderKind;
-use crate::provider::{BOT_NOTE_MARKER, GitProvider, NoteTarget};
+use crate::provider::{BOT_NOTE_MARKER, GitProvider, NoteTarget, resolve_token};
 
 #[derive(Clone)]
 pub struct GitHubClient {
@@ -12,11 +13,11 @@ pub struct GitHubClient {
     client: reqwest::Client,
     /// e.g. https://api.github.com (or a GHES URL).
     api_base: String,
-    token: String,
+    creds: ServiceCredentials,
 }
 
 impl GitHubClient {
-    pub fn new(service_id: Uuid, api_base: &str, token: &str) -> Self {
+    pub fn new(service_id: Uuid, api_base: &str, creds: ServiceCredentials) -> Self {
         Self {
             service_id,
             client: reqwest::Client::builder()
@@ -24,7 +25,7 @@ impl GitHubClient {
                 .build()
                 .expect("reqwest client"),
             api_base: api_base.trim_end_matches('/').to_string(),
-            token: token.to_string(),
+            creds,
         }
     }
 }
@@ -46,11 +47,12 @@ impl GitProvider for GitHubClient {
         // GitHub treats PR review comments at /issues/<num>/comments too.
         let url = format!("{}/repos/{full_name}/issues/{iid}/comments", self.api_base,);
         info!(%url, "posting comment to GitHub");
+        let token = resolve_token(&self.creds).await?;
         let stamped = format!("{body}\n\n{BOT_NOTE_MARKER}");
         let resp = self
             .client
             .post(&url)
-            .bearer_auth(&self.token)
+            .bearer_auth(&token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .json(&serde_json::json!({ "body": stamped }))

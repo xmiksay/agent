@@ -75,8 +75,9 @@ Operator (SPA)                    approves/denies via
 | `src/workspace/lock.rs` | per-branch advisory file lock |
 | `src/workspace/layout.rs` | `slugify` |
 | `src/provider/mod.rs` | `GitProvider` trait + `NoteTarget` |
-| `src/provider/registry.rs` | `ProviderRegistry` — per-service `Arc<dyn GitProvider>` cache, kept in sync with `git_services` table |
-| `src/provider/{gitlab,github}/` | provider impls: REST calls for posting notes / approving / reading comments |
+| `src/provider/credentials.rs` | `resolve_token(&ServiceCredentials)` — the single seam that turns a service's stored auth into a usable access token (REST + the agent's `GH_TOKEN`/`GITLAB_TOKEN`). Only `Pat` is wired; **GitHub App (#9) / GitLab OAuth app (#10) minting lands here**. Unit-tested |
+| `src/provider/registry.rs` | `ProviderRegistry` — per-service `Arc<dyn GitProvider>` cache, kept in sync with `git_services` table. `build_client` resolves `GitService::credentials()`; a service whose `app` columns are incomplete is skipped on reload (warn) |
+| `src/provider/{gitlab,github}/` | provider impls: REST calls for posting notes / approving / reading comments. Clients hold a `ServiceCredentials` and call `resolve_token` per request (so an app token can later be refreshed on expiry) |
 | `src/git_service/store.rs` | CRUD for the `git_services` table |
 | `src/project/store.rs` | projects + project_branches tables, allowed_operations + env_file config |
 | `src/project/env.rs` | renders a project's `env_file` (a minijinja template) against the task's runtime vars and parses the result into `(key, value)` pairs injected at spawn. Unit-tested |
@@ -104,7 +105,7 @@ Tables (current set, see migration files for canonical schemas):
 - `projects` — discovered repos, per-project `allowed_operations` glob list and `env_file` (a `.env`-style minijinja template injected as env vars at agent spawn)
 - `project_branches` — branches the agent has touched, with `issue_iid` / `pr_iid` linkage and status
 - `auth_requests` — operator-approval items raised by the in-process permission handler
-- `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret, `autofire` (when true, a newly-created task from this service's webhook is auto-confirmed — started running immediately instead of left pending for a manual confirm)
+- `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret, `autofire` (when true, a newly-created task from this service's webhook is auto-confirmed — started running immediately instead of left pending for a manual confirm). `auth_kind` (`pat`\|`app`, default `pat`) selects the credential flow; the `app_*` columns (`app_id`, `app_installation_id`, `app_private_key`, `app_client_secret`, `app_refresh_token`) are **groundwork for GitHub App (#9) / GitLab OAuth application (#10)** — stored and validated, but token minting is not implemented yet (see `provider::credentials` and [`docs/application-integration.md`](application-integration.md))
 
 ## HTTP surface
 
@@ -152,7 +153,7 @@ The process is **long-lived and turn-based**. The runner's turn loop, per turn: 
 
 **Branch selection (a task never runs on the default branch).** `TaskStore::create_task` derives and persists `tasks.branch`: MR triggers reuse the MR's `source_branch`; an `Issue` trigger derives `<iid>-<slug(title)>` (e.g. `42-fix-login-button`); an `IssueComment` reuses the branch the original issue task recorded (`find_branch_for_issue`), falling back to bare `<iid>`. **Comments delegate:** when a resumable task already exists for the issue/MR branch (`find_resumable_task_for_branch`), the dispatcher delivers the comment via `push_message` to that one task — continuing the same agent/session — instead of creating a fresh task; a new task is created only when there's no prior session. `workspace::git::clone_or_fetch(path, url, branch, default_branch)` clones on first use, fetches, then: if the worktree is **already on `branch`** it is left untouched (local commits + uncommitted work are preserved across runs — what makes resume-on-message safe); otherwise it checks out `origin/<branch>` if it exists remotely, else creates the branch from `origin/<default_branch>` (`git checkout -B`, no force-reset). `push_changes` uses `git push -u origin HEAD` so a fresh branch gets its upstream. `run_job` hard-`bail!`s if the resolved branch equals the default branch.
 
-The spawned `claude` inherits a provider-scoped PAT env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services. The project's `env_file` is rendered (minijinja, against runtime vars `branch`/`default_branch`/`url`/`project`/`service`/`task_id` — see `src/project/env.rs`) and applied **before** this reserved var, so a project env can never clobber the PAT.
+The spawned `claude` inherits a provider-scoped token env var so `gh`/`glab` inside the worktree authenticate against the same token used for clone + note posting: `GH_TOKEN` for GitHub services, `GITLAB_TOKEN` for GitLab services. The value comes from `provider::credentials::resolve_token(service.credentials()?)` — today the stored PAT, later a minted app/installation token. The project's `env_file` is rendered (minijinja, against runtime vars `branch`/`default_branch`/`url`/`project`/`service`/`task_id` — see `src/project/env.rs`) and applied **before** this reserved var, so a project env can never clobber the PAT.
 
 ## How an operator approval works
 

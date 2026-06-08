@@ -21,7 +21,7 @@ use crate::jobs::types::TriggerReason;
 use crate::project::{
     BranchStatus, EnvContext, NewBranchEntry, ProjectStore, ProviderKind, build_env_vars,
 };
-use crate::provider::GitProvider;
+use crate::provider::{GitProvider, resolve_token};
 use crate::workspace::Workspace;
 use crate::workspace::layout::slugify;
 
@@ -110,11 +110,13 @@ pub async fn run_job(
 
     let agent_args = backend.build_args(resume_session_id.as_deref());
 
-    // So `gh`/`glab` inside the worktree authenticate against the same PAT the
-    // agent uses to clone and post notes — picked by provider kind.
-    let (provider_token_var, provider_token_value) = match service.kind {
-        ProviderKind::Github => ("GH_TOKEN", service.token.clone()),
-        ProviderKind::Gitlab => ("GITLAB_TOKEN", service.token.clone()),
+    // So `gh`/`glab` inside the worktree authenticate against the same token the
+    // agent uses to clone and post notes — picked by provider kind. Resolved via
+    // the shared credential seam (PAT today; app flows arrive with #9/#10).
+    let provider_token_value = resolve_token(&service.credentials()?).await?;
+    let provider_token_var = match service.kind {
+        ProviderKind::Github => "GH_TOKEN",
+        ProviderKind::Gitlab => "GITLAB_TOKEN",
     };
 
     let mut cmd = Command::new(backend.program());

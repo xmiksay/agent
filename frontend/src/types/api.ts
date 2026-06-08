@@ -82,6 +82,9 @@ export interface ProjectConfig {
   updated_at: string;
 }
 
+// 'pat' today; 'app' is groundwork for GitHub App (#9) / GitLab OAuth app (#10).
+export type AuthKind = "pat" | "app";
+
 export interface GitServiceView {
   id: string;
   kind: ProviderKind;
@@ -93,6 +96,10 @@ export interface GitServiceView {
   updated_at: string;
   webhook_path: string;
   autofire: boolean;
+  auth_kind: AuthKind;
+  // Non-secret app identifiers; secrets are write-only and never returned.
+  app_id: string | null;
+  app_installation_id: string | null;
 }
 
 export interface NewGitService {
@@ -104,6 +111,12 @@ export interface NewGitService {
   webhook_secret: string;
   bot_username: string;
   autofire: boolean;
+  auth_kind?: AuthKind;
+  app_id?: string;
+  app_installation_id?: string;
+  app_private_key?: string;
+  app_client_secret?: string;
+  app_refresh_token?: string;
 }
 
 export interface UpdateGitService {
@@ -113,6 +126,12 @@ export interface UpdateGitService {
   webhook_secret?: string;
   bot_username?: string;
   autofire?: boolean;
+  auth_kind?: AuthKind;
+  app_id?: string;
+  app_installation_id?: string;
+  app_private_key?: string;
+  app_client_secret?: string;
+  app_refresh_token?: string;
 }
 
 export interface BranchEntry {

@@ -3,24 +3,25 @@ use async_trait::async_trait;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::git_service::ServiceCredentials;
 use crate::project::ProviderKind;
-use crate::provider::{BOT_NOTE_MARKER, GitProvider, NoteTarget};
+use crate::provider::{BOT_NOTE_MARKER, GitProvider, NoteTarget, resolve_token};
 
 #[derive(Clone)]
 pub struct GitLabClient {
     service_id: Uuid,
     client: reqwest::Client,
     base_url: String,
-    token: String,
+    creds: ServiceCredentials,
 }
 
 impl GitLabClient {
-    pub fn new(service_id: Uuid, base_url: &str, token: &str) -> Self {
+    pub fn new(service_id: Uuid, base_url: &str, creds: ServiceCredentials) -> Self {
         Self {
             service_id,
             client: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
-            token: token.to_string(),
+            creds,
         }
     }
 
@@ -39,11 +40,12 @@ impl GitLabClient {
 
         info!(%url, "posting note to GitLab");
 
+        let token = resolve_token(&self.creds).await?;
         let stamped = format!("{body}\n\n{BOT_NOTE_MARKER}");
         let resp = self
             .client
             .post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("PRIVATE-TOKEN", &token)
             .json(&serde_json::json!({ "body": stamped }))
             .send()
             .await

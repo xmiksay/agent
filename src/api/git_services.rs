@@ -6,7 +6,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::git_service::{GitService, NewGitService, UpdateGitService};
+use crate::git_service::{AuthKind, GitService, NewGitService, UpdateGitService};
 use crate::project::ProviderKind;
 
 #[derive(Serialize)]
@@ -18,6 +18,12 @@ pub struct GitServiceView {
     pub base_url: String,
     pub bot_username: String,
     pub autofire: bool,
+    pub auth_kind: AuthKind,
+    /// Non-secret app identifiers (GitHub App ID / installation, GitLab OAuth
+    /// client ID). The app secrets (private key, client secret, refresh token)
+    /// are write-only and never returned, like `token`/`webhook_secret`.
+    pub app_id: Option<String>,
+    pub app_installation_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Webhook URL operators paste into GitLab/GitHub. Built from request host.
@@ -36,6 +42,9 @@ impl GitServiceView {
             base_url: svc.base_url,
             bot_username: svc.bot_username,
             autofire: svc.autofire,
+            auth_kind: svc.auth_kind,
+            app_id: svc.app_id,
+            app_installation_id: svc.app_installation_id,
             created_at: svc.created_at,
             updated_at: svc.updated_at,
             webhook_path,
