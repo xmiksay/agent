@@ -2,27 +2,26 @@
 //!
 //! Every consumer that needs a usable access token — the REST clients
 //! (`post_note`) and the runner (the `GH_TOKEN`/`GITLAB_TOKEN` the agent
-//! inherits) — goes through [`resolve_token`]. The `Pat` flow is wired (it also
-//! carries GitLab's Group/Project Access Token bot identity, #10); GitHub App
-//! (#9) token minting will be implemented here.
+//! inherits) — goes through [`resolve_token`]. `Pat` returns the stored token
+//! directly (it also carries GitLab's Group/Project Access Token bot identity,
+//! #10); `GitHubApp` mints + caches a short-lived installation token (#9).
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use crate::git_service::ServiceCredentials;
+use crate::provider::github;
 
 /// Resolve a credential into the bearer/access token used for both REST API
 /// calls and `gh`/`glab` inside the worktree.
 ///
-/// The GitHub App flow is intentionally not implemented yet — it will mint a
-/// short-lived installation token here (JWT → installation access token) and
-/// cache it until expiry. GitLab needs no such flow: its bot identity is a
+/// The `GitHubApp` arm signs an app JWT and exchanges it for an installation
+/// access token, cached in-process until ~5 min before expiry (see
+/// [`github::app`]). GitLab needs no such flow: its bot identity is a
 /// Group/Project Access Token resolved straight through the `Pat` arm.
 pub async fn resolve_token(creds: &ServiceCredentials) -> Result<String> {
     match creds {
         ServiceCredentials::Pat(token) => Ok(token.clone()),
-        ServiceCredentials::GitHubApp(_) => {
-            bail!("GitHub App token minting is not implemented yet — see issue #9")
-        }
+        ServiceCredentials::GitHubApp(cfg) => github::app::installation_token(cfg).await,
     }
 }
 
@@ -40,13 +39,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn github_app_is_not_implemented_yet() {
+    async fn github_app_without_installation_id_is_a_clear_error() {
+        // Pre-install service: no installation_id yet → minting can't proceed,
+        // and the error tells the operator to run the install flow.
         let creds = ServiceCredentials::GitHubApp(GitHubAppConfig {
             app_id: "1".into(),
             private_key: "pem".into(),
-            installation_id: "2".into(),
+            installation_id: String::new(),
+            api_base: "https://api.github.com".into(),
         });
         let err = resolve_token(&creds).await.unwrap_err().to_string();
-        assert!(err.contains("#9"), "got: {err}");
+        assert!(err.contains("not installed"), "got: {err}");
     }
 }

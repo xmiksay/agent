@@ -14,6 +14,8 @@ function open(id: string) {
 
 const showForm = ref(false);
 const form = ref<NewGitService>(blank());
+const appId = ref("");
+const privateKey = ref("");
 const saving = ref(false);
 const error = ref<string | null>(null);
 
@@ -27,17 +29,23 @@ function blank(): NewGitService {
     webhook_secret: "",
     bot_username: "",
     autofire: false,
+    auth_kind: "pat",
   };
 }
 
 const hasGithub = computed(() => store.list.some((s) => s.kind === "github"));
+// App auth is a GitHub-only flow today; force PAT for GitLab.
+const isApp = computed(() => form.value.kind === "github" && form.value.auth_kind === "app");
 
 function onKindChange() {
   // Helpful defaults so users don't have to guess the API base.
   if (form.value.kind === "github") {
     form.value.base_url = "https://api.github.com";
-  } else if (!form.value.base_url || form.value.base_url === "https://api.github.com") {
-    form.value.base_url = "https://gitlab.com";
+  } else {
+    form.value.auth_kind = "pat";
+    if (!form.value.base_url || form.value.base_url === "https://api.github.com") {
+      form.value.base_url = "https://gitlab.com";
+    }
   }
 }
 
@@ -45,8 +53,19 @@ async function submit() {
   saving.value = true;
   error.value = null;
   try {
-    await store.create(form.value);
+    const body: NewGitService = { ...form.value };
+    if (isApp.value) {
+      // App services authenticate via app_credentials; installation_id is
+      // captured later by the install flow, so it's omitted here.
+      body.token = "";
+      body.app_credentials = { app_id: appId.value, private_key: privateKey.value };
+    } else {
+      body.auth_kind = "pat";
+    }
+    await store.create(body);
     form.value = blank();
+    appId.value = "";
+    privateKey.value = "";
     showForm.value = false;
   } catch (e: unknown) {
     error.value = extractMessage(e);
@@ -127,6 +146,13 @@ onMounted(() => store.refresh());
           </span>
           <input v-model="form.base_url" required type="url" class="input font-mono" />
         </label>
+        <label v-if="form.kind === 'github'" class="flex flex-col">
+          <span class="label">Authentication</span>
+          <select v-model="form.auth_kind" class="select">
+            <option value="pat">Personal access token</option>
+            <option value="app">GitHub App</option>
+          </select>
+        </label>
         <label class="flex flex-col">
           <span class="label">Bot username</span>
           <input
@@ -136,7 +162,7 @@ onMounted(() => store.refresh());
             class="input font-mono"
           />
         </label>
-        <label class="flex flex-col">
+        <label v-if="!isApp" class="flex flex-col">
           <span class="label">Personal access token</span>
           <input
             v-model="form.token"
@@ -146,6 +172,27 @@ onMounted(() => store.refresh());
             class="input font-mono"
           />
         </label>
+        <template v-if="isApp">
+          <label class="flex flex-col">
+            <span class="label">App ID</span>
+            <input v-model="appId" required placeholder="123456" class="input font-mono" />
+          </label>
+          <label class="col-span-2 flex flex-col">
+            <span class="label">Private key (PEM)</span>
+            <textarea
+              v-model="privateKey"
+              required
+              rows="4"
+              placeholder="-----BEGIN RSA PRIVATE KEY-----"
+              class="input font-mono text-xs"
+            />
+          </label>
+          <p class="col-span-2 text-xs text-muted">
+            After creating, open the service and click <strong>Install GitHub App</strong> to grant
+            it repo access — that records the installation. Set the App's webhook URL (above) and
+            secret once, at the app level; per-repo hooks are skipped.
+          </p>
+        </template>
         <label class="col-span-2 flex flex-col">
           <span class="label">Webhook secret</span>
           <input

@@ -99,6 +99,8 @@ export interface GitServiceView {
   autofire: boolean;
   // The app_credentials bundle is write-only and never returned.
   auth_kind: AuthKind;
+  // True once a GitHub App install has been recorded (installation_id present).
+  app_installed: boolean;
 }
 
 // Provider-specific app secret bundle stored under `app_credentials` when

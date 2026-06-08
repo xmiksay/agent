@@ -63,7 +63,16 @@ pub enum ServiceCredentials {
 pub struct GitHubAppConfig {
     pub app_id: String,
     pub private_key: String,
+    /// Empty until the operator installs the App (the `/github_app/callback`
+    /// flow writes it back). `resolve_token` bails with a "not installed yet"
+    /// message while it is blank, so a service can be configured pre-install.
+    #[serde(default)]
     pub installation_id: String,
+    /// REST API base of the owning service (`https://api.github.com` or a GHES
+    /// `…/api/v3`). Not part of the stored JSON — threaded in from the service's
+    /// `base_url` so token minting hits the right host and the cache keys by it.
+    #[serde(skip)]
+    pub api_base: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -112,6 +121,7 @@ impl GitService {
             self.kind,
             self.auth_kind,
             &self.token,
+            &self.base_url,
             self.app_credentials.as_ref(),
         )
     }
@@ -125,6 +135,7 @@ fn build_credentials(
     kind: ProviderKind,
     auth_kind: AuthKind,
     token: &str,
+    base_url: &str,
     app_credentials: Option<&serde_json::Value>,
 ) -> Result<ServiceCredentials> {
     match auth_kind {
@@ -134,11 +145,11 @@ fn build_credentials(
                 .ok_or_else(|| anyhow!("auth_kind 'app' requires app_credentials"))?;
             match kind {
                 ProviderKind::Github => {
-                    let cfg: GitHubAppConfig = serde_json::from_value(raw.clone())
+                    let mut cfg: GitHubAppConfig = serde_json::from_value(raw.clone())
                         .map_err(|e| anyhow!("invalid github app_credentials: {e}"))?;
                     require_nonempty(&cfg.app_id, "app_id")?;
                     require_nonempty(&cfg.private_key, "private_key")?;
-                    require_nonempty(&cfg.installation_id, "installation_id")?;
+                    cfg.api_base = base_url.trim_end_matches('/').to_string();
                     Ok(ServiceCredentials::GitHubApp(cfg))
                 }
                 ProviderKind::Gitlab => {
@@ -233,6 +244,7 @@ impl GitServiceStore {
             new.kind,
             new.auth_kind,
             &new.token,
+            &new.base_url,
             new.app_credentials.as_ref(),
         )?;
         if matches!(new.kind, ProviderKind::Github) {
@@ -283,7 +295,17 @@ impl GitServiceStore {
         let auth_kind = upd.auth_kind.unwrap_or(current.auth_kind);
         let token = upd.token.clone().unwrap_or_else(|| current.token.clone());
         let app_credentials = upd.app_credentials.clone().or(current.app_credentials);
-        build_credentials(current.kind, auth_kind, &token, app_credentials.as_ref())?;
+        let base_url = upd
+            .base_url
+            .clone()
+            .unwrap_or_else(|| current.base_url.clone());
+        build_credentials(
+            current.kind,
+            auth_kind,
+            &token,
+            &base_url,
+            app_credentials.as_ref(),
+        )?;
 
         let mut active: git_services::ActiveModel = git_services::Entity::find_by_id(id)
             .one(&self.db)
@@ -439,14 +461,34 @@ mod tests {
 
     #[test]
     fn credentials_app_github_rejects_missing_field() {
-        // Valid JSON object, but missing `installation_id`.
+        // Missing `app_id` — a field that is required even pre-install.
+        let s = svc(
+            ProviderKind::Github,
+            AuthKind::App,
+            Some(serde_json::json!({ "private_key": "pem", "installation_id": "2" })),
+        );
+        let err = s.credentials().unwrap_err().to_string();
+        assert!(err.contains("app_id"), "got: {err}");
+    }
+
+    #[test]
+    fn credentials_app_github_allows_blank_installation_id_pre_install() {
+        // App config saved before the install flow has run: no installation_id
+        // yet. This must resolve (the client can drive the install endpoint); a
+        // blank installation_id only fails later, at mint time.
         let s = svc(
             ProviderKind::Github,
             AuthKind::App,
             Some(serde_json::json!({ "app_id": "123", "private_key": "pem" })),
         );
-        let err = s.credentials().unwrap_err().to_string();
-        assert!(err.contains("installation_id"), "got: {err}");
+        match s.credentials().unwrap() {
+            ServiceCredentials::GitHubApp(cfg) => {
+                assert_eq!(cfg.app_id, "123");
+                assert!(cfg.installation_id.is_empty());
+                assert_eq!(cfg.api_base, "https://example.com");
+            }
+            other => panic!("expected GitHubApp, got {other:?}"),
+        }
     }
 
     #[test]
