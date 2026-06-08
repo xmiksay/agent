@@ -12,8 +12,8 @@ use crate::project::ProviderKind;
 /// How a `git_service` authenticates against its provider.
 ///
 /// `Pat` is the only flow wired today. `App` is the groundwork for GitHub App
-/// (#9) and GitLab OAuth application (#10) integration — its credential columns
-/// are stored and validated, but token minting is not implemented yet (see
+/// (#9) and GitLab OAuth application (#10) integration — its `app_credentials`
+/// bundle is stored and validated, but token minting is not implemented yet (see
 /// `crate::provider::credentials::resolve_token`).
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -43,25 +43,34 @@ impl FromStr for AuthKind {
     }
 }
 
-/// The resolved credential shape for a service, derived from `auth_kind` + the
-/// provider-specific columns. Consumed by `provider::credentials::resolve_token`
-/// (REST calls + the `GH_TOKEN`/`GITLAB_TOKEN` env the agent inherits).
+/// The resolved credential shape for a service. Built from `auth_kind` (the
+/// type) + `app_credentials` (the value). Consumed by
+/// `provider::credentials::resolve_token` (REST calls + the
+/// `GH_TOKEN`/`GITLAB_TOKEN` env the agent inherits).
 #[derive(Clone, Debug)]
 pub enum ServiceCredentials {
     /// Personal/group access token used directly as the bearer.
     Pat(String),
     /// GitHub App (#9). JWT → installation-token exchange not implemented yet.
-    GitHubApp {
-        app_id: String,
-        private_key: String,
-        installation_id: String,
-    },
+    GitHubApp(GitHubAppConfig),
     /// GitLab OAuth application (#10). Refresh-token exchange not implemented yet.
-    GitLabOAuth {
-        client_id: String,
-        client_secret: String,
-        refresh_token: String,
-    },
+    GitLabOAuth(GitLabOAuthConfig),
+}
+
+/// `app_credentials` value when `auth_kind = 'app'` and `kind = 'github'`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GitHubAppConfig {
+    pub app_id: String,
+    pub private_key: String,
+    pub installation_id: String,
+}
+
+/// `app_credentials` value when `auth_kind = 'app'` and `kind = 'gitlab'`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GitLabOAuthConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub refresh_token: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -76,11 +85,10 @@ pub struct GitService {
     pub bot_username: String,
     pub autofire: bool,
     pub auth_kind: AuthKind,
-    pub app_id: Option<String>,
-    pub app_installation_id: Option<String>,
-    pub app_private_key: Option<String>,
-    pub app_client_secret: Option<String>,
-    pub app_refresh_token: Option<String>,
+    /// The provider-specific app secret bundle (see `GitHubAppConfig` /
+    /// `GitLabOAuthConfig`). `None` for `pat`. Never serialized to clients.
+    #[serde(skip_serializing)]
+    pub app_credentials: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -98,68 +106,66 @@ impl GitService {
             bot_username: m.bot_username,
             autofire: m.autofire,
             auth_kind: m.auth_kind.parse()?,
-            app_id: m.app_id,
-            app_installation_id: m.app_installation_id,
-            app_private_key: m.app_private_key,
-            app_client_secret: m.app_client_secret,
-            app_refresh_token: m.app_refresh_token,
+            app_credentials: m.app_credentials,
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
         })
     }
 
     /// Resolve the stored config into a typed credential. Fails when an `app`
-    /// service is missing a column its provider requires.
+    /// service is missing (or has a malformed) `app_credentials` value.
     pub fn credentials(&self) -> Result<ServiceCredentials> {
         build_credentials(
             self.kind,
             self.auth_kind,
             &self.token,
-            &self.app_id,
-            &self.app_installation_id,
-            &self.app_private_key,
-            &self.app_client_secret,
-            &self.app_refresh_token,
+            self.app_credentials.as_ref(),
         )
     }
 }
 
-/// Single source of truth for turning stored columns into a `ServiceCredentials`
-/// (and, by extension, for validating that an `app` service has the columns its
-/// provider needs — create/update call this and discard the value).
-#[allow(clippy::too_many_arguments)]
+/// Single source of truth for turning the type+value columns into a
+/// `ServiceCredentials` (and, by extension, for validating that an `app` service
+/// has a well-formed `app_credentials` — create/update call this and discard the
+/// value).
 fn build_credentials(
     kind: ProviderKind,
     auth_kind: AuthKind,
     token: &str,
-    app_id: &Option<String>,
-    app_installation_id: &Option<String>,
-    app_private_key: &Option<String>,
-    app_client_secret: &Option<String>,
-    app_refresh_token: &Option<String>,
+    app_credentials: Option<&serde_json::Value>,
 ) -> Result<ServiceCredentials> {
     match auth_kind {
         AuthKind::Pat => Ok(ServiceCredentials::Pat(token.to_string())),
-        AuthKind::App => match kind {
-            ProviderKind::Github => Ok(ServiceCredentials::GitHubApp {
-                app_id: require_field(app_id, "app_id")?,
-                private_key: require_field(app_private_key, "app_private_key")?,
-                installation_id: require_field(app_installation_id, "app_installation_id")?,
-            }),
-            ProviderKind::Gitlab => Ok(ServiceCredentials::GitLabOAuth {
-                client_id: require_field(app_id, "app_id")?,
-                client_secret: require_field(app_client_secret, "app_client_secret")?,
-                refresh_token: require_field(app_refresh_token, "app_refresh_token")?,
-            }),
-        },
+        AuthKind::App => {
+            let raw = app_credentials
+                .ok_or_else(|| anyhow!("auth_kind 'app' requires app_credentials"))?;
+            match kind {
+                ProviderKind::Github => {
+                    let cfg: GitHubAppConfig = serde_json::from_value(raw.clone())
+                        .map_err(|e| anyhow!("invalid github app_credentials: {e}"))?;
+                    require_nonempty(&cfg.app_id, "app_id")?;
+                    require_nonempty(&cfg.private_key, "private_key")?;
+                    require_nonempty(&cfg.installation_id, "installation_id")?;
+                    Ok(ServiceCredentials::GitHubApp(cfg))
+                }
+                ProviderKind::Gitlab => {
+                    let cfg: GitLabOAuthConfig = serde_json::from_value(raw.clone())
+                        .map_err(|e| anyhow!("invalid gitlab app_credentials: {e}"))?;
+                    require_nonempty(&cfg.client_id, "client_id")?;
+                    require_nonempty(&cfg.client_secret, "client_secret")?;
+                    require_nonempty(&cfg.refresh_token, "refresh_token")?;
+                    Ok(ServiceCredentials::GitLabOAuth(cfg))
+                }
+            }
+        }
     }
 }
 
-fn require_field(value: &Option<String>, name: &str) -> Result<String> {
-    match value {
-        Some(v) if !v.trim().is_empty() => Ok(v.clone()),
-        _ => bail!("auth_kind 'app' requires {name}"),
+fn require_nonempty(value: &str, name: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("app_credentials.{name} must not be empty");
     }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -176,16 +182,9 @@ pub struct NewGitService {
     pub autofire: bool,
     #[serde(default)]
     pub auth_kind: AuthKind,
+    /// Provider-specific app secret bundle; required when `auth_kind = 'app'`.
     #[serde(default)]
-    pub app_id: Option<String>,
-    #[serde(default)]
-    pub app_installation_id: Option<String>,
-    #[serde(default)]
-    pub app_private_key: Option<String>,
-    #[serde(default)]
-    pub app_client_secret: Option<String>,
-    #[serde(default)]
-    pub app_refresh_token: Option<String>,
+    pub app_credentials: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -197,11 +196,7 @@ pub struct UpdateGitService {
     pub bot_username: Option<String>,
     pub autofire: Option<bool>,
     pub auth_kind: Option<AuthKind>,
-    pub app_id: Option<String>,
-    pub app_installation_id: Option<String>,
-    pub app_private_key: Option<String>,
-    pub app_client_secret: Option<String>,
-    pub app_refresh_token: Option<String>,
+    pub app_credentials: Option<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -239,16 +234,12 @@ impl GitServiceStore {
 
     pub async fn create(&self, new: NewGitService) -> Result<GitService> {
         validate_slug(&new.slug)?;
-        // Reject an `app` service that's missing the columns its provider needs.
+        // Reject an `app` service whose app_credentials are missing/malformed.
         build_credentials(
             new.kind,
             new.auth_kind,
             &new.token,
-            &new.app_id,
-            &new.app_installation_id,
-            &new.app_private_key,
-            &new.app_client_secret,
-            &new.app_refresh_token,
+            new.app_credentials.as_ref(),
         )?;
         if matches!(new.kind, ProviderKind::Github) {
             let exists = git_services::Entity::find()
@@ -273,11 +264,7 @@ impl GitServiceStore {
             bot_username: Set(new.bot_username),
             autofire: Set(new.autofire),
             auth_kind: Set(new.auth_kind.as_str().to_string()),
-            app_id: Set(new.app_id),
-            app_installation_id: Set(new.app_installation_id),
-            app_private_key: Set(new.app_private_key),
-            app_client_secret: Set(new.app_client_secret),
-            app_refresh_token: Set(new.app_refresh_token),
+            app_credentials: Set(new.app_credentials),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
         };
@@ -298,27 +285,11 @@ impl GitServiceStore {
             .ok_or_else(|| anyhow!("git_service not found"))?;
 
         // Resolve the post-patch state (None = keep current) and validate that an
-        // `app` service still has every column its provider needs before writing.
+        // `app` service still has well-formed credentials before writing.
         let auth_kind = upd.auth_kind.unwrap_or(current.auth_kind);
         let token = upd.token.clone().unwrap_or_else(|| current.token.clone());
-        let app_id = upd.app_id.clone().or(current.app_id);
-        let app_installation_id = upd
-            .app_installation_id
-            .clone()
-            .or(current.app_installation_id);
-        let app_private_key = upd.app_private_key.clone().or(current.app_private_key);
-        let app_client_secret = upd.app_client_secret.clone().or(current.app_client_secret);
-        let app_refresh_token = upd.app_refresh_token.clone().or(current.app_refresh_token);
-        build_credentials(
-            current.kind,
-            auth_kind,
-            &token,
-            &app_id,
-            &app_installation_id,
-            &app_private_key,
-            &app_client_secret,
-            &app_refresh_token,
-        )?;
+        let app_credentials = upd.app_credentials.clone().or(current.app_credentials);
+        build_credentials(current.kind, auth_kind, &token, app_credentials.as_ref())?;
 
         let mut active: git_services::ActiveModel = git_services::Entity::find_by_id(id)
             .one(&self.db)
@@ -347,20 +318,8 @@ impl GitServiceStore {
         if let Some(v) = upd.auth_kind {
             active.auth_kind = Set(v.as_str().to_string());
         }
-        if let Some(v) = upd.app_id {
-            active.app_id = Set(Some(v));
-        }
-        if let Some(v) = upd.app_installation_id {
-            active.app_installation_id = Set(Some(v));
-        }
-        if let Some(v) = upd.app_private_key {
-            active.app_private_key = Set(Some(v));
-        }
-        if let Some(v) = upd.app_client_secret {
-            active.app_client_secret = Set(Some(v));
-        }
-        if let Some(v) = upd.app_refresh_token {
-            active.app_refresh_token = Set(Some(v));
+        if let Some(v) = upd.app_credentials {
+            active.app_credentials = Set(Some(v));
         }
         active.updated_at = Set(Utc::now().into());
         active.update(&self.db).await?;
@@ -445,7 +404,11 @@ mod tests {
         assert_eq!(new.auth_kind, AuthKind::Pat);
     }
 
-    fn svc(kind: ProviderKind, auth_kind: AuthKind) -> GitService {
+    fn svc(
+        kind: ProviderKind,
+        auth_kind: AuthKind,
+        app_credentials: Option<serde_json::Value>,
+    ) -> GitService {
         let now = Utc::now();
         GitService {
             id: Uuid::nil(),
@@ -458,11 +421,7 @@ mod tests {
             bot_username: "bot".into(),
             autofire: false,
             auth_kind,
-            app_id: None,
-            app_installation_id: None,
-            app_private_key: None,
-            app_client_secret: None,
-            app_refresh_token: None,
+            app_credentials,
             created_at: now,
             updated_at: now,
         }
@@ -470,7 +429,7 @@ mod tests {
 
     #[test]
     fn credentials_pat_returns_token() {
-        let s = svc(ProviderKind::Github, AuthKind::Pat);
+        let s = svc(ProviderKind::Github, AuthKind::Pat, None);
         match s.credentials().unwrap() {
             ServiceCredentials::Pat(t) => assert_eq!(t, "pat-token"),
             other => panic!("expected Pat, got {other:?}"),
@@ -478,38 +437,56 @@ mod tests {
     }
 
     #[test]
-    fn credentials_app_github_requires_columns() {
-        // No app columns set → error naming the first missing field.
-        let s = svc(ProviderKind::Github, AuthKind::App);
+    fn credentials_app_without_credentials_errors() {
+        let s = svc(ProviderKind::Github, AuthKind::App, None);
         let err = s.credentials().unwrap_err().to_string();
-        assert!(err.contains("app_id"), "got: {err}");
+        assert!(err.contains("app_credentials"), "got: {err}");
+    }
+
+    #[test]
+    fn credentials_app_github_rejects_missing_field() {
+        // Valid JSON object, but missing `installation_id`.
+        let s = svc(
+            ProviderKind::Github,
+            AuthKind::App,
+            Some(serde_json::json!({ "app_id": "123", "private_key": "pem" })),
+        );
+        let err = s.credentials().unwrap_err().to_string();
+        assert!(err.contains("installation_id"), "got: {err}");
     }
 
     #[test]
     fn credentials_app_github_resolves_when_complete() {
-        let mut s = svc(ProviderKind::Github, AuthKind::App);
-        s.app_id = Some("123".into());
-        s.app_private_key = Some("-----BEGIN-----".into());
-        s.app_installation_id = Some("456".into());
+        let s = svc(
+            ProviderKind::Github,
+            AuthKind::App,
+            Some(serde_json::json!({
+                "app_id": "123",
+                "private_key": "-----BEGIN-----",
+                "installation_id": "456",
+            })),
+        );
         match s.credentials().unwrap() {
-            ServiceCredentials::GitHubApp {
-                app_id,
-                installation_id,
-                ..
-            } => {
-                assert_eq!(app_id, "123");
-                assert_eq!(installation_id, "456");
+            ServiceCredentials::GitHubApp(cfg) => {
+                assert_eq!(cfg.app_id, "123");
+                assert_eq!(cfg.installation_id, "456");
             }
             other => panic!("expected GitHubApp, got {other:?}"),
         }
     }
 
     #[test]
-    fn credentials_app_gitlab_requires_client_secret() {
-        let mut s = svc(ProviderKind::Gitlab, AuthKind::App);
-        s.app_id = Some("client-id".into());
-        // Missing client secret + refresh token.
+    fn credentials_app_gitlab_rejects_empty_field() {
+        let s = svc(
+            ProviderKind::Gitlab,
+            AuthKind::App,
+            Some(serde_json::json!({
+                "client_id": "cid",
+                "client_secret": "  ",
+                "refresh_token": "r",
+            })),
+        );
         let err = s.credentials().unwrap_err().to_string();
-        assert!(err.contains("app_client_secret"), "got: {err}");
+        assert!(err.contains("client_secret"), "got: {err}");
     }
 }

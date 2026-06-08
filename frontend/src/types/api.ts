@@ -96,11 +96,14 @@ export interface GitServiceView {
   updated_at: string;
   webhook_path: string;
   autofire: boolean;
+  // The app_credentials bundle is write-only and never returned.
   auth_kind: AuthKind;
-  // Non-secret app identifiers; secrets are write-only and never returned.
-  app_id: string | null;
-  app_installation_id: string | null;
 }
+
+// Provider-specific app secret bundle stored under `app_credentials` when
+// auth_kind === "app". GitHub: { app_id, private_key, installation_id };
+// GitLab: { client_id, client_secret, refresh_token }.
+export type AppCredentials = Record<string, string>;
 
 export interface NewGitService {
   kind: ProviderKind;
@@ -112,11 +115,7 @@ export interface NewGitService {
   bot_username: string;
   autofire: boolean;
   auth_kind?: AuthKind;
-  app_id?: string;
-  app_installation_id?: string;
-  app_private_key?: string;
-  app_client_secret?: string;
-  app_refresh_token?: string;
+  app_credentials?: AppCredentials;
 }
 
 export interface UpdateGitService {
@@ -127,11 +126,7 @@ export interface UpdateGitService {
   bot_username?: string;
   autofire?: boolean;
   auth_kind?: AuthKind;
-  app_id?: string;
-  app_installation_id?: string;
-  app_private_key?: string;
-  app_client_secret?: string;
-  app_refresh_token?: string;
+  app_credentials?: AppCredentials;
 }
 
 export interface BranchEntry {

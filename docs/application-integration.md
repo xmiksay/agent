@@ -18,32 +18,31 @@ right shape for a bot that comments on issues/MRs and pushes branches.
 ## What is already prepared (#15)
 
 - **Schema** (`git_services`, migration `…_000018_add_git_service_app_auth`):
-  `auth_kind TEXT NOT NULL DEFAULT 'pat'` plus nullable app credential columns —
-  `app_id`, `app_installation_id`, `app_private_key`, `app_client_secret`,
-  `app_refresh_token`. Existing rows keep working unchanged (`pat`).
-- **Model** (`git_service::store`): `AuthKind { Pat, App }`, the new columns on
-  `GitService`/`NewGitService`/`UpdateGitService`, and
-  `GitService::credentials() -> ServiceCredentials` which validates that an
-  `app` service has every column its provider needs.
-- **`ServiceCredentials`** enum: `Pat`, `GitHubApp { app_id, private_key,
-  installation_id }`, `GitLabOAuth { client_id, client_secret, refresh_token }`.
+  the credential is a **type + value** pair — `auth_kind TEXT NOT NULL DEFAULT
+  'pat'` (type) and `app_credentials JSONB NULL` (value, the provider-specific
+  secret bundle). One JSON column instead of a flat union of every provider's
+  possible fields, so a new provider's app shape needs no migration. Existing
+  rows keep working unchanged (`pat`).
+- **Model** (`git_service::store`): `AuthKind { Pat, App }`, the typed
+  `GitHubAppConfig` / `GitLabOAuthConfig` shapes for the JSON, and
+  `GitService::credentials() -> ServiceCredentials` which parses+validates
+  `app_credentials` against the service's provider.
+- **`ServiceCredentials`** enum: `Pat(String)`,
+  `GitHubApp(GitHubAppConfig)`, `GitLabOAuth(GitLabOAuthConfig)`.
 - **The seam** (`provider::credentials::resolve_token`): the *single* place that
   turns a credential into a usable access token. Every consumer — both REST
   clients (`post_note`) and the runner (`GH_TOKEN`/`GITLAB_TOKEN`) — already
   calls it. Today it returns the PAT and `bail!`s for the app variants. **The #9
   / #10 work is almost entirely inside this one function** (plus a token cache).
-- **API/UI**: `auth_kind` and the non-secret `app_id`/`app_installation_id` are
-  surfaced read-only; app secrets are write-only like `token`.
+- **API/UI**: `auth_kind` is surfaced read-only; the whole `app_credentials`
+  bundle is write-only like `token`/`webhook_secret`.
 
-Column → credential mapping:
+`app_credentials` JSON shape (when `auth_kind = 'app'`):
 
-| Column | GitHub App (#9) | GitLab OAuth app (#10) |
-|---|---|---|
-| `app_id` | App ID (the numeric/client id used as JWT `iss`) | OAuth application ID (client id) |
-| `app_installation_id` | Installation ID | — |
-| `app_private_key` | App private key (PEM) | — |
-| `app_client_secret` | — | OAuth application secret |
-| `app_refresh_token` | — | Refresh token from the authorize step |
+| Provider | JSON keys |
+|---|---|
+| GitHub App (#9) | `app_id` (App ID, the JWT `iss`), `private_key` (PEM), `installation_id` |
+| GitLab OAuth app (#10) | `client_id` (OAuth application ID), `client_secret`, `refresh_token` |
 
 ## GitHub App (#9)
 
@@ -74,7 +73,7 @@ with its own numeric **installation ID**.
 Every webhook from an installed App includes `installation.id` in the payload —
 the cheapest source. Alternatively `GET /repos/{owner}/{repo}/installation`
 (with the app JWT) resolves a repo to its installation. For #15 we store it
-explicitly in `app_installation_id`.
+explicitly as `app_credentials.installation_id`.
 
 ### GitHub Enterprise Server
 `api_base` already drives the REST host (`base_url`), so GHES works by pointing
@@ -103,14 +102,14 @@ user or **service account**).
    narrower `read_api`+specific scopes if posting only).
 2. One-time authorize → exchange the code at `POST {base_url}/oauth/token`
    (`grant_type=authorization_code`) for `{ access_token, refresh_token,
-   expires_in }`. The **refresh token** is the durable credential we store in
-   `app_refresh_token`.
+   expires_in }`. The **refresh token** is the durable credential we store as
+   `app_credentials.refresh_token`.
 3. **Refresh** when the access token expires (default 2h):
    `POST {base_url}/oauth/token` with `grant_type=refresh_token`,
    `client_id`, `client_secret`, `refresh_token`. With refresh-token rotation
    (default on modern GitLab) the response carries a **new** refresh token —
-   `resolve_token` must persist it back to `app_refresh_token`, so #10 needs a
-   store write on refresh, not just an in-memory cache.
+   `resolve_token` must persist the rotated token back into `app_credentials`, so
+   #10 needs a store write on refresh, not just an in-memory cache.
 4. Use the access token:
    - REST: `Authorization: Bearer <access_token>` (today `GitLabClient` sends
      `PRIVATE-TOKEN`; both are accepted by the GitLab API, but Bearer is correct
@@ -132,7 +131,7 @@ user or **service account**).
   service is app-authed.
 - HTTPS clone URL handling.
 - A one-time authorize step (out of band, or a small operator UI flow) to seed
-  `app_refresh_token`.
+  `app_credentials.refresh_token`.
 
 ## Token-cache shape (both)
 
@@ -143,9 +142,9 @@ service_id → { token, expires_at }
 ```
 
 GitHub: refresh purely in memory (the installation token is re-mintable from the
-PEM at will). GitLab: refresh must also persist the rotated `app_refresh_token`.
-A `RwLock<HashMap<Uuid, CachedToken>>` alongside the registry is enough at
-single-operator scale.
+PEM at will). GitLab: refresh must also persist the rotated refresh token back
+into `app_credentials`. A `RwLock<HashMap<Uuid, CachedToken>>` alongside the
+registry is enough at single-operator scale.
 
 ## Not in scope for #15
 

@@ -76,7 +76,7 @@ Operator (SPA)                    approves/denies via
 | `src/workspace/layout.rs` | `slugify` |
 | `src/provider/mod.rs` | `GitProvider` trait + `NoteTarget` |
 | `src/provider/credentials.rs` | `resolve_token(&ServiceCredentials)` — the single seam that turns a service's stored auth into a usable access token (REST + the agent's `GH_TOKEN`/`GITLAB_TOKEN`). Only `Pat` is wired; **GitHub App (#9) / GitLab OAuth app (#10) minting lands here**. Unit-tested |
-| `src/provider/registry.rs` | `ProviderRegistry` — per-service `Arc<dyn GitProvider>` cache, kept in sync with `git_services` table. `build_client` resolves `GitService::credentials()`; a service whose `app` columns are incomplete is skipped on reload (warn) |
+| `src/provider/registry.rs` | `ProviderRegistry` — per-service `Arc<dyn GitProvider>` cache, kept in sync with `git_services` table. `build_client` resolves `GitService::credentials()`; a service whose `app_credentials` are missing/malformed is skipped on reload (warn) |
 | `src/provider/{gitlab,github}/` | provider impls: REST calls for posting notes / approving / reading comments. Clients hold a `ServiceCredentials` and call `resolve_token` per request (so an app token can later be refreshed on expiry) |
 | `src/git_service/store.rs` | CRUD for the `git_services` table |
 | `src/project/store.rs` | projects + project_branches tables, allowed_operations + env_file config |
@@ -106,7 +106,7 @@ Tables (current set, see migration files for canonical schemas):
 - `projects` — discovered repos, per-project `allowed_operations` glob list and `env_file` (a `.env`-style minijinja template injected as env vars at agent spawn)
 - `project_branches` — branches the agent has touched, with `issue_iid` / `pr_iid` linkage and status
 - `auth_requests` — operator-approval items raised by the in-process permission handler
-- `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret, `autofire` (when true, a newly-created task from this service's webhook is auto-confirmed — started running immediately instead of left pending for a manual confirm). `auth_kind` (`pat`\|`app`, default `pat`) selects the credential flow; the `app_*` columns (`app_id`, `app_installation_id`, `app_private_key`, `app_client_secret`, `app_refresh_token`) are **groundwork for GitHub App (#9) / GitLab OAuth application (#10)** — stored and validated, but token minting is not implemented yet (see `provider::credentials` and [`docs/application-integration.md`](application-integration.md))
+- `git_services` — provider config: kind, base URL, bot username, PAT, webhook secret, `autofire` (when true, a newly-created task from this service's webhook is auto-confirmed — started running immediately instead of left pending for a manual confirm). the credential is a **type + value** pair: `auth_kind` (`pat`\|`app`, default `pat`) is the type, and `app_credentials` (JSONB, null for `pat`) is the value — the provider-specific secret bundle (GitHub App: `{app_id, private_key, installation_id}`; GitLab OAuth: `{client_id, client_secret, refresh_token}`). This is **groundwork for GitHub App (#9) / GitLab OAuth application (#10)** — stored and validated, but token minting is not implemented yet (see `provider::credentials` and [`docs/application-integration.md`](application-integration.md))
 
 ## HTTP surface
 
