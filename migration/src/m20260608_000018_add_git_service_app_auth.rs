@@ -1,9 +1,11 @@
 use sea_orm_migration::prelude::*;
 
 /// Groundwork for GitHub App (#9) and GitLab OAuth application (#10) auth.
-/// Adds an `auth_kind` discriminator (defaulting every existing row to the
-/// current `pat` behavior) plus the credential columns each flow will need.
-/// No code mints app tokens yet — see `provider::credentials::resolve_token`.
+/// Models the credential as a **type + value** pair: `auth_kind` discriminates
+/// the flow (defaulting every existing row to today's `pat`), and the per-flow
+/// secrets live in one `app_credentials` JSON blob — so a new provider's app
+/// shape needs no schema change. No code mints app tokens yet — see
+/// `provider::credentials::resolve_token`.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -20,16 +22,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default("pat"),
                     )
-                    // GitHub App ID / GitLab OAuth application (client) ID.
-                    .add_column(ColumnDef::new(GitServices::AppId).text().null())
-                    // GitHub App installation ID (null for GitLab).
-                    .add_column(ColumnDef::new(GitServices::AppInstallationId).text().null())
-                    // GitHub App private key, PEM (null for GitLab).
-                    .add_column(ColumnDef::new(GitServices::AppPrivateKey).text().null())
-                    // GitLab OAuth application client secret (null for GitHub).
-                    .add_column(ColumnDef::new(GitServices::AppClientSecret).text().null())
-                    // GitLab OAuth refresh token (null for GitHub).
-                    .add_column(ColumnDef::new(GitServices::AppRefreshToken).text().null())
+                    .add_column(
+                        ColumnDef::new(GitServices::AppCredentials)
+                            .json_binary()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await
@@ -41,11 +38,7 @@ impl MigrationTrait for Migration {
                 Table::alter()
                     .table(GitServices::Table)
                     .drop_column(GitServices::AuthKind)
-                    .drop_column(GitServices::AppId)
-                    .drop_column(GitServices::AppInstallationId)
-                    .drop_column(GitServices::AppPrivateKey)
-                    .drop_column(GitServices::AppClientSecret)
-                    .drop_column(GitServices::AppRefreshToken)
+                    .drop_column(GitServices::AppCredentials)
                     .to_owned(),
             )
             .await
@@ -56,9 +49,5 @@ impl MigrationTrait for Migration {
 pub enum GitServices {
     Table,
     AuthKind,
-    AppId,
-    AppInstallationId,
-    AppPrivateKey,
-    AppClientSecret,
-    AppRefreshToken,
+    AppCredentials,
 }

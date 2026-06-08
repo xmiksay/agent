@@ -17,19 +17,12 @@ pub struct Model {
     pub webhook_secret: String,
     pub bot_username: String,
     pub autofire: bool,
-    /// `pat` (today) or `app` (GitHub App #9 / GitLab OAuth app #10). The app
-    /// columns below are populated only when `auth_kind = 'app'`.
+    /// `pat` (today) or `app` (GitHub App #9 / GitLab OAuth app #10) — the type
+    /// half of the credential. `app_credentials` holds the value half: the
+    /// provider-specific secret bundle, populated only when `auth_kind = 'app'`.
     pub auth_kind: String,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub app_id: Option<String>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub app_installation_id: Option<String>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub app_private_key: Option<String>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub app_client_secret: Option<String>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub app_refresh_token: Option<String>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub app_credentials: Option<Json>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

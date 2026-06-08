@@ -19,10 +19,10 @@ use crate::git_service::ServiceCredentials;
 pub async fn resolve_token(creds: &ServiceCredentials) -> Result<String> {
     match creds {
         ServiceCredentials::Pat(token) => Ok(token.clone()),
-        ServiceCredentials::GitHubApp { .. } => {
+        ServiceCredentials::GitHubApp(_) => {
             bail!("GitHub App token minting is not implemented yet — see issue #9")
         }
-        ServiceCredentials::GitLabOAuth { .. } => {
+        ServiceCredentials::GitLabOAuth(_) => {
             bail!("GitLab OAuth token refresh is not implemented yet — see issue #10")
         }
     }
@@ -31,6 +31,7 @@ pub async fn resolve_token(creds: &ServiceCredentials) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git_service::{GitHubAppConfig, GitLabOAuthConfig};
 
     #[tokio::test]
     async fn pat_resolves_to_its_token() {
@@ -42,22 +43,22 @@ mod tests {
 
     #[tokio::test]
     async fn github_app_is_not_implemented_yet() {
-        let creds = ServiceCredentials::GitHubApp {
+        let creds = ServiceCredentials::GitHubApp(GitHubAppConfig {
             app_id: "1".into(),
             private_key: "pem".into(),
             installation_id: "2".into(),
-        };
+        });
         let err = resolve_token(&creds).await.unwrap_err().to_string();
         assert!(err.contains("#9"), "got: {err}");
     }
 
     #[tokio::test]
     async fn gitlab_oauth_is_not_implemented_yet() {
-        let creds = ServiceCredentials::GitLabOAuth {
+        let creds = ServiceCredentials::GitLabOAuth(GitLabOAuthConfig {
             client_id: "1".into(),
             client_secret: "s".into(),
             refresh_token: "r".into(),
-        };
+        });
         let err = resolve_token(&creds).await.unwrap_err().to_string();
         assert!(err.contains("#10"), "got: {err}");
     }
