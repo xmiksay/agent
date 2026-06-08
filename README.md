@@ -25,6 +25,7 @@ Copy `.env.example` to `.env` and set:
 | `DATABASE_URL` | — (required) | Postgres connection string |
 | `REPO_BASE_PATH` | `/tmp/claude-jobs` | working-tree base: `<base>/<service_slug>/<project_slug>/<branch>` |
 | `LISTEN_ADDR` | `0.0.0.0:3000` | bind address |
+| `PUBLIC_BASE_URL` | unset | externally reachable base URL (e.g. `https://agent.example.com`); used to auto-register provider webhooks. Unset → auto-registration skipped, wire hooks by hand |
 | `MAX_CONCURRENT_JOBS` | `3` | parallel `claude` processes |
 | `TASK_TOKEN_BUDGET` | `1000000` | per-task soft output-token budget; runner pauses claude at 50 % so the operator can Resume after the 5 h rate-limit window |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*` and the SPA; paste it into the SPA on first load |
@@ -54,7 +55,7 @@ Go to **Services → Add service** and fill in:
 | Display name     | `Personal GitLab`                     |
 | Base URL         | `https://gitlab.com`                  |
 | Bot username     | `claude-bot`                          |
-| Personal token   | `glpat-…` (PAT with `api`, `read_repository`, `write_repository`) |
+| Personal token   | GitLab: `glpat-…` with `api` + `write_repository` (Maintainer/Owner, so hooks can be registered); GitHub: a PAT with `repo` + `admin:repo_hook`. The token does git transport (token-HTTPS clone/push), note posting, **and** webhook registration |
 | Webhook secret   | a random string                       |
 
 After saving, the service detail page shows the **Webhook URL** to paste into the forge.
@@ -69,6 +70,8 @@ POST  /webhook/github/<slug>     # X-Hub-Signature-256 HMAC-SHA256 of body, key 
 ```
 
 `<slug>` is the value you entered when creating the service. Service-detail page renders the full URL for convenience.
+
+**Auto-registration.** When `PUBLIC_BASE_URL` is set, the agent registers the webhook itself the first time it sees a project (idempotently — re-runs update in place rather than duplicating), so the manual steps below are a fallback. The PAT needs the hook-admin scope (`admin:repo_hook` on GitHub; `api` + Maintainer/Owner on GitLab). GitHub App services (planned) use an app-level hook instead.
 
 ### GitLab side
 

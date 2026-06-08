@@ -75,15 +75,16 @@ impl Workspace {
         })
     }
 
-    /// Idempotent: clones if missing, otherwise fetches and resets the branch.
+    /// Idempotent: clones if missing, otherwise fetches and checks out the
+    /// branch. Authenticates over token-HTTPS (see [`git::HttpsAuth`]).
     pub async fn clone_or_fetch(
         &self,
         path: &Path,
-        auth_url: &str,
+        auth: &git::HttpsAuth,
         branch: &str,
         default_branch: &str,
     ) -> Result<()> {
-        git::clone_or_fetch(path, auth_url, branch, default_branch).await
+        git::clone_or_fetch(path, auth, branch, default_branch).await
     }
 
     /// Remove only this branch's working tree (NOT any sibling branches).

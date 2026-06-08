@@ -69,6 +69,14 @@ impl Cli {
             ProviderKind::Github => format!("gh issue comment {iid} --body \"...\""),
         }
     }
+
+    /// The provider CLI name (`glab` / `gh`) and the env var its token is in.
+    fn cli_auth(&self) -> (&'static str, &'static str) {
+        match self.0 {
+            ProviderKind::Gitlab => ("glab", "GITLAB_TOKEN"),
+            ProviderKind::Github => ("gh", "GH_TOKEN"),
+        }
+    }
 }
 
 /// Build the `claude -p` prompt for a trigger. The worktree is already checked
@@ -80,7 +88,7 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
         ProviderKind::Gitlab => "GitLab",
         ProviderKind::Github => "GitHub",
     };
-    match trigger {
+    let body = match trigger {
         TriggerReason::Issue {
             iid,
             title,
@@ -199,5 +207,15 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
                 note = c.note_issue(*issue_iid),
             )
         }
-    }
+    };
+
+    // CLI/transport note (once): the provider CLI is pre-authenticated and the
+    // existing `origin` pushes over token-HTTPS, so the agent must not touch auth.
+    let (cli, token_var) = c.cli_auth();
+    format!(
+        "{body}\n\n\
+         Note: the `{cli}` CLI is already authenticated (its token is in \
+         `${token_var}`) and `git push -u origin HEAD` over the existing `origin` \
+         remote works. Do NOT add SSH keys, configure tokens, or rewrite the remote."
+    )
 }

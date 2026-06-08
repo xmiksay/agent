@@ -39,6 +39,7 @@ Read by `src/config.rs::from_env`. Defaults in parentheses.
 | `DATABASE_URL` | required | Postgres DSN |
 | `REPO_BASE_PATH` | `/tmp/claude-jobs` | worktree base |
 | `LISTEN_ADDR` | `0.0.0.0:3000` | bind address |
+| `PUBLIC_BASE_URL` | unset | externally reachable base URL; builds the `/webhook/{kind}/{slug}` callback for hook auto-registration. Unset → auto-registration skipped |
 | `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size — gates **actively-processing turns**, acquired/released per turn so idle warm agents hold no slot |
 | `TASK_TOKEN_BUDGET` | `1_000_000` | soft cap; runner kills `claude` when cumulative `output_tokens ≥ budget/2` and the operator can Resume |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*`; SPA prompts and stores in `localStorage` |
@@ -74,5 +75,5 @@ Node version is pinned in `.nvmrc` (`nvm use` first). `/check` is the skill wrap
 
 ## Memory rules (for future Claude sessions)
 
-- Clone repos over SSH only — see memory: *SSH only for git clones*.
+- Runtime git transport for the managed project worktrees is **token-HTTPS** (issue #22): the remote is a secret-free `https://host/path.git` and a git credential helper reads the per-service token from `GH_TOKEN`/`GITLAB_TOKEN` at call time (no token in `.git/config`, no host SSH key). See `src/workspace/git.rs::HttpsAuth`. (Supersedes the earlier *SSH only for git clones* quickfix.)
 - Never write `.claude/` or `CLAUDE.md` into the *project* worktrees the agent manages — see memory: *No agent files in worktrees*. (This `CLAUDE.md` is the agent's own, at the agent repo root — that is allowed.)

@@ -342,6 +342,7 @@ mod tests {
             repo_base_path: "/tmp/agent-test".into(),
             max_concurrent_jobs: 3,
             listen_addr: String::new(),
+            public_base_url: None,
             task_token_budget: 1_000_000,
         };
         Arc::new(TaskStore::new(

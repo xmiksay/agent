@@ -70,6 +70,7 @@ fn build_store(db: &DatabaseConnection) -> Arc<TaskStore> {
         repo_base_path: "/tmp/agent-test".to_string(),
         max_concurrent_jobs: 3,
         listen_addr: String::new(),
+        public_base_url: None,
         task_token_budget: 1_000_000,
     };
     Arc::new(TaskStore::new(
