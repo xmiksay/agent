@@ -11,8 +11,9 @@ pub struct Config {
     pub listen_addr: String,
     /// Per-task soft budget on output tokens. The runner aborts claude when
     /// cumulative output_tokens reaches 50% of this number (so half is the
-    /// safety margin for the active 5h window). Aborted tasks transition to
-    /// "killed" with session_id preserved → operator can Resume after reset.
+    /// safety margin for the active 5h window). Aborted tasks finish as
+    /// `failed`/`failed` with the reason noted in task_results and session_id
+    /// preserved → operator can Resume after reset.
     pub task_token_budget: u64,
 }
 

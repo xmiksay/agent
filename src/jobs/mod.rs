@@ -1,6 +1,10 @@
+pub mod control;
+pub mod create;
 pub mod hub;
+pub mod lifecycle;
 pub mod permission;
 pub mod prompt;
+pub mod queries;
 pub mod registry;
 pub mod runner;
 pub mod store;

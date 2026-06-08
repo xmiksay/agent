@@ -5,38 +5,77 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::jobs::lifecycle::derive_agent_state;
 use crate::jobs::store::TaskEdits;
 use crate::jobs::types::TriggerReason;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
-    pub status: Option<String>,
+    /// SQL filter on the persisted operator lifecycle column.
+    pub task_state: Option<String>,
+    /// In-memory filter on the derived runtime disposition (see note in
+    /// `list_tasks`).
+    pub agent_state: Option<String>,
+}
+
+/// A task as the SPA sees it: the persisted entity flattened, but with the two
+/// orthogonal state axes made explicit — `task_state` (persisted) and
+/// `agent_state` (DERIVED at read time, overlaying the live hub onto the durable
+/// backing). The entity's durable `agent_state` column is shadowed by the
+/// derived value here. No `live` boolean — `agent_state ∈ {warm, running}`
+/// carries that signal now.
+#[derive(Serialize)]
+pub struct TaskView {
+    #[serde(flatten)]
+    pub task: crate::entity::tasks::Model,
+    /// Derived runtime disposition: `cold|warm|pending|running|failed`. The
+    /// entity's durable `agent_state` column is `skip_serializing`, so this is the
+    /// only `agent_state` key in the output.
+    pub agent_state: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct TaskDetail {
     #[serde(flatten)]
-    pub task: crate::entity::tasks::Model,
+    pub task: TaskView,
     pub result: Option<crate::entity::task_results::Model>,
     /// Absolute path to this task's git worktree on the agent host.
     /// `None` if the task's git_service can no longer be resolved.
     pub work_dir: Option<String>,
-    /// True when an agent process is attached and warm (idle between turns or
-    /// actively running) — the SPA keeps its WebSocket open and chats live.
-    pub live: bool,
+}
+
+/// Build the read-time task view: overlay the derived `agent_state` onto the
+/// persisted entity.
+fn task_view(task: crate::entity::tasks::Model, state: &AppState) -> TaskView {
+    let agent_state = derive_agent_state(&task.agent_state, task.id, state.task_store.hub());
+    TaskView { task, agent_state }
 }
 
 pub async fn list_tasks(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<Vec<crate::entity::tasks::Model>>, StatusCode> {
+) -> Result<Json<Vec<TaskView>>, StatusCode> {
     let tasks = state
         .task_store
-        .list_tasks(query.status.as_deref())
+        .list_tasks(query.task_state.as_deref())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(tasks))
+    // task_state filters in SQL; agent_state is derived (not a column) so it's
+    // filtered in-memory here. Acceptable at single-operator scale where the task
+    // list is small.
+    let views: Vec<TaskView> = tasks
+        .into_iter()
+        .map(|t| task_view(t, &state))
+        .filter(|v| {
+            query
+                .agent_state
+                .as_deref()
+                .is_none_or(|want| v.agent_state == want)
+        })
+        .collect();
+
+    Ok(Json(views))
 }
 
 pub async fn get_task(
@@ -72,8 +111,8 @@ pub async fn get_task(
         None => None,
     };
 
-    let live = state.task_store.hub().is_warm(id).await;
-    Ok(Json(TaskDetail { task, result, work_dir, live }))
+    let task = task_view(task, &state);
+    Ok(Json(TaskDetail { task, result, work_dir }))
 }
 
 pub async fn confirm_task(
@@ -266,4 +305,49 @@ pub async fn task_diff(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(DiffResponse { diff }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskView;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    /// The serialized TaskView must emit the DERIVED `agent_state` (not the
+    /// entity's durable column value) and the persisted `task_state`, with no
+    /// `live` key. Guards the frontend JSON contract: the entity's durable
+    /// `agent_state` is `skip_serializing`, so the derived overlay is the only one.
+    #[test]
+    fn taskview_emits_derived_agent_state() {
+        let id = Uuid::new_v4();
+        let model = crate::entity::tasks::Model {
+            id,
+            // Durable backing says "failed"...
+            agent_state: "failed".to_string(),
+            task_state: "working_on".to_string(),
+            trigger_type: "issue".to_string(),
+            trigger_data: serde_json::json!({}),
+            project_path: "p".to_string(),
+            git_url: "u".to_string(),
+            default_branch: "main".to_string(),
+            created_at: Utc::now().into(),
+            started_at: None,
+            finished_at: None,
+            provider: "github".to_string(),
+            branch: Some("b".to_string()),
+            project_id: None,
+            git_service_id: None,
+            session_id: None,
+            pid: None,
+            pending_message: None,
+        };
+        // ...but the derived overlay says "running".
+        let view = TaskView { task: model, agent_state: "running" };
+        let v = serde_json::to_value(&view).unwrap();
+
+        assert_eq!(v["agent_state"], "running", "derived agent_state wins");
+        assert_eq!(v["task_state"], "working_on", "task_state passes through");
+        assert!(v.get("live").is_none(), "no live boolean");
+        assert_eq!(v["id"], id.to_string());
+    }
 }

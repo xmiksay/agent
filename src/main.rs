@@ -1,17 +1,3 @@
-mod agent;
-mod api;
-mod auth;
-mod config;
-mod entity;
-mod git_service;
-mod jobs;
-mod project;
-mod provider;
-mod spa;
-mod webhook;
-mod workspace;
-mod ws;
-
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -22,28 +8,19 @@ use migration::MigratorTrait;
 use sea_orm::Database;
 use tracing::info;
 
-use crate::auth::store::AuthStore;
-use crate::auth::waiter::AuthWaiter;
-use crate::config::Config;
-use crate::git_service::GitServiceStore;
-use crate::jobs::hub::LiveSessions;
-use crate::jobs::registry::RunningTasks;
-use crate::jobs::store::TaskStore;
-use crate::project::ProjectStore;
-use crate::provider::ProviderRegistry;
-use crate::workspace::Workspace;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub config: Config,
-    pub task_store: Arc<TaskStore>,
-    pub project_store: Arc<ProjectStore>,
-    pub git_service_store: GitServiceStore,
-    pub workspace: Arc<Workspace>,
-    pub providers: ProviderRegistry,
-    pub auth_store: Arc<AuthStore>,
-    pub auth_waiter: AuthWaiter,
-}
+use agent::AppState;
+use agent::auth;
+use agent::auth::store::AuthStore;
+use agent::auth::waiter::AuthWaiter;
+use agent::config::Config;
+use agent::git_service::GitServiceStore;
+use agent::jobs::hub::LiveSessions;
+use agent::jobs::registry::RunningTasks;
+use agent::jobs::store::TaskStore;
+use agent::project::ProjectStore;
+use agent::provider::ProviderRegistry;
+use agent::workspace::Workspace;
+use agent::{api, spa, webhook, ws};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -81,11 +58,12 @@ async fn main() -> anyhow::Result<()> {
         auth_waiter.clone(),
     ));
 
-    // Any task left running/pending in the DB was orphaned by a previous
-    // process — flip those rows to `killed` so the UI matches reality.
+    // A task left mid-flight (task_state=working_on, no finished_at) was
+    // orphaned by a previous process — reconcile those rows to failed so the UI
+    // matches reality.
     match task_store.recover_orphans().await {
         Ok(0) => {}
-        Ok(n) => tracing::info!(recovered = n, "marked orphan tasks as killed"),
+        Ok(n) => tracing::info!(recovered = n, "reconciled orphan tasks as failed"),
         Err(e) => tracing::warn!(error = %e, "failed to recover orphan tasks"),
     }
 

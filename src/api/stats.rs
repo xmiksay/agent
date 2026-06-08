@@ -142,9 +142,13 @@ fn duration_secs(t: &tasks::Model, now: DateTime<Utc>) -> i64 {
         Some(s) => DateTime::<Utc>::from(s),
         None => return 0,
     };
+    // A finished task counts its whole span. An unfinished task accrues live time
+    // only while a turn is actively working — a warm-idle task (task_state
+    // completed/pending between turns, no finished_at yet) bills nothing until it
+    // terminally finishes, otherwise long idle-warm windows would inflate totals.
     let end = match t.finished_at {
         Some(f) => DateTime::<Utc>::from(f),
-        None if t.status == "running" => now,
+        None if t.task_state == "working_on" => now,
         None => return 0,
     };
     (end - started).num_seconds().max(0)
