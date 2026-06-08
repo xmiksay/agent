@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -92,27 +92,29 @@ pub async fn get_task(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let work_dir = match task.git_service_id {
-        Some(sid) => state
-            .task_store
-            .providers()
-            .service(sid)
-            .await
-            .map(|svc| {
-                let project_slug = slugify(&task.project_path);
-                let branch = task.branch.clone().unwrap_or_else(|| task.default_branch.clone());
-                let branch_slug = slugify(&branch);
-                state
-                    .task_store
-                    .workspace()
-                    .branch_dir(&svc.slug, &project_slug, &branch_slug)
-                    .to_string_lossy()
-                    .into_owned()
-            }),
+        Some(sid) => state.task_store.providers().service(sid).await.map(|svc| {
+            let project_slug = slugify(&task.project_path);
+            let branch = task
+                .branch
+                .clone()
+                .unwrap_or_else(|| task.default_branch.clone());
+            let branch_slug = slugify(&branch);
+            state
+                .task_store
+                .workspace()
+                .branch_dir(&svc.slug, &project_slug, &branch_slug)
+                .to_string_lossy()
+                .into_owned()
+        }),
         None => None,
     };
 
     let task = task_view(task, &state);
-    Ok(Json(TaskDetail { task, result, work_dir }))
+    Ok(Json(TaskDetail {
+        task,
+        result,
+        work_dir,
+    }))
 }
 
 pub async fn confirm_task(
@@ -230,7 +232,11 @@ pub async fn task_events(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?
         .into_iter()
-        .map(|r| PersistedEvent { seq: r.seq, kind: r.kind, payload: r.payload })
+        .map(|r| PersistedEvent {
+            seq: r.seq,
+            kind: r.kind,
+            payload: r.payload,
+        })
         .collect();
     Ok(Json(EventsResponse { events }))
 }
@@ -342,7 +348,10 @@ mod tests {
             pending_message: None,
         };
         // ...but the derived overlay says "running".
-        let view = TaskView { task: model, agent_state: "running" };
+        let view = TaskView {
+            task: model,
+            agent_state: "running",
+        };
         let v = serde_json::to_value(&view).unwrap();
 
         assert_eq!(v["agent_state"], "running", "derived agent_state wins");

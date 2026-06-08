@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use sea_orm::*;
 use tokio::sync::{Mutex, Semaphore};
-use tracing::{info, error};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::auth::store::AuthStore;
@@ -131,7 +131,10 @@ impl TaskStore {
                 }
                 b.to_string()
             }
-            None => task.branch.clone().unwrap_or_else(|| default_branch.clone()),
+            None => task
+                .branch
+                .clone()
+                .unwrap_or_else(|| default_branch.clone()),
         };
         if branch == default_branch {
             bail!("refusing to set task branch to the default branch '{default_branch}'");
@@ -227,7 +230,8 @@ impl TaskStore {
 
         // Queue the task for spawn: durable agent_state → pending (so a derived
         // read shows `pending` until the turn loop marks it running).
-        self.set_states(task_id, AGENT_PENDING, &task.task_state).await?;
+        self.set_states(task_id, AGENT_PENDING, &task.task_state)
+            .await?;
 
         let store = Arc::clone(self);
         let semaphore = self.semaphore.clone();

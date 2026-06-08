@@ -222,8 +222,14 @@ async fn list_filters_by_task_state() {
     let pend = new_task(&store, svc, 1).await;
     let work = new_task(&store, svc, 2).await;
     let done = new_task(&store, svc, 3).await;
-    store.update_task(work, patch_task_state("working_on")).await.unwrap();
-    store.update_task(done, patch_task_state("completed")).await.unwrap();
+    store
+        .update_task(work, patch_task_state("working_on"))
+        .await
+        .unwrap();
+    store
+        .update_task(done, patch_task_state("completed"))
+        .await
+        .unwrap();
 
     let working = store.list_tasks(Some("working_on")).await.unwrap();
     assert_eq!(working.len(), 1);
@@ -236,7 +242,11 @@ async fn list_filters_by_task_state() {
     let all = store.list_tasks(None).await.unwrap();
     assert_eq!(all.len(), 3);
     // Unique ids and all three task_states represented.
-    assert!([pend, work, done].iter().all(|id| all.iter().any(|t| &t.id == id)));
+    assert!(
+        [pend, work, done]
+            .iter()
+            .all(|id| all.iter().any(|t| &t.id == id))
+    );
 
     drop(store);
     drop(db);

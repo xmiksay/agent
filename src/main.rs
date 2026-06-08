@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use axum::Router;
 use axum::http::StatusCode;
 use axum::middleware as axum_middleware;
 use axum::routing::{get, post, put};
-use axum::Router;
 use migration::MigratorTrait;
 use sea_orm::Database;
 use tracing::info;
@@ -93,23 +93,20 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/{id}/confirm", post(api::handlers::confirm_task))
         .route("/api/tasks/{id}/retry", post(api::handlers::retry_task))
         .route("/api/tasks/{id}/kill", post(api::handlers::kill_task))
-        .route("/api/tasks/{id}/continue", post(api::handlers::continue_task))
+        .route(
+            "/api/tasks/{id}/continue",
+            post(api::handlers::continue_task),
+        )
         .route("/api/tasks/{id}/message", post(api::handlers::push_message))
         .route("/api/tasks/{id}/diff", get(api::handlers::task_diff))
         .route("/api/tasks/{id}/events", get(api::handlers::task_events))
         .route("/api/projects", get(api::projects::list_projects))
-        .route(
-            "/api/projects/{id}",
-            get(api::projects::get_project),
-        )
+        .route("/api/projects/{id}", get(api::projects::get_project))
         .route(
             "/api/projects/{id}/config",
             put(api::projects::update_config),
         )
-        .route(
-            "/api/projects/{id}/env",
-            put(api::projects::update_env),
-        )
+        .route("/api/projects/{id}/env", put(api::projects::update_env))
         .route(
             "/api/projects/{id}/branches",
             get(api::projects::list_branches),
