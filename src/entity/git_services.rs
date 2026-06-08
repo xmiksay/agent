@@ -24,6 +24,11 @@ pub struct Model {
     pub auth_kind: String,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub app_credentials: Option<Json>,
+    /// `assignee` | `label` | `both` — how an issue event triggers the agent.
+    /// `trigger_label` names the label watched when the mode includes labels.
+    pub trigger_mode: String,
+    #[sea_orm(column_type = "Text")]
+    pub trigger_label: String,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

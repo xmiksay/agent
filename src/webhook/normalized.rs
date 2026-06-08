@@ -52,6 +52,8 @@ pub enum EventKind {
     IssueAssigned {
         iid: u64,
         assignees: Vec<String>,
+        #[serde(default)]
+        labels: Vec<String>,
         title: String,
         body: String,
         url: String,
@@ -59,6 +61,8 @@ pub enum EventKind {
     IssueUpdated {
         iid: u64,
         assignees: Vec<String>,
+        #[serde(default)]
+        labels: Vec<String>,
         title: String,
         body: String,
         url: String,

@@ -15,6 +15,11 @@ pub struct User {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Label {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Issue {
     pub number: u64,
     pub title: String,
@@ -23,6 +28,8 @@ pub struct Issue {
     pub html_url: String,
     #[serde(default)]
     pub assignees: Vec<User>,
+    #[serde(default)]
+    pub labels: Vec<Label>,
 }
 
 #[derive(Debug, Deserialize)]

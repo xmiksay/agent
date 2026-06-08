@@ -163,6 +163,67 @@ struct AppResponse {
     html_url: String,
 }
 
+/// Discover the App's installation id via `GET /app/installations` (JWT-authed),
+/// so we don't depend on the post-install redirect carrying it back. Returns the
+/// first installation; errors if the App isn't installed anywhere yet.
+pub async fn discover_installation_id(cfg: &GitHubAppConfig) -> Result<String> {
+    let jwt = mint_jwt(cfg)?;
+    let url = format!("{}/app/installations", cfg.api_base);
+    let resp = CLIENT
+        .get(&url)
+        .bearer_auth(&jwt)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .context("listing GitHub App installations")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        bail!("GitHub GET /app/installations error {status}: {text}");
+    }
+    let installs: Vec<InstallationItem> = resp.json().await.context("parsing installations")?;
+    let Some(first) = installs.first() else {
+        bail!("the App is not installed on any account yet — install it on GitHub first");
+    };
+    Ok(first.id.to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct InstallationItem {
+    id: u64,
+}
+
+/// Point the App's single app-level webhook at `webhook_url` with `secret`, via
+/// `PATCH /app/hook/config` (JWT-authed). Lets the agent register its own inbound
+/// webhook instead of the operator wiring it in the App settings by hand. Note:
+/// event subscriptions and the webhook "active" toggle are part of the App's
+/// definition and are not settable here — only url/secret/content_type.
+pub async fn set_app_webhook(cfg: &GitHubAppConfig, webhook_url: &str, secret: &str) -> Result<()> {
+    let jwt = mint_jwt(cfg)?;
+    let url = format!("{}/app/hook/config", cfg.api_base);
+    let resp = CLIENT
+        .patch(&url)
+        .bearer_auth(&jwt)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&serde_json::json!({
+            "url": webhook_url,
+            "secret": secret,
+            "content_type": "json",
+            "insecure_ssl": "0",
+        }))
+        .send()
+        .await
+        .context("setting GitHub App webhook config")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        bail!("GitHub PATCH /app/hook/config error {status}: {text}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

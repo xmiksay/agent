@@ -6,7 +6,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::git_service::{AuthKind, GitService};
+use crate::git_service::{AuthKind, GitService, TriggerMode};
 use crate::jobs::types::TriggerReason;
 use crate::project::NewProjectConfig;
 use crate::webhook::normalized::{EventKind, NormalizedEvent, NoteTargetRef};
@@ -67,10 +67,47 @@ pub async fn dispatch(
         _ => {}
     }
 
-    let trigger = match build_trigger(&ev, &my_username) {
+    // A comment continues the issue/MR's existing agent: deliver it as a message
+    // to that task (live to a warm agent, else resume its session) instead of
+    // spawning a fresh, memory-less run on the shared branch. This reattach is
+    // **independent of trigger mode/label/assignee/mention** — once a task exists
+    // for the issue/MR, every follow-up comment reaches it. Only when no task
+    // exists yet do the start-gates in `build_trigger`'s NoteAdded arm decide
+    // whether a bare comment may spin up a fresh task.
+    if let EventKind::NoteAdded { target, body, url } = &ev.kind
+        && let Some(task_id) = resumable_task_for_note(state, project.id, target).await?
+    {
+        // Dedupe on the comment so a redelivered webhook doesn't double-post.
+        let event_id = note_event_id(target, body);
+        if state.task_store.is_duplicate(&event_id) {
+            info!(event_id, "duplicate comment, skipping");
+            return Ok(vec![]);
+        }
+        if !state.task_store.mark_seen(&event_id).await {
+            info!(event_id, "duplicate comment in queue, skipping");
+            return Ok(vec![]);
+        }
+        let _ = url;
+        state.task_store.push_message(task_id, body.clone()).await?;
+        info!(%task_id, "delivered comment to existing issue/MR agent");
+        return Ok(vec![task_id]);
+    }
+
+    let trigger = match build_trigger(
+        &ev,
+        &my_username,
+        service.trigger_mode,
+        &service.trigger_label,
+    ) {
         Some(t) => t,
         None => {
-            debug!(actor = %ev.actor, "no trigger for normalized event");
+            info!(
+                project = %ev.project.full_name,
+                actor = %ev.actor,
+                mode = %service.trigger_mode.as_str(),
+                trigger_label = %service.trigger_label,
+                "event matched no trigger — not for this agent (assignee/label/reviewer didn't match)"
+            );
             return Ok(vec![]);
         }
     };
@@ -85,22 +122,6 @@ pub async fn dispatch(
         return Ok(vec![]);
     }
 
-    // A comment continues the issue/MR's existing agent: deliver it as a message
-    // to that task (live to a warm agent, else resume its session) instead of
-    // spawning a fresh, memory-less run on the shared branch. Falls back to a new
-    // task when there's no resumable one yet (e.g. the first interaction is a
-    // comment).
-    if let Some(task_id) = resumable_task_for_comment(state, project.id, &trigger).await? {
-        let comment = match &trigger {
-            TriggerReason::IssueComment { comment, .. }
-            | TriggerReason::MRComment { comment, .. } => comment.clone(),
-            _ => unreachable!("resumable_task_for_comment only matches comment triggers"),
-        };
-        state.task_store.push_message(task_id, comment).await?;
-        info!(%task_id, "delivered comment to existing issue/MR agent");
-        return Ok(vec![task_id]);
-    }
-
     let id = state
         .task_store
         .create_task(
@@ -113,6 +134,7 @@ pub async fn dispatch(
             ev.project.default_branch.clone(),
         )
         .await?;
+    info!(%id, project = %ev.project.full_name, autofire = service.autofire, "task created from webhook");
 
     // Autofire services skip the manual confirm step: start the task immediately.
     // A failed confirm must not fail dispatch — the task stays pending for a retry.
@@ -160,32 +182,54 @@ fn ensure_project_webhook(state: &AppState, service: &GitService, full_name: &st
     });
 }
 
-/// For a comment trigger, the existing task on the issue/MR branch that can take
-/// the comment as a follow-up (has a `session_id`). `None` for non-comment
-/// triggers or when no such task exists yet.
-async fn resumable_task_for_comment(
+/// The existing resumable task an incoming comment should reattach to, found
+/// straight from the note's target (MR source branch / issue iid → branch) —
+/// **no trigger gate**. `None` when nothing is tracked for that issue/MR yet, so
+/// the caller falls through to the normal start-gates.
+async fn resumable_task_for_note(
     state: &AppState,
     project_id: Uuid,
-    trigger: &TriggerReason,
+    target: &NoteTargetRef,
 ) -> Result<Option<Uuid>> {
-    let branch = match trigger {
-        TriggerReason::MRComment { source_branch, .. } => source_branch.clone(),
-        TriggerReason::IssueComment { issue_iid, .. } => {
+    let branch = match target {
+        NoteTargetRef::PullRequest { source_branch, .. } => source_branch.clone(),
+        NoteTargetRef::Issue { iid, .. } => {
             match state
                 .project_store
-                .find_branch_for_issue(project_id, *issue_iid as i64)
+                .find_branch_for_issue(project_id, *iid as i64)
                 .await?
             {
                 Some(b) => b.branch_name,
                 None => return Ok(None),
             }
         }
-        _ => return Ok(None),
     };
     state
         .task_store
         .find_resumable_task_for_branch(project_id, &branch)
         .await
+}
+
+/// Dedupe key for a comment reattach. Mirrors the `event_id()` a comment
+/// `TriggerReason` would produce, so a redelivered webhook is deduped whether it
+/// reattaches to an existing task or (first comment) starts a fresh one.
+fn note_event_id(target: &NoteTargetRef, body: &str) -> String {
+    let trigger = match target {
+        NoteTargetRef::PullRequest {
+            iid, source_branch, ..
+        } => TriggerReason::MRComment {
+            mr_iid: *iid,
+            comment: body.to_string(),
+            source_branch: source_branch.clone(),
+            url: String::new(),
+        },
+        NoteTargetRef::Issue { iid, .. } => TriggerReason::IssueComment {
+            issue_iid: *iid,
+            comment: body.to_string(),
+            url: String::new(),
+        },
+    };
+    trigger.event_id()
 }
 
 async fn release_for_issue(
@@ -280,11 +324,17 @@ async fn stop_branch_agent(state: &AppState, project_id: Uuid, branch_name: &str
     }
 }
 
-fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReason> {
+fn build_trigger(
+    ev: &NormalizedEvent,
+    my_username: &str,
+    trigger_mode: TriggerMode,
+    trigger_label: &str,
+) -> Option<TriggerReason> {
     match &ev.kind {
         EventKind::IssueAssigned {
             iid,
             assignees,
+            labels,
             title,
             body,
             url,
@@ -292,6 +342,7 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
         | EventKind::IssueUpdated {
             iid,
             assignees,
+            labels,
             title,
             body,
             url,
@@ -300,12 +351,20 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
                 EventKind::IssueAssigned { .. } => "assigned",
                 _ => "updated",
             };
-            let matched = assignees.iter().any(|a| a == my_username);
+            let by_assignee = matches!(trigger_mode, TriggerMode::Assignee | TriggerMode::Both)
+                && assignees.iter().any(|a| a == my_username);
+            let by_label = matches!(trigger_mode, TriggerMode::Label | TriggerMode::Both)
+                && !trigger_label.is_empty()
+                && labels.iter().any(|l| l == trigger_label);
+            let matched = by_assignee || by_label;
             info!(
                 iid,
                 kind,
                 bot = %my_username,
+                mode = trigger_mode.as_str(),
+                label = %trigger_label,
                 assignees = ?assignees,
+                labels = ?labels,
                 matched,
                 title = %title,
                 "issue event"
@@ -423,5 +482,77 @@ fn build_trigger(ev: &NormalizedEvent, my_username: &str) -> Option<TriggerReaso
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProviderKind;
+    use crate::webhook::normalized::ProjectRef;
+
+    fn issue_event(assignees: Vec<&str>, labels: Vec<&str>) -> NormalizedEvent {
+        NormalizedEvent {
+            provider: ProviderKind::Github,
+            project: ProjectRef {
+                full_name: "acme/repo".into(),
+                project_slug: "acme__repo".into(),
+                ssh_url: "git@host:acme/repo.git".into(),
+                default_branch: "main".into(),
+            },
+            actor: "someone".into(),
+            kind: EventKind::IssueAssigned {
+                iid: 7,
+                assignees: assignees.into_iter().map(String::from).collect(),
+                labels: labels.into_iter().map(String::from).collect(),
+                title: "T".into(),
+                body: "B".into(),
+                url: "u".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn label_mode_matches_via_label_not_assignee() {
+        let ev = issue_event(vec!["other"], vec!["agent"]);
+        // Label mode ignores assignees entirely; the watched label fires it.
+        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "agent").is_some());
+    }
+
+    #[test]
+    fn label_mode_ignores_assignee_match() {
+        let ev = issue_event(vec!["bot"], vec!["something-else"]);
+        // Bot is assigned but mode is label-only and the label doesn't match.
+        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "agent").is_none());
+    }
+
+    #[test]
+    fn label_mode_with_empty_label_never_matches() {
+        let ev = issue_event(vec!["bot"], vec!["agent"]);
+        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "").is_none());
+    }
+
+    #[test]
+    fn assignee_mode_matches_via_assignee_not_label() {
+        let ev = issue_event(vec!["bot"], vec!["agent"]);
+        // Assignee mode ignores labels; assignment fires it.
+        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "agent").is_some());
+    }
+
+    #[test]
+    fn assignee_mode_ignores_label_match() {
+        let ev = issue_event(vec!["other"], vec!["agent"]);
+        // The watched label is present but mode is assignee-only.
+        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "agent").is_none());
+    }
+
+    #[test]
+    fn both_mode_matches_on_either() {
+        let by_label = issue_event(vec!["other"], vec!["agent"]);
+        let by_assignee = issue_event(vec!["bot"], vec!["x"]);
+        let neither = issue_event(vec!["other"], vec!["x"]);
+        assert!(build_trigger(&by_label, "bot", TriggerMode::Both, "agent").is_some());
+        assert!(build_trigger(&by_assignee, "bot", TriggerMode::Both, "agent").is_some());
+        assert!(build_trigger(&neither, "bot", TriggerMode::Both, "agent").is_none());
     }
 }

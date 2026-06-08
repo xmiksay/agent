@@ -373,6 +373,8 @@ mod tests {
                 autofire: false,
                 auth_kind: Default::default(),
                 app_credentials: None,
+                trigger_mode: Default::default(),
+                trigger_label: String::new(),
             })
             .await
             .expect("seed git_service")

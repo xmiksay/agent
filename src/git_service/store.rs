@@ -45,6 +45,43 @@ impl FromStr for AuthKind {
     }
 }
 
+/// How an issue event triggers the agent for a `git_service`.
+///
+/// `Assignee` (today's behavior, the default) fires when the bot is among the
+/// issue's assignees. `Label` fires when the issue carries `trigger_label` —
+/// this is how a GitHub App, which can't be an issue assignee, gets triggered.
+/// `Both` fires on either match.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TriggerMode {
+    #[default]
+    Assignee,
+    Label,
+    Both,
+}
+
+impl TriggerMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TriggerMode::Assignee => "assignee",
+            TriggerMode::Label => "label",
+            TriggerMode::Both => "both",
+        }
+    }
+}
+
+impl FromStr for TriggerMode {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "assignee" => Ok(TriggerMode::Assignee),
+            "label" => Ok(TriggerMode::Label),
+            "both" => Ok(TriggerMode::Both),
+            other => Err(anyhow!("unknown trigger_mode: {other}")),
+        }
+    }
+}
+
 /// The resolved credential shape for a service. Built from `auth_kind` (the
 /// type) + `app_credentials` (the value). Consumed by
 /// `provider::credentials::resolve_token` (REST calls + the
@@ -91,6 +128,10 @@ pub struct GitService {
     /// for `pat`. Never serialized to clients.
     #[serde(skip_serializing)]
     pub app_credentials: Option<serde_json::Value>,
+    /// How issue events trigger the agent: by assignee, by label, or both.
+    pub trigger_mode: TriggerMode,
+    /// Label name watched when `trigger_mode` includes labels. Empty = unset.
+    pub trigger_label: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -109,6 +150,8 @@ impl GitService {
             autofire: m.autofire,
             auth_kind: m.auth_kind.parse()?,
             app_credentials: m.app_credentials,
+            trigger_mode: m.trigger_mode.parse()?,
+            trigger_label: m.trigger_label,
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
         })
@@ -190,6 +233,10 @@ pub struct NewGitService {
     /// Provider-specific app secret bundle; required when `auth_kind = 'app'`.
     #[serde(default)]
     pub app_credentials: Option<serde_json::Value>,
+    #[serde(default)]
+    pub trigger_mode: TriggerMode,
+    #[serde(default)]
+    pub trigger_label: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -202,6 +249,8 @@ pub struct UpdateGitService {
     pub autofire: Option<bool>,
     pub auth_kind: Option<AuthKind>,
     pub app_credentials: Option<serde_json::Value>,
+    pub trigger_mode: Option<TriggerMode>,
+    pub trigger_label: Option<String>,
 }
 
 #[derive(Clone)]
@@ -247,15 +296,6 @@ impl GitServiceStore {
             &new.base_url,
             new.app_credentials.as_ref(),
         )?;
-        if matches!(new.kind, ProviderKind::Github) {
-            let exists = git_services::Entity::find()
-                .filter(git_services::Column::Kind.eq(new.kind.as_str()))
-                .one(&self.db)
-                .await?;
-            if exists.is_some() {
-                bail!("a github service is already configured");
-            }
-        }
 
         let now: DateTime<Utc> = Utc::now();
         let id = Uuid::new_v4();
@@ -271,6 +311,8 @@ impl GitServiceStore {
             autofire: Set(new.autofire),
             auth_kind: Set(new.auth_kind.as_str().to_string()),
             app_credentials: Set(new.app_credentials),
+            trigger_mode: Set(new.trigger_mode.as_str().to_string()),
+            trigger_label: Set(new.trigger_label),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
         };
@@ -336,6 +378,12 @@ impl GitServiceStore {
         }
         if let Some(v) = upd.app_credentials {
             active.app_credentials = Set(Some(v));
+        }
+        if let Some(v) = upd.trigger_mode {
+            active.trigger_mode = Set(v.as_str().to_string());
+        }
+        if let Some(v) = upd.trigger_label {
+            active.trigger_label = Set(v);
         }
         active.updated_at = Set(Utc::now().into());
         active.update(&self.db).await?;
@@ -420,6 +468,60 @@ mod tests {
         assert_eq!(new.auth_kind, AuthKind::Pat);
     }
 
+    #[test]
+    fn trigger_mode_default_is_assignee() {
+        assert_eq!(TriggerMode::default(), TriggerMode::Assignee);
+    }
+
+    #[test]
+    fn trigger_mode_roundtrips_through_str() {
+        for m in [TriggerMode::Assignee, TriggerMode::Label, TriggerMode::Both] {
+            assert_eq!(m.as_str().parse::<TriggerMode>().unwrap(), m);
+        }
+    }
+
+    #[test]
+    fn new_git_service_defaults_trigger_mode_and_label() {
+        // Omitting trigger_mode/trigger_label falls back to assignee + empty.
+        let json = r#"{
+            "kind": "github",
+            "slug": "acme",
+            "display_name": "Acme",
+            "base_url": "https://github.com",
+            "token": "t",
+            "webhook_secret": "s",
+            "bot_username": "bot"
+        }"#;
+        let new: NewGitService = serde_json::from_str(json).unwrap();
+        assert_eq!(new.trigger_mode, TriggerMode::Assignee);
+        assert!(new.trigger_label.is_empty());
+    }
+
+    #[test]
+    fn new_git_service_parses_explicit_trigger() {
+        let json = r#"{
+            "kind": "github",
+            "slug": "acme",
+            "display_name": "Acme",
+            "base_url": "https://github.com",
+            "token": "t",
+            "webhook_secret": "s",
+            "bot_username": "bot",
+            "trigger_mode": "both",
+            "trigger_label": "agent"
+        }"#;
+        let new: NewGitService = serde_json::from_str(json).unwrap();
+        assert_eq!(new.trigger_mode, TriggerMode::Both);
+        assert_eq!(new.trigger_label, "agent");
+    }
+
+    #[test]
+    fn update_git_service_trigger_fields_default_to_none() {
+        let upd: UpdateGitService = serde_json::from_str("{}").unwrap();
+        assert!(upd.trigger_mode.is_none());
+        assert!(upd.trigger_label.is_none());
+    }
+
     fn svc(
         kind: ProviderKind,
         auth_kind: AuthKind,
@@ -438,6 +540,8 @@ mod tests {
             autofire: false,
             auth_kind,
             app_credentials,
+            trigger_mode: TriggerMode::Assignee,
+            trigger_label: String::new(),
             created_at: now,
             updated_at: now,
         }

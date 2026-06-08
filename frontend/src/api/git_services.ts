@@ -1,5 +1,6 @@
 import { api } from "./client";
 import type {
+  GitHubAppSyncResult,
   GitServiceView,
   NewGitService,
   UpdateGitService,
@@ -23,5 +24,8 @@ export const gitServicesApi = {
   },
   githubAppInstallUrl(id: string): Promise<{ install_url: string }> {
     return api(`/api/git_services/${id}/github_app/install`);
+  },
+  githubAppSync(id: string): Promise<GitHubAppSyncResult> {
+    return api(`/api/git_services/${id}/github_app/sync`, { method: "POST" });
   },
 };

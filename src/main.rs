@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env()?;
+    config.log_summary();
 
     let db = Database::connect(&config.database_url).await?;
     migration::Migrator::up(&db, None).await?;
@@ -112,6 +113,10 @@ async fn main() -> anyhow::Result<()> {
             get(api::projects::list_branches),
         )
         .route(
+            "/api/projects/{id}/register_webhook",
+            post(api::projects::register_webhook),
+        )
+        .route(
             "/api/git_services",
             get(api::git_services::list).post(api::git_services::create),
         )
@@ -124,6 +129,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/git_services/{id}/github_app/install",
             get(api::git_services::github_app_install),
+        )
+        .route(
+            "/api/git_services/{id}/github_app/sync",
+            post(api::git_services::github_app_sync),
         )
         .route(
             "/api/auth_requests",

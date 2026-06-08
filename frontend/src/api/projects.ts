@@ -4,6 +4,7 @@ import type {
   ProjectConfig,
   ProjectDetailResponse,
   ProjectListItem,
+  RegisterWebhookResponse,
 } from "../types/api";
 
 export const projectsApi = {
@@ -30,5 +31,8 @@ export const projectsApi = {
       method: "PUT",
       body,
     });
+  },
+  registerWebhook(id: string): Promise<RegisterWebhookResponse> {
+    return api(`/api/projects/${id}/register_webhook`, { method: "POST" });
   },
 };
