@@ -17,9 +17,10 @@ pub struct Model {
     pub webhook_secret: String,
     pub bot_username: String,
     pub autofire: bool,
-    /// `pat` (today) or `app` (GitHub App #9 / GitLab OAuth app #10) — the type
-    /// half of the credential. `app_credentials` holds the value half: the
-    /// provider-specific secret bundle, populated only when `auth_kind = 'app'`.
+    /// `pat` (GitHub/GitLab PATs and GitLab Group/Project Access Tokens) or
+    /// `app` (GitHub App #9; GitLab has no `app` flow) — the type half of the
+    /// credential. `app_credentials` holds the value half: the provider-specific
+    /// secret bundle, populated only when `auth_kind = 'app'`.
     pub auth_kind: String,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub app_credentials: Option<Json>,

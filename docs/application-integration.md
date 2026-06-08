@@ -1,19 +1,26 @@
-# Application integration — GitHub App (#9) & GitLab OAuth app (#10)
+# Application integration — GitHub App (#9) & GitLab bot identity (#10)
 
-API exploration and the implementation plan for moving a `git_service` off a
-static Personal Access Token (PAT) and onto a first-class **application** install.
-This is the reference for issues [#9](https://github.com/xmiksay/agent/issues/9)
-(GitHub App) and [#10](https://github.com/xmiksay/agent/issues/10) (GitLab OAuth
-application). Issue [#15](https://github.com/xmiksay/agent/issues/15) lays the
-groundwork described under **What is already prepared**; neither flow is wired
-yet.
+API exploration and the implementation plan for moving a `git_service` off the
+operator's static Personal Access Token (PAT) and onto an **independent agent
+identity**. This is the reference for issues
+[#9](https://github.com/xmiksay/agent/issues/9) (GitHub App) and
+[#10](https://github.com/xmiksay/agent/issues/10) (GitLab bot + Group/Project
+Access Token). Issue [#15](https://github.com/xmiksay/agent/issues/15) laid the
+`auth_kind`/`app_credentials` groundwork.
 
-## Why move off PATs
+The two providers diverge: GitHub gets a first-class **App** install (#9, not
+wired yet). GitLab gets a **bot/service account** authenticating with a
+**Group/Project Access Token** (#10) — which is just a `pat`, so it needs no new
+credential code. The earlier "GitLab OAuth application" framing was dropped (see
+[Why a bot, not OAuth](#why-a-bot-not-oauth-10)).
 
-A PAT is tied to a human account, carries that human's full scope, and never
-expires on its own. An application install scopes access to exactly the repos it
-is granted, issues short-lived tokens, and survives the owner leaving — the
-right shape for a bot that comments on issues/MRs and pushes branches.
+## Why move off the operator's PAT
+
+A personal PAT is tied to a human account, carries that human's full scope, and
+never expires on its own. It also makes the agent act *as the operator* — the
+opposite of an unbound agent. An independent identity (a GitHub App install, or a
+GitLab bot/service account) scopes access to exactly the repos it is granted and
+acts as itself when it comments and pushes.
 
 ## What is already prepared (#15)
 
@@ -24,16 +31,16 @@ right shape for a bot that comments on issues/MRs and pushes branches.
   possible fields, so a new provider's app shape needs no migration. Existing
   rows keep working unchanged (`pat`).
 - **Model** (`git_service::store`): `AuthKind { Pat, App }`, the typed
-  `GitHubAppConfig` / `GitLabOAuthConfig` shapes for the JSON, and
+  `GitHubAppConfig` shape for the GitHub JSON, and
   `GitService::credentials() -> ServiceCredentials` which parses+validates
   `app_credentials` against the service's provider.
-- **`ServiceCredentials`** enum: `Pat(String)`,
-  `GitHubApp(GitHubAppConfig)`, `GitLabOAuth(GitLabOAuthConfig)`.
+- **`ServiceCredentials`** enum: `Pat(String)`, `GitHubApp(GitHubAppConfig)`.
 - **The seam** (`provider::credentials::resolve_token`): the *single* place that
   turns a credential into a usable access token. Every consumer — both REST
   clients (`post_note`) and the runner (`GH_TOKEN`/`GITLAB_TOKEN`) — already
-  calls it. Today it returns the PAT and `bail!`s for the app variants. **The #9
-  / #10 work is almost entirely inside this one function** (plus a token cache).
+  calls it. Today it returns the token for `Pat` and `bail!`s for `GitHubApp`.
+  **The #9 work is almost entirely inside this one function** (plus a token
+  cache). GitLab needs no work here — its bot token flows straight through `Pat`.
 - **API/UI**: `auth_kind` is surfaced read-only; the whole `app_credentials`
   bundle is write-only like `token`/`webhook_secret`.
 
@@ -42,7 +49,9 @@ right shape for a bot that comments on issues/MRs and pushes branches.
 | Provider | JSON keys |
 |---|---|
 | GitHub App (#9) | `app_id` (App ID, the JWT `iss`), `private_key` (PEM), `installation_id` |
-| GitLab OAuth app (#10) | `client_id` (OAuth application ID), `client_secret`, `refresh_token` |
+
+GitLab has no `app_credentials` shape — `auth_kind = 'app'` is rejected for
+GitLab services.
 
 ## GitHub App (#9)
 
@@ -66,8 +75,8 @@ with its own numeric **installation ID**.
    - REST: `Authorization: Bearer ghs_…` (already how `GitHubClient::post_note`
      sends it).
    - git over HTTPS: clone/push as `https://x-access-token:<token>@github.com/…`.
-     (Note: the agent clones over **SSH** today — App auth implies an HTTPS clone
-     URL, so #9 must also thread an HTTPS `git_url` for app services.)
+     (Token-HTTPS transport landed in #22 — the App path threads the installation
+     token through the same `HttpsAuth` credential helper.)
 
 ### Discovering the installation ID
 Every webhook from an installed App includes `installation.id` in the payload —
@@ -85,68 +94,81 @@ it at `https://ghes.example.com/api/v3`.
 - An in-memory token cache keyed by `service_id`, refreshing ~5 min before
   `expires_at` (the clients call `resolve_token` per request, so caching there is
   the only change they need).
-- HTTPS clone URL handling for app-authed services.
 - Crates: a JWT lib (e.g. `jsonwebtoken`) — not yet a dependency.
 
-## GitLab application (#10)
+## GitLab bot identity (#10)
 
-### Concepts
-GitLab has no exact GitHub-App equivalent. The closest first-class "application"
-is an **OAuth 2.0 application** (instance/group/user owned) with an
-**Application ID** (client id) and **Secret**. There is no per-repo installation
-token; access is on behalf of the authorizing identity (ideally a dedicated bot
-user or **service account**).
+GitLab gets its own **independent identity** as a bot/service account
+authenticating with a **Group (or Project) Access Token** — `auth_kind = 'pat'`,
+so the existing `pat` path already carries it end to end (REST `post_note`, the
+`GITLAB_TOKEN` the agent inherits, and the token-HTTPS git transport from #22).
+This issue is about *provisioning* that identity, not building a new auth flow.
 
-### Auth flow (OAuth2, Authorization Code)
-1. Register the application (redirect URI, scopes — `api` covers notes + repo;
-   narrower `read_api`+specific scopes if posting only).
-2. One-time authorize → exchange the code at `POST {base_url}/oauth/token`
-   (`grant_type=authorization_code`) for `{ access_token, refresh_token,
-   expires_in }`. The **refresh token** is the durable credential we store as
-   `app_credentials.refresh_token`.
-3. **Refresh** when the access token expires (default 2h):
-   `POST {base_url}/oauth/token` with `grant_type=refresh_token`,
-   `client_id`, `client_secret`, `refresh_token`. With refresh-token rotation
-   (default on modern GitLab) the response carries a **new** refresh token —
-   `resolve_token` must persist the rotated token back into `app_credentials`, so
-   #10 needs a store write on refresh, not just an in-memory cache.
-4. Use the access token:
-   - REST: `Authorization: Bearer <access_token>` (today `GitLabClient` sends
-     `PRIVATE-TOKEN`; both are accepted by the GitLab API, but Bearer is correct
-     for OAuth tokens).
-   - git over HTTPS: `https://oauth2:<access_token>@gitlab.com/…`.
+### Why a bot, not OAuth (#10)
+GitLab's nearest "application" is an OAuth 2.0 app, but authorization-code OAuth
+binds the token to the **human who authorizes it** — the agent would still act as
+that person. A **Group/Project Access Token** instead mints a dedicated
+non-human user (`group_NNN_bot_*` / `project_NNN_bot_*`) owned by the group, so
+the agent is its own actor. It is also far simpler: a bearer token with an
+expiry, no refresh dance, no rotated-refresh-token persistence, no one-time
+authorize step. We therefore dropped the speculative OAuth path entirely
+(`ServiceCredentials::GitLabOAuth` + `GitLabOAuthConfig` removed); `pat` is the
+only GitLab flow.
 
-### Alternatives considered
-- **Group/Project access tokens** — simpler (a bearer token with an expiry, no
-  refresh dance), but they are not an "application" and expire ≤1y, needing
-  manual rotation. Good fallback; doesn't need #10's OAuth machinery.
-- **Service account + PAT** — works today via the existing `pat` flow; the
-  cleanest interim option for self-hosted GitLab.
+### Provisioning the bot token
+A Group Access Token is preferred (one identity covering every project in the
+group); a Project Access Token is the per-repo equivalent.
 
-### What #10 must implement
-- The refresh-token exchange in `resolve_token` for the `GitLabOAuth` variant,
-  **including writing the rotated refresh token back to the store** (so this
-  variant needs a `GitServiceStore` handle, unlike the GitHub path).
-- Switch `GitLabClient` from `PRIVATE-TOKEN` to `Authorization: Bearer` when the
-  service is app-authed.
-- HTTPS clone URL handling.
-- A one-time authorize step (out of band, or a small operator UI flow) to seed
-  `app_credentials.refresh_token`.
+- **Scopes:** `api` (notes + MRs + webhook registration) **and**
+  `write_repository` (git push over token-HTTPS).
+- **Role:** Maintainer (or Owner) — needed to register project webhooks and push
+  to protected branches.
+- **Expiry:** GitLab caps access-token lifetime at **365 days**.
 
-## Token-cache shape (both)
+Mint it with the GitLab CLI (or Settings → Access Tokens in the UI):
 
-`resolve_token` is async and called per request precisely so it can hide a cache:
+```bash
+glab token create --group my-group \
+  --name agent-bot \
+  --scope api --scope write_repository \
+  --role maintainer \
+  --expires-at 2027-06-08
+```
+
+Store the printed token as the service's `token` with `auth_kind = 'pat'` (via
+`POST /api/git_services` or the SPA). The `bot_username` is the generated
+`group_NNN_bot_agent-bot` handle — used only for display; the loop guard is the
+`BOT_NOTE_MARKER` on every posted note, not actor comparison.
+
+### Rotation
+The token expires within a year, so it must be rotated. Two options:
+
+- **Manual:** mint a fresh token before expiry and PATCH the service `token`.
+- **Automated:** the access-tokens API can rotate in place —
+  `POST {base_url}/api/v4/groups/{id}/access_tokens/{token_id}/rotate` (or the
+  `/projects/...` equivalent) revokes the old token and returns a new one with a
+  fresh expiry; persist the new value back to the service `token`. Not wired
+  today — documented for when unattended rotation is needed.
+
+### Actor confirmation (end to end)
+- **Notes / MRs:** posted via `GitLabClient` with the bot token → authored by the
+  bot user. The `BOT_NOTE_MARKER` self-comment guard stays, so the bot never
+  reacts to its own posts.
+- **Push:** authenticates as the bot through token-HTTPS (#22, `HttpsAuth`) —
+  `https://oauth2:<token>@gitlab.com/…` via the credential helper, not the
+  operator's SSH key.
+- **Commit authorship** is intentionally out of scope (per `.claude/CLAUDE.md`).
+
+## Token-cache shape (GitHub only)
+
+`resolve_token` is async and called per request precisely so the GitHub App path
+can hide a cache:
 
 ```
 service_id → { token, expires_at }
 ```
 
-GitHub: refresh purely in memory (the installation token is re-mintable from the
-PEM at will). GitLab: refresh must also persist the rotated refresh token back
-into `app_credentials`. A `RwLock<HashMap<Uuid, CachedToken>>` alongside the
-registry is enough at single-operator scale.
-
-## Not in scope for #15
-
-No JWT/OAuth code, no new crates, no clone-over-HTTPS, no token cache, no UI
-form for app credentials. #15 is the schema + the seam only.
+GitHub refreshes purely in memory (the installation token is re-mintable from the
+PEM at will). A `RwLock<HashMap<Uuid, CachedToken>>` alongside the registry is
+enough at single-operator scale. GitLab needs no cache — the bot token is a
+long-lived static value resolved straight through `Pat`.

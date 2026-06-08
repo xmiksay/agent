@@ -2,9 +2,9 @@
 //!
 //! Every consumer that needs a usable access token — the REST clients
 //! (`post_note`) and the runner (the `GH_TOKEN`/`GITLAB_TOKEN` the agent
-//! inherits) — goes through [`resolve_token`]. Today only the `Pat` flow is
-//! wired; this is the single place where GitHub App (#9) and GitLab OAuth app
-//! (#10) token minting/refresh will be implemented.
+//! inherits) — goes through [`resolve_token`]. The `Pat` flow is wired (it also
+//! carries GitLab's Group/Project Access Token bot identity, #10); GitHub App
+//! (#9) token minting will be implemented here.
 
 use anyhow::{Result, bail};
 
@@ -13,17 +13,15 @@ use crate::git_service::ServiceCredentials;
 /// Resolve a credential into the bearer/access token used for both REST API
 /// calls and `gh`/`glab` inside the worktree.
 ///
-/// App flows are intentionally not implemented yet — they will mint a
-/// short-lived token here (GitHub: JWT → installation access token; GitLab:
-/// refresh-token → access token) and cache it until expiry.
+/// The GitHub App flow is intentionally not implemented yet — it will mint a
+/// short-lived installation token here (JWT → installation access token) and
+/// cache it until expiry. GitLab needs no such flow: its bot identity is a
+/// Group/Project Access Token resolved straight through the `Pat` arm.
 pub async fn resolve_token(creds: &ServiceCredentials) -> Result<String> {
     match creds {
         ServiceCredentials::Pat(token) => Ok(token.clone()),
         ServiceCredentials::GitHubApp(_) => {
             bail!("GitHub App token minting is not implemented yet — see issue #9")
-        }
-        ServiceCredentials::GitLabOAuth(_) => {
-            bail!("GitLab OAuth token refresh is not implemented yet — see issue #10")
         }
     }
 }
@@ -31,7 +29,7 @@ pub async fn resolve_token(creds: &ServiceCredentials) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_service::{GitHubAppConfig, GitLabOAuthConfig};
+    use crate::git_service::GitHubAppConfig;
 
     #[tokio::test]
     async fn pat_resolves_to_its_token() {
@@ -50,16 +48,5 @@ mod tests {
         });
         let err = resolve_token(&creds).await.unwrap_err().to_string();
         assert!(err.contains("#9"), "got: {err}");
-    }
-
-    #[tokio::test]
-    async fn gitlab_oauth_is_not_implemented_yet() {
-        let creds = ServiceCredentials::GitLabOAuth(GitLabOAuthConfig {
-            client_id: "1".into(),
-            client_secret: "s".into(),
-            refresh_token: "r".into(),
-        });
-        let err = resolve_token(&creds).await.unwrap_err().to_string();
-        assert!(err.contains("#10"), "got: {err}");
     }
 }

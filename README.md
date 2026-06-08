@@ -54,9 +54,19 @@ Go to **Services → Add service** and fill in:
 | Slug             | `personal`                            |
 | Display name     | `Personal GitLab`                     |
 | Base URL         | `https://gitlab.com`                  |
-| Bot username     | `claude-bot`                          |
-| Personal token   | GitLab: `glpat-…` with `api` + `write_repository` (Maintainer/Owner, so hooks can be registered); GitHub: a PAT with `repo` + `admin:repo_hook`. The token does git transport (token-HTTPS clone/push), note posting, **and** webhook registration |
+| Bot username     | `group_NNN_bot_agent` (the generated bot handle) |
+| Access token     | GitLab: a **Group/Project Access Token** (`glpat-…`) with `api` + `write_repository`, Maintainer/Owner role — this gives the agent its **own bot identity** (a `group_NNN_bot_*` service account), so it acts as itself, not you. GitHub: a PAT with `repo` + `admin:repo_hook`. The token does git transport (token-HTTPS clone/push), note posting, **and** webhook registration |
 | Webhook secret   | a random string                       |
+
+> **GitLab bot token.** Mint the Group Access Token under the group's
+> **Settings → Access Tokens**, or with the CLI:
+> ```bash
+> glab token create --group my-group --name agent-bot \
+>   --scope api --scope write_repository --role maintainer --expires-at 2027-06-08
+> ```
+> Access tokens expire within **365 days** — rotate before expiry (manually, or
+> via the access-tokens `…/rotate` API). See
+> [`docs/application-integration.md`](docs/application-integration.md#gitlab-bot-identity-10).
 
 After saving, the service detail page shows the **Webhook URL** to paste into the forge.
 
