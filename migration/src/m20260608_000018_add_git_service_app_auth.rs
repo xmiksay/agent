@@ -1,11 +1,11 @@
 use sea_orm_migration::prelude::*;
 
-/// Groundwork for GitHub App (#9) and GitLab OAuth application (#10) auth.
-/// Models the credential as a **type + value** pair: `auth_kind` discriminates
-/// the flow (defaulting every existing row to today's `pat`), and the per-flow
-/// secrets live in one `app_credentials` JSON blob — so a new provider's app
-/// shape needs no schema change. No code mints app tokens yet — see
-/// `provider::credentials::resolve_token`.
+/// Groundwork for GitHub App (#9) auth (GitLab's bot identity, #10, stays on
+/// `pat`). Models the credential as a **type + value** pair: `auth_kind`
+/// discriminates the flow (defaulting every existing row to today's `pat`), and
+/// the per-flow secrets live in one `app_credentials` JSON blob — so a new
+/// provider's app shape needs no schema change. No code mints app tokens yet —
+/// see `provider::credentials::resolve_token`.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

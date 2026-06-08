@@ -82,7 +82,8 @@ export interface ProjectConfig {
   updated_at: string;
 }
 
-// 'pat' today; 'app' is groundwork for GitHub App (#9) / GitLab OAuth app (#10).
+// 'pat' (GitHub/GitLab PATs and GitLab Group/Project Access Tokens); 'app' is
+// groundwork for GitHub App (#9). GitLab has no 'app' flow.
 export type AuthKind = "pat" | "app";
 
 export interface GitServiceView {
@@ -101,8 +102,9 @@ export interface GitServiceView {
 }
 
 // Provider-specific app secret bundle stored under `app_credentials` when
-// auth_kind === "app". GitHub: { app_id, private_key, installation_id };
-// GitLab: { client_id, client_secret, refresh_token }.
+// auth_kind === "app". GitHub: { app_id, private_key, installation_id }.
+// GitLab has no "app" flow — its bot identity is a Group/Project Access Token
+// carried via auth_kind === "pat".
 export type AppCredentials = Record<string, string>;
 
 export interface NewGitService {

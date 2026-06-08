@@ -2,6 +2,6 @@ pub mod store;
 
 #[allow(unused_imports)]
 pub use store::{
-    AuthKind, GitHubAppConfig, GitLabOAuthConfig, GitService, GitServiceStore, NewGitService,
-    ServiceCredentials, UpdateGitService,
+    AuthKind, GitHubAppConfig, GitService, GitServiceStore, NewGitService, ServiceCredentials,
+    UpdateGitService,
 };

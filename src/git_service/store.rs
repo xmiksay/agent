@@ -11,10 +11,12 @@ use crate::project::ProviderKind;
 
 /// How a `git_service` authenticates against its provider.
 ///
-/// `Pat` is the only flow wired today. `App` is the groundwork for GitHub App
-/// (#9) and GitLab OAuth application (#10) integration — its `app_credentials`
-/// bundle is stored and validated, but token minting is not implemented yet (see
-/// `crate::provider::credentials::resolve_token`).
+/// `Pat` covers both GitHub/GitLab personal access tokens and GitLab
+/// **Group/Project Access Tokens** (the agent's independent bot identity, #10) —
+/// the token is used directly as the bearer. `App` is the groundwork for GitHub
+/// App (#9) integration — its `app_credentials` bundle is stored and validated,
+/// but token minting is not implemented yet (see
+/// `crate::provider::credentials::resolve_token`). GitLab has no `app` flow.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthKind {
@@ -49,12 +51,11 @@ impl FromStr for AuthKind {
 /// `GH_TOKEN`/`GITLAB_TOKEN` env the agent inherits).
 #[derive(Clone, Debug)]
 pub enum ServiceCredentials {
-    /// Personal/group access token used directly as the bearer.
+    /// Personal/group access token used directly as the bearer. A GitLab
+    /// Group/Project Access Token (the agent's bot identity, #10) lands here.
     Pat(String),
     /// GitHub App (#9). JWT → installation-token exchange not implemented yet.
     GitHubApp(GitHubAppConfig),
-    /// GitLab OAuth application (#10). Refresh-token exchange not implemented yet.
-    GitLabOAuth(GitLabOAuthConfig),
 }
 
 /// `app_credentials` value when `auth_kind = 'app'` and `kind = 'github'`.
@@ -63,14 +64,6 @@ pub struct GitHubAppConfig {
     pub app_id: String,
     pub private_key: String,
     pub installation_id: String,
-}
-
-/// `app_credentials` value when `auth_kind = 'app'` and `kind = 'gitlab'`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GitLabOAuthConfig {
-    pub client_id: String,
-    pub client_secret: String,
-    pub refresh_token: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -85,8 +78,8 @@ pub struct GitService {
     pub bot_username: String,
     pub autofire: bool,
     pub auth_kind: AuthKind,
-    /// The provider-specific app secret bundle (see `GitHubAppConfig` /
-    /// `GitLabOAuthConfig`). `None` for `pat`. Never serialized to clients.
+    /// The provider-specific app secret bundle (see `GitHubAppConfig`). `None`
+    /// for `pat`. Never serialized to clients.
     #[serde(skip_serializing)]
     pub app_credentials: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
@@ -149,12 +142,13 @@ fn build_credentials(
                     Ok(ServiceCredentials::GitHubApp(cfg))
                 }
                 ProviderKind::Gitlab => {
-                    let cfg: GitLabOAuthConfig = serde_json::from_value(raw.clone())
-                        .map_err(|e| anyhow!("invalid gitlab app_credentials: {e}"))?;
-                    require_nonempty(&cfg.client_id, "client_id")?;
-                    require_nonempty(&cfg.client_secret, "client_secret")?;
-                    require_nonempty(&cfg.refresh_token, "refresh_token")?;
-                    Ok(ServiceCredentials::GitLabOAuth(cfg))
+                    // GitLab authenticates only via `pat` — a Group/Project Access
+                    // Token gives the agent its own bot identity (#10). There is no
+                    // GitLab app flow; the OAuth variant was deliberately dropped.
+                    let _ = raw;
+                    bail!(
+                        "gitlab does not support auth_kind 'app'; use a Group/Project Access Token with auth_kind 'pat'"
+                    )
                 }
             }
         }
@@ -476,17 +470,28 @@ mod tests {
     }
 
     #[test]
-    fn credentials_app_gitlab_rejects_empty_field() {
+    fn credentials_app_gitlab_is_rejected() {
+        // GitLab has no `app` flow — its bot identity is a Group/Project Access
+        // Token carried through the `pat` path.
         let s = svc(
             ProviderKind::Gitlab,
             AuthKind::App,
-            Some(serde_json::json!({
-                "client_id": "cid",
-                "client_secret": "  ",
-                "refresh_token": "r",
-            })),
+            Some(serde_json::json!({ "anything": "here" })),
         );
         let err = s.credentials().unwrap_err().to_string();
-        assert!(err.contains("client_secret"), "got: {err}");
+        assert!(
+            err.contains("does not support auth_kind 'app'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn credentials_gitlab_pat_returns_token() {
+        // A GitLab Group Access Token is just a `pat` bearer.
+        let s = svc(ProviderKind::Gitlab, AuthKind::Pat, None);
+        match s.credentials().unwrap() {
+            ServiceCredentials::Pat(t) => assert_eq!(t, "pat-token"),
+            other => panic!("expected Pat, got {other:?}"),
+        }
     }
 }
