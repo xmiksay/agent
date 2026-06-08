@@ -10,11 +10,14 @@ import type {
 } from "../types/api";
 
 export const tasksApi = {
-  list(status?: string): Promise<Task[]> {
+  list(filters?: { task_state?: string; agent_state?: string }): Promise<Task[]> {
     // `no-store`: the task list is a live view, so never serve a stale cached
     // response — every poll must hit the server.
+    const params: Record<string, string> = {};
+    if (filters?.task_state) params.task_state = filters.task_state;
+    if (filters?.agent_state) params.agent_state = filters.agent_state;
     return api("/api/tasks", {
-      params: status ? { status } : undefined,
+      params: Object.keys(params).length ? params : undefined,
       cache: "no-store",
     });
   },

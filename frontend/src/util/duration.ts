@@ -13,24 +13,20 @@ export function formatSecs(secs: number): string {
 }
 
 /**
- * Spent time for a task as a count of seconds.
+ * Spent time for a task as a count of seconds. A task accrues until it's
+ * finished:
  *
- * - Finished tasks: finished_at − started_at.
- * - Running tasks: now − started_at (call with the same `now` for whole-table
- *   stability; pass a reactive ref for a ticking value).
+ * - Finished tasks (finished_at set): finished_at − started_at.
+ * - Still accruing (started, not finished): now − started_at (call with the same
+ *   `now` for whole-table stability; pass a reactive ref for a ticking value).
  * - Not yet started: 0.
  */
 export function taskSpentSecs(
-  t: { started_at: string | null; finished_at: string | null; status: string },
+  t: { started_at: string | null; finished_at: string | null },
   now: Date,
 ): number {
   if (!t.started_at) return 0;
   const start = new Date(t.started_at).getTime();
-  const end = t.finished_at
-    ? new Date(t.finished_at).getTime()
-    : t.status === "running"
-      ? now.getTime()
-      : 0;
-  if (!end) return 0;
+  const end = t.finished_at ? new Date(t.finished_at).getTime() : now.getTime();
   return Math.max(0, Math.floor((end - start) / 1000));
 }

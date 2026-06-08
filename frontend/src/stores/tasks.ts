@@ -10,10 +10,13 @@ export const useTasksStore = defineStore("tasks", () => {
 
   // `silent` skips the loading flag so the 10s live poll doesn't flash the
   // table back to a "Loading…" placeholder on every tick.
-  async function refresh(status?: string, silent = false) {
+  async function refresh(
+    filters?: { task_state?: string; agent_state?: string },
+    silent = false,
+  ) {
     if (!silent) loading.value = true;
     try {
-      tasks.value = await tasksApi.list(status);
+      tasks.value = await tasksApi.list(filters);
     } finally {
       if (!silent) loading.value = false;
     }

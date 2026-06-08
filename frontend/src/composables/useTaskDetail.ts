@@ -65,22 +65,26 @@ export function useTaskDetail(idRef: Ref<string>) {
     [...stream.approvals.values()].filter((a) => a.task_id === idRef.value),
   );
 
-  // A task is "live" while pending/running OR its agent is warm (idle between
+  // A task is "live" while its agent is attached — running, or warm (idle between
   // turns). `wsConnected` = socket up AND this task live, so chat goes straight
   // to the agent rather than being queued.
-  const isLive = computed(
-    () =>
-      ["pending", "running"].includes(store.detail?.status ?? "") ||
-      store.detail?.live === true,
+  const isLive = computed(() =>
+    ["running", "warm"].includes(store.detail?.agent_state ?? ""),
   );
-  const isRunning = computed(() => store.detail?.status === "running");
-  const isPending = computed(() => store.detail?.status === "pending");
+  const isRunning = computed(() => store.detail?.agent_state === "running");
+  const isPending = computed(() => store.detail?.task_state === "pending");
+  // Retry is offered once the operator lifecycle is terminal.
   const canRetry = computed(() =>
-    ["failed", "completed", "killed"].includes(store.detail?.status ?? ""),
+    ["completed", "failed"].includes(store.detail?.task_state ?? ""),
   );
-  const canContinue = computed(() => !!store.detail?.session_id && canRetry.value);
-  const canKill = computed(() => isRunning.value);
-  const canChat = computed(() => isRunning.value || !!store.detail?.session_id);
+  // Resume reattaches a prior claude session — only when no agent is live.
+  const canContinue = computed(
+    () =>
+      !!store.detail?.session_id &&
+      ["cold", "failed"].includes(store.detail?.agent_state ?? ""),
+  );
+  const canKill = computed(() => isLive.value);
+  const canChat = computed(() => isLive.value || !!store.detail?.session_id);
   const wsConnected = computed(() => stream.connected && isLive.value);
 
   async function reloadPending() {
@@ -119,14 +123,15 @@ export function useTaskDetail(idRef: Ref<string>) {
       }
     },
   );
-  // A pushed status change for this task → reflect it; reload on terminal states
-  // to pick up the result row.
+  // A pushed status change for this task → reflect both axes; reload when the
+  // operator lifecycle goes terminal to pick up the result row.
   watch(
     () => stream.statusByTask.get(idRef.value),
     (s) => {
       if (!s || !store.detail) return;
-      store.detail.status = s;
-      if (["completed", "failed", "killed"].includes(s)) store.load(idRef.value);
+      store.detail.task_state = s.task_state;
+      store.detail.agent_state = s.agent_state;
+      if (["completed", "failed"].includes(s.task_state)) store.load(idRef.value);
     },
   );
 
@@ -214,8 +219,8 @@ export function useTaskDetail(idRef: Ref<string>) {
   }
 
   async function remove() {
-    const msg = isRunning.value
-      ? "Task is running. Force kill claude and delete?"
+    const msg = isLive.value
+      ? "An agent is attached. Force kill claude and delete?"
       : "Delete this task and its result?";
     if (!confirm(msg)) return;
     await withBusy("delete", async () => {
