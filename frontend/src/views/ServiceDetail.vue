@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { useServicesStore } from "../stores/services";
 import { servicesApi } from "../api/services";
 import ProviderBadge from "../components/ProviderBadge.vue";
-import type { AuthKind, UpdateService } from "../types/api";
+import type { AuthKind, GitLabTokenScope, UpdateService } from "../types/api";
 
 const props = defineProps<{ id: string }>();
 const store = useServicesStore();
@@ -24,9 +24,19 @@ const error = ref<string | null>(null);
 const copied = ref(false);
 const generatedSecret = ref<string | null>(null);
 
+// GitLab bot-token provisioning form.
+const provScope = ref<GitLabTokenScope>("group");
+const provNamespace = ref("");
+const provName = ref("");
+const provExpiry = ref("");
+const provisioning = ref(false);
+const rotating = ref(false);
+
 const detail = computed(() => store.detail);
 // GitHub-only: `app` is rejected for GitLab, so the selector is hidden there.
 const isGithub = computed(() => detail.value?.kind === "github");
+const isGitlab = computed(() => detail.value?.kind === "gitlab");
+const gitlabToken = computed(() => detail.value?.gitlab_token ?? null);
 // The currently *selected* auth kind drives which credential inputs show, so a
 // PAT service can be converted to App in place. The install section below keys
 // off the *saved* kind instead — you install only after the switch is saved.
@@ -130,6 +140,42 @@ async function syncApp() {
   }
 }
 
+async function provisionToken() {
+  if (!provNamespace.value.trim()) {
+    error.value = "enter the group or project path";
+    return;
+  }
+  provisioning.value = true;
+  error.value = null;
+  try {
+    await servicesApi.provisionGitlabToken(props.id, {
+      scope: provScope.value,
+      namespace: provNamespace.value.trim(),
+      name: provName.value.trim() || undefined,
+      expires_at: provExpiry.value || undefined,
+    });
+    await reload();
+  } catch (e: unknown) {
+    error.value = extractMessage(e);
+  } finally {
+    provisioning.value = false;
+  }
+}
+
+async function rotateToken() {
+  if (!confirm("Rotate the bot token? The current token is revoked immediately.")) return;
+  rotating.value = true;
+  error.value = null;
+  try {
+    await servicesApi.rotateGitlabToken(props.id);
+    await reload();
+  } catch (e: unknown) {
+    error.value = extractMessage(e);
+  } finally {
+    rotating.value = false;
+  }
+}
+
 async function remove() {
   if (!detail.value) return;
   if (!confirm(`Delete service "${detail.value.slug}"?`)) return;
@@ -211,6 +257,67 @@ function extractMessage(e: unknown): string {
       >
         {{ syncResult.text }}
       </p>
+    </section>
+
+    <section v-if="isGitlab" class="card space-y-3 p-5">
+      <div class="flex items-center gap-2">
+        <h2 class="text-sm font-semibold">Bot access token</h2>
+        <span
+          class="rounded px-2 py-0.5 text-xs font-medium"
+          :class="gitlabToken ? 'bg-signal-ok/15 text-signal-ok' : 'bg-signal-auth/15 text-signal-auth'"
+        >
+          {{ gitlabToken ? "Provisioned" : "Not provisioned" }}
+        </span>
+      </div>
+      <p class="text-xs text-muted">
+        Mint a dedicated Group/Project Access Token (scopes <code>api</code> +
+        <code>write_repository</code>, Maintainer role) so the agent acts as its own bot.
+        The service's current token is used once as the owner-scoped bootstrap, then replaced
+        by the minted token.
+      </p>
+
+      <p v-if="gitlabToken" class="text-xs text-muted">
+        Current: <span class="font-mono">{{ gitlabToken.scope }}</span> token #{{ gitlabToken.token_id }}
+        on <span class="font-mono">{{ gitlabToken.namespace }}</span
+        ><template v-if="gitlabToken.expires_at">, expires {{ gitlabToken.expires_at }}</template>.
+      </p>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="label">Scope</label>
+          <select v-model="provScope" class="select">
+            <option value="group">Group</option>
+            <option value="project">Project</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Group / project path or id</label>
+          <input v-model="provNamespace" class="input font-mono" placeholder="my-group/sub" />
+        </div>
+        <div>
+          <label class="label">Token name <span class="text-faint">(optional)</span></label>
+          <input v-model="provName" class="input font-mono" :placeholder="`agent-${detail.slug}`" />
+        </div>
+        <div>
+          <label class="label">Expires <span class="text-faint">(optional, ≤365d)</span></label>
+          <input v-model="provExpiry" type="date" class="input font-mono" />
+        </div>
+      </div>
+
+      <div class="flex gap-2">
+        <button type="button" class="btn btn-primary" :disabled="provisioning" @click="provisionToken">
+          {{ provisioning ? "Minting…" : gitlabToken ? "Re-provision" : "Provision token" }}
+        </button>
+        <button
+          v-if="gitlabToken"
+          type="button"
+          class="btn btn-ghost"
+          :disabled="rotating"
+          @click="rotateToken"
+        >
+          {{ rotating ? "Rotating…" : "Rotate" }}
+        </button>
+      </div>
     </section>
 
     <form class="card space-y-3 p-5" @submit.prevent="save">

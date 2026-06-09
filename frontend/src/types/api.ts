@@ -91,6 +91,17 @@ export type AuthKind = "pat" | "app";
 // assignee) gets triggered.
 export type TriggerMode = "assignee" | "label" | "both";
 
+export type GitLabTokenScope = "group" | "project";
+
+// Non-secret metadata about a GitLab bot token minted via the provisioning
+// flow. Present only on GitLab services whose token was provisioned (not pasted).
+export interface GitLabTokenMeta {
+  scope: GitLabTokenScope;
+  namespace: string;
+  token_id: number;
+  expires_at: string | null;
+}
+
 export interface ServiceView {
   id: string;
   kind: ProviderKind;
@@ -106,12 +117,21 @@ export interface ServiceView {
   auth_kind: AuthKind;
   // True once a GitHub App install has been recorded (installation_id present).
   app_installed: boolean;
+  // Set once a GitLab bot token has been minted via the provisioning flow.
+  gitlab_token: GitLabTokenMeta | null;
   trigger_mode: TriggerMode;
   // The label name watched when trigger_mode includes labels; "" otherwise.
   trigger_label: string;
   // Present only on a create/update response when the webhook secret was just
   // auto-generated (left blank). Revealed once; never returned by list/get.
   generated_webhook_secret?: string | null;
+}
+
+export interface ProvisionGitLabToken {
+  scope: GitLabTokenScope;
+  namespace: string;
+  name?: string;
+  expires_at?: string;
 }
 
 export interface GitHubAppSyncResult {

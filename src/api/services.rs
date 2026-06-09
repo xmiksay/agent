@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::project::ProviderKind;
 use crate::provider::github;
+use crate::provider::gitlab::token as gitlab_token;
 use crate::service::{
     AuthKind, NewService, Service, ServiceCredentials, TriggerMode, UpdateService,
 };
@@ -32,6 +33,10 @@ pub struct ServiceView {
     /// True once an App install has been recorded (non-empty `installation_id`).
     /// Lets the UI show install status without exposing the secret bundle.
     pub app_installed: bool,
+    /// Non-secret metadata about a GitLab bot token minted via the provisioning
+    /// flow (`None` for GitHub, or GitLab services whose token was pasted by
+    /// hand). The token value itself is never returned.
+    pub gitlab_token: Option<gitlab_token::TokenMeta>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Webhook URL operators paste into GitLab/GitHub. Built from request host.
@@ -52,7 +57,7 @@ fn generate_webhook_secret() -> String {
 }
 
 impl ServiceView {
-    fn from(svc: Service) -> Self {
+    pub(crate) fn from(svc: Service) -> Self {
         let webhook_path = format!("/webhook/{}/{}", svc.kind.as_str(), svc.slug);
         let app_installed = svc
             .app_credentials
@@ -60,6 +65,12 @@ impl ServiceView {
             .and_then(|c| c.get("installation_id"))
             .and_then(|v| v.as_str())
             .is_some_and(|s| !s.trim().is_empty());
+        // GitLab provisioning stores its non-secret token metadata in the same
+        // `app_credentials` bundle; surface it so the UI can show expiry/status.
+        let gitlab_token = (svc.kind == ProviderKind::Gitlab)
+            .then_some(svc.app_credentials.as_ref())
+            .flatten()
+            .and_then(|c| serde_json::from_value(c.clone()).ok());
         Self {
             id: svc.id,
             kind: svc.kind,
@@ -72,6 +83,7 @@ impl ServiceView {
             trigger_mode: svc.trigger_mode,
             trigger_label: svc.trigger_label,
             app_installed,
+            gitlab_token,
             created_at: svc.created_at,
             updated_at: svc.updated_at,
             webhook_path,

@@ -132,9 +132,12 @@ Bearer-auth gates `/api/*` (and the SPA, when `API_BEARER_TOKEN` is set). `/webh
 | `GET` | `/api/tasks/{id}/diff` | `git diff origin/<default_branch>` of the task's worktree (+ untracked listing) |
 | `GET` | `/api/tasks/{id}/events` | persisted agent events from `events` ordered by `seq`; seeds the SPA timeline before the WS streams live frames |
 | `GET`/`POST` | `/api/projects` / `GET /api/projects/{id}` / `PUT /api/projects/{id}/config` / `PUT /api/projects/{id}/env` / `GET /api/projects/{id}/branches` / `POST /api/projects/{id}/register_webhook` | `POST /api/projects` creates a project manually (provider/bot/slug derived from the chosen git service, `remote_url` derived from its base URL when blank) — projects no longer require a first webhook to exist; `/env` sets the `.env` minijinja template |
-| `GET`/`POST` | `/api/services` | tokens, webhook secrets, and `app_credentials` are write-only on GET; the view exposes `app_installed` (whether an `installation_id` is recorded) |
+| `GET`/`POST` | `/api/services` | tokens, webhook secrets, and `app_credentials` are write-only on GET; the view exposes `app_installed` (whether an `installation_id` is recorded) and, for GitLab, `gitlab_token` (non-secret bot-token metadata) |
 | `GET`/`PUT`/`DELETE` | `/api/services/{id}` | |
 | `GET` | `/api/services/{id}/github_app/install` | returns `{ install_url }` — the GitHub App install URL (looked up via `GET /app`, with the service id as `state`). The SPA navigates the browser to it. Bearer-gated |
+| `POST` | `/api/services/{id}/github_app/sync` | GitHub App only. Discovers + persists the installation id and registers the app-level webhook (`PATCH /app/hook/config`) using the App JWT. Idempotent. Bearer-gated |
+| `POST` | `/api/services/{id}/gitlab_token/provision` | GitLab only. Mints a Group/Project Access Token via the service's current (bootstrap) token, swaps the stored `token` for it, and records `gitlab_token` metadata for rotation. Body `{ scope, namespace, name?, expires_at? }`. Bearer-gated |
+| `POST` | `/api/services/{id}/gitlab_token/rotate` | GitLab only. Rotates the provisioned bot token in place (authenticated with the current token's `api` scope) and persists the new value + expiry. Bearer-gated |
 | `GET` | `/github_app/callback` | GitHub's post-install redirect target — **outside** the bearer (no token on the redirect); persists `installation_id` from the query into the service named by `state`, then 302s back to the SPA service page |
 | `GET` | `/api/auth_requests` | optional `?status=`, `?task_id=` |
 | `GET`/`POST` | `/api/auth_requests/{id}` / `/api/auth_requests/{id}/resolve` | unblocks the parked permission handler |
