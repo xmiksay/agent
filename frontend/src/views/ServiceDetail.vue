@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { useGitServicesStore } from "../stores/git_services";
-import { gitServicesApi } from "../api/git_services";
+import { useServicesStore } from "../stores/services";
+import { servicesApi } from "../api/services";
 import ProviderBadge from "../components/ProviderBadge.vue";
-import type { AuthKind, UpdateGitService } from "../types/api";
+import type { AuthKind, UpdateService } from "../types/api";
 
 const props = defineProps<{ id: string }>();
-const store = useGitServicesStore();
+const store = useServicesStore();
 const router = useRouter();
 
-const draft = ref<UpdateGitService>({});
+const draft = ref<UpdateService>({});
 const tokenDraft = ref("");
 const webhookSecretDraft = ref("");
 const appIdDraft = ref("");
@@ -75,7 +75,7 @@ async function save() {
   saving.value = true;
   error.value = null;
   try {
-    const body: UpdateGitService = { ...draft.value };
+    const body: UpdateService = { ...draft.value };
     if (tokenDraft.value) body.token = tokenDraft.value;
     if (webhookSecretDraft.value) body.webhook_secret = webhookSecretDraft.value;
     if (isGithub.value) body.auth_kind = authKindDraft.value;
@@ -108,7 +108,7 @@ async function installApp() {
   installing.value = true;
   error.value = null;
   try {
-    const { install_url } = await gitServicesApi.githubAppInstallUrl(props.id);
+    const { install_url } = await servicesApi.githubAppInstallUrl(props.id);
     window.location.href = install_url;
   } catch (e: unknown) {
     error.value = extractMessage(e);
@@ -120,7 +120,7 @@ async function syncApp() {
   syncing.value = true;
   syncResult.value = null;
   try {
-    const res = await gitServicesApi.githubAppSync(props.id);
+    const res = await servicesApi.githubAppSync(props.id);
     syncResult.value = { ok: true, text: res.message };
     await reload();
   } catch (e: unknown) {
@@ -132,10 +132,10 @@ async function syncApp() {
 
 async function remove() {
   if (!detail.value) return;
-  if (!confirm(`Delete git service "${detail.value.slug}"?`)) return;
+  if (!confirm(`Delete service "${detail.value.slug}"?`)) return;
   try {
     await store.remove(props.id);
-    router.push({ name: "git-services" });
+    router.push({ name: "services" });
   } catch (e: unknown) {
     alert(extractMessage(e));
   }
@@ -153,7 +153,7 @@ function extractMessage(e: unknown): string {
 
 <template>
   <section v-if="detail" class="space-y-6">
-    <RouterLink to="/git_services" class="inline-block text-sm text-muted hover:text-accent">← Services</RouterLink>
+    <RouterLink to="/services" class="inline-block text-sm text-muted hover:text-accent">← Services</RouterLink>
 
     <header class="flex items-center gap-3">
       <ProviderBadge :provider="detail.kind" />
@@ -305,7 +305,7 @@ function extractMessage(e: unknown): string {
         <button type="submit" :disabled="saving" class="btn btn-primary">
           {{ saving ? "Saving…" : "Save" }}
         </button>
-        <RouterLink :to="{ name: 'git-services' }" class="btn btn-ghost">Back</RouterLink>
+        <RouterLink :to="{ name: 'services' }" class="btn btn-ghost">Back</RouterLink>
       </div>
     </form>
 

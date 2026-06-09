@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::git_service::AuthKind;
-use crate::project::{BranchEntry, ProjectConfig};
+use crate::project::{BranchEntry, NewProjectConfig, ProjectConfig};
+use crate::service::AuthKind;
+use crate::workspace::layout::slugify;
 
 #[derive(Serialize)]
 pub struct ProjectListItem {
@@ -154,12 +155,12 @@ pub async fn register_webhook(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "project not found".into()))?;
 
-    let service_id = project.git_service_id.ok_or((
+    let service_id = project.service_id.ok_or((
         StatusCode::BAD_REQUEST,
         "project is not linked to a git service".into(),
     ))?;
     let service = state
-        .git_service_store
+        .service_store
         .get(service_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -188,11 +189,110 @@ pub async fn register_webhook(
     provider
         .ensure_webhook(&project.full_name, &webhook_url, &service.webhook_secret)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("webhook registration failed: {e}")))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("webhook registration failed: {e}"),
+            )
+        })?;
 
     Ok(Json(RegisterWebhookResponse {
         status: "registered".into(),
         message: format!("Webhook registered on {}.", project.full_name),
         webhook_url: Some(webhook_url),
     }))
+}
+
+#[derive(Deserialize)]
+pub struct CreateProjectRequest {
+    pub service_id: Uuid,
+    pub full_name: String,
+    #[serde(default)]
+    pub default_branch: Option<String>,
+    #[serde(default)]
+    pub remote_url: Option<String>,
+}
+
+/// Manually register a project instead of waiting for its first webhook. The
+/// provider, bot username and slug are derived from the chosen git service; the
+/// remote URL is derived from the service's base URL when left blank. Idempotent
+/// via `upsert_project`, so creating an already-known project just returns it.
+pub async fn create_project(
+    State(state): State<AppState>,
+    Json(req): Json<CreateProjectRequest>,
+) -> Result<(StatusCode, Json<ProjectConfig>), (StatusCode, String)> {
+    let full_name = req.full_name.trim();
+    if full_name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "full_name is required".into()));
+    }
+
+    let service = state
+        .service_store
+        .get(req.service_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "git service not found".into()))?;
+
+    let default_branch = req
+        .default_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .unwrap_or("main")
+        .to_string();
+    let remote_url = req
+        .remote_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| derive_remote_url(&service.base_url, full_name));
+
+    let (config, _created) = state
+        .project_store
+        .upsert_project(NewProjectConfig {
+            provider: service.kind,
+            service_id: service.id,
+            project_slug: slugify(full_name),
+            full_name: full_name.to_string(),
+            remote_url,
+            default_branch,
+            my_username: service.bot_username.clone(),
+        })
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok((StatusCode::CREATED, Json(config)))
+}
+
+/// Build a default SSH remote (`git@host:owner/repo.git`) from a service's API
+/// base URL when the operator supplies none. The transport normalizes either an
+/// SSH or HTTPS remote to token-HTTPS, so the SSH form here is only a default.
+fn derive_remote_url(base_url: &str, full_name: &str) -> String {
+    let host = base_url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .trim_start_matches("api."); // api.github.com -> github.com
+    format!("git@{host}:{full_name}.git")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_remote_url;
+
+    #[test]
+    fn derives_github_ssh_remote_from_api_base() {
+        assert_eq!(
+            derive_remote_url("https://api.github.com", "owner/repo"),
+            "git@github.com:owner/repo.git"
+        );
+    }
+
+    #[test]
+    fn derives_self_hosted_gitlab_remote() {
+        assert_eq!(
+            derive_remote_url("https://git.f13cybertech.com", "grp/proj"),
+            "git@git.f13cybertech.com:grp/proj.git"
+        );
+    }
 }

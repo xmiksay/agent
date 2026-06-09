@@ -8,8 +8,8 @@
 
 use anyhow::Result;
 
-use crate::git_service::ServiceCredentials;
 use crate::provider::github;
+use crate::service::ServiceCredentials;
 
 /// Resolve a credential into the bearer/access token used for both REST API
 /// calls and `gh`/`glab` inside the worktree.
@@ -28,7 +28,7 @@ pub async fn resolve_token(creds: &ServiceCredentials) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_service::GitHubAppConfig;
+    use crate::service::GitHubAppConfig;
 
     #[tokio::test]
     async fn pat_resolves_to_its_token() {

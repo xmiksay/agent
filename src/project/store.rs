@@ -76,10 +76,10 @@ impl FromStr for BranchStatus {
 pub struct ProjectConfig {
     pub id: Uuid,
     pub provider: ProviderKind,
-    pub git_service_id: Option<Uuid>,
+    pub service_id: Option<Uuid>,
     pub project_slug: String,
     pub full_name: String,
-    pub ssh_url: String,
+    pub remote_url: String,
     pub default_branch: String,
     pub my_username: String,
     pub allowed_operations: Vec<String>,
@@ -99,10 +99,10 @@ impl ProjectConfig {
         Ok(Self {
             id: m.id,
             provider: m.provider.parse()?,
-            git_service_id: m.git_service_id,
+            service_id: m.service_id,
             project_slug: m.project_slug,
             full_name: m.full_name,
-            ssh_url: m.remote_url,
+            remote_url: m.remote_url,
             default_branch: m.default_branch,
             my_username: m.my_username,
             allowed_operations: allowed,
@@ -117,10 +117,10 @@ impl ProjectConfig {
 #[derive(Clone, Debug)]
 pub struct NewProjectConfig {
     pub provider: ProviderKind,
-    pub git_service_id: Uuid,
+    pub service_id: Uuid,
     pub project_slug: String,
     pub full_name: String,
-    pub ssh_url: String,
+    pub remote_url: String,
     pub default_branch: String,
     pub my_username: String,
 }
@@ -276,10 +276,7 @@ impl ProjectStore {
     /// Upsert a project row. The returned bool is `true` only when a new row was
     /// inserted (the caller uses it to auto-register the webhook once).
     pub async fn upsert_project(&self, new: NewProjectConfig) -> Result<(ProjectConfig, bool)> {
-        if let Some(existing) = self
-            .get_project(new.git_service_id, &new.project_slug)
-            .await?
-        {
+        if let Some(existing) = self.get_project(new.service_id, &new.project_slug).await? {
             let mut active: projects::ActiveModel = projects::Entity::find_by_id(existing.id)
                 .one(&self.db)
                 .await?
@@ -291,8 +288,8 @@ impl ProjectStore {
                 active.full_name = Set(new.full_name.clone());
                 changed = true;
             }
-            if existing.ssh_url != new.ssh_url {
-                active.remote_url = Set(new.ssh_url.clone());
+            if existing.remote_url != new.remote_url {
+                active.remote_url = Set(new.remote_url.clone());
                 changed = true;
             }
             if existing.default_branch != new.default_branch {
@@ -303,15 +300,15 @@ impl ProjectStore {
                 active.my_username = Set(new.my_username.clone());
                 changed = true;
             }
-            if existing.git_service_id != Some(new.git_service_id) {
-                active.git_service_id = Set(Some(new.git_service_id));
+            if existing.service_id != Some(new.service_id) {
+                active.service_id = Set(Some(new.service_id));
                 changed = true;
             }
             if changed {
                 active.updated_at = Set(Utc::now().into());
                 active.update(&self.db).await?;
                 let updated = self
-                    .get_project(new.git_service_id, &new.project_slug)
+                    .get_project(new.service_id, &new.project_slug)
                     .await?
                     .ok_or_else(|| anyhow!("project disappeared after update"))?;
                 return Ok((updated, false));
@@ -324,10 +321,10 @@ impl ProjectStore {
         let active = projects::ActiveModel {
             id: Set(id),
             provider: Set(new.provider.as_str().to_string()),
-            git_service_id: Set(Some(new.git_service_id)),
+            service_id: Set(Some(new.service_id)),
             project_slug: Set(new.project_slug.clone()),
             full_name: Set(new.full_name),
-            remote_url: Set(new.ssh_url),
+            remote_url: Set(new.remote_url),
             default_branch: Set(new.default_branch),
             my_username: Set(new.my_username),
             allowed_operations: Set(serde_json::to_value(default_allowed_operations())?),
@@ -342,19 +339,15 @@ impl ProjectStore {
             .context("failed to insert project")?;
 
         let created = self
-            .get_project(new.git_service_id, &new.project_slug)
+            .get_project(new.service_id, &new.project_slug)
             .await?
             .ok_or_else(|| anyhow!("project disappeared after insert"))?;
         Ok((created, true))
     }
 
-    pub async fn get_project(
-        &self,
-        git_service_id: Uuid,
-        slug: &str,
-    ) -> Result<Option<ProjectConfig>> {
+    pub async fn get_project(&self, service_id: Uuid, slug: &str) -> Result<Option<ProjectConfig>> {
         let row = projects::Entity::find()
-            .filter(projects::Column::GitServiceId.eq(git_service_id))
+            .filter(projects::Column::ServiceId.eq(service_id))
             .filter(projects::Column::ProjectSlug.eq(slug))
             .one(&self.db)
             .await?;

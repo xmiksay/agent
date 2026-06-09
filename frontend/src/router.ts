@@ -19,14 +19,14 @@ export const router = createRouter({
       props: true,
     },
     {
-      path: "/git_services",
-      name: "git-services",
-      component: () => import("./views/GitServicesList.vue"),
+      path: "/services",
+      name: "services",
+      component: () => import("./views/ServicesList.vue"),
     },
     {
-      path: "/git_services/:id",
-      name: "git-service-detail",
-      component: () => import("./views/GitServiceDetail.vue"),
+      path: "/services/:id",
+      name: "service-detail",
+      component: () => import("./views/ServiceDetail.vue"),
       props: true,
     },
     {

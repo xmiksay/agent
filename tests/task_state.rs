@@ -13,7 +13,7 @@ use std::sync::Arc;
 use agent::auth::store::AuthStore;
 use agent::auth::waiter::AuthWaiter;
 use agent::config::Config;
-use agent::git_service::{GitServiceStore, NewGitService};
+use agent::service::{ServiceStore, NewService};
 use agent::jobs::hub::LiveSessions;
 use agent::jobs::lifecycle::derive_agent_state;
 use agent::jobs::registry::RunningTasks;
@@ -76,7 +76,7 @@ fn build_store(db: &DatabaseConnection) -> Arc<TaskStore> {
     Arc::new(TaskStore::new(
         db.clone(),
         config,
-        ProviderRegistry::new(GitServiceStore::new(db.clone())),
+        ProviderRegistry::new(ServiceStore::new(db.clone())),
         Arc::new(ProjectStore::new(db.clone())),
         Arc::new(Workspace::new("/tmp/agent-test")),
         RunningTasks::new(),
@@ -95,10 +95,10 @@ fn issue_trigger(iid: u64) -> TriggerReason {
     }
 }
 
-/// Insert a git_service row so `tasks.git_service_id` satisfies its FK.
+/// Insert a service row so `tasks.service_id` satisfies its FK.
 async fn seed_service(db: &DatabaseConnection) -> Uuid {
-    GitServiceStore::new(db.clone())
-        .create(NewGitService {
+    ServiceStore::new(db.clone())
+        .create(NewService {
             kind: ProviderKind::Github,
             slug: format!("svc-{}", Uuid::new_v4().simple()),
             display_name: "test".into(),
@@ -113,7 +113,7 @@ async fn seed_service(db: &DatabaseConnection) -> Uuid {
             trigger_label: String::new(),
         })
         .await
-        .expect("seed git_service")
+        .expect("seed service")
         .id
 }
 

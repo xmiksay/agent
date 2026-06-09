@@ -87,13 +87,13 @@ async function registerWebhook() {
         <dd class="break-all font-mono text-xs text-muted">{{ store.detail.remote_url }}</dd>
       </div>
       <div class="col-span-2">
-        <dt class="label mb-0.5">Git service</dt>
-        <dd v-if="store.detail.git_service_id">
+        <dt class="label mb-0.5">Service</dt>
+        <dd v-if="store.detail.service_id">
           <RouterLink
-            :to="`/git_services/${store.detail.git_service_id}`"
+            :to="`/services/${store.detail.service_id}`"
             class="font-mono text-xs text-accent hover:underline"
           >
-            {{ store.detail.git_service_id }}
+            {{ store.detail.service_id }}
           </RouterLink>
         </dd>
         <dd v-else class="text-xs text-faint">unlinked</dd>
@@ -109,7 +109,7 @@ async function registerWebhook() {
       </p>
       <button
         class="btn btn-primary btn-sm"
-        :disabled="registering || !store.detail.git_service_id"
+        :disabled="registering || !store.detail.service_id"
         @click="registerWebhook"
       >
         {{ registering ? "Registering…" : "Register webhook" }}

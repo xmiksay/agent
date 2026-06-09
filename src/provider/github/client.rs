@@ -3,11 +3,11 @@ use async_trait::async_trait;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::git_service::ServiceCredentials;
 use crate::project::ProviderKind;
 use crate::provider::{
     BOT_NOTE_MARKER, GitProvider, NoteTarget, resolve_token, webhook_path_marker,
 };
+use crate::service::ServiceCredentials;
 
 #[derive(Clone)]
 pub struct GitHubClient {

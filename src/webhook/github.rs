@@ -27,11 +27,11 @@ pub async fn handle(
     body: Bytes,
 ) -> Result<(StatusCode, Json<WebhookResponse>), StatusCode> {
     let service = state
-        .git_service_store
+        .service_store
         .get_by_slug(ProviderKind::Github, &slug)
         .await
         .map_err(|e| {
-            warn!(error = %e, "git_service lookup failed");
+            warn!(error = %e, "service lookup failed");
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -105,7 +105,7 @@ fn project_ref(repo: &Repository) -> ProjectRef {
     ProjectRef {
         full_name: repo.full_name.clone(),
         project_slug: slugify(&repo.full_name),
-        ssh_url: repo.ssh_url.clone(),
+        remote_url: repo.ssh_url.clone(),
         default_branch: repo.default_branch.clone(),
     }
 }

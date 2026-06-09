@@ -7,7 +7,7 @@ use crate::project::ProviderKind;
 pub struct ProjectRef {
     pub full_name: String,    // "mygroup/myrepo"
     pub project_slug: String, // "mygroup__myrepo"
-    pub ssh_url: String,      // git@host:path.git — internal SSH is configured
+    pub remote_url: String,   // clone URL as the provider gave it (SSH or HTTPS)
     pub default_branch: String,
 }
 

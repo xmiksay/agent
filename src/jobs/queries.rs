@@ -27,14 +27,14 @@ impl TaskStore {
             .context("db error")?
             .ok_or_else(|| anyhow::anyhow!("task not found"))?;
 
-        let Some(service_id) = task.git_service_id else {
-            anyhow::bail!("task has no git_service_id");
+        let Some(service_id) = task.service_id else {
+            anyhow::bail!("task has no service_id");
         };
         let service = self
             .providers()
             .service(service_id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("git_service not loaded"))?;
+            .ok_or_else(|| anyhow::anyhow!("service not loaded"))?;
 
         let project_slug = slugify(&task.project_path);
         let branch = task.branch.unwrap_or_else(|| task.default_branch.clone());

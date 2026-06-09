@@ -6,15 +6,15 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::git_service::{AuthKind, GitService, TriggerMode};
 use crate::jobs::types::TriggerReason;
 use crate::project::NewProjectConfig;
+use crate::service::{AuthKind, Service, TriggerMode};
 use crate::webhook::normalized::{EventKind, NormalizedEvent, NoteTargetRef};
 use crate::workspace::layout::slugify;
 
 pub async fn dispatch(
     state: &AppState,
-    service: &GitService,
+    service: &Service,
     ev: NormalizedEvent,
 ) -> Result<Vec<Uuid>> {
     let my_username = service.bot_username.clone();
@@ -24,10 +24,10 @@ pub async fn dispatch(
         .project_store
         .upsert_project(NewProjectConfig {
             provider: ev.provider,
-            git_service_id: service.id,
+            service_id: service.id,
             project_slug: ev.project.project_slug.clone(),
             full_name: ev.project.full_name.clone(),
-            ssh_url: ev.project.ssh_url.clone(),
+            remote_url: ev.project.remote_url.clone(),
             default_branch: ev.project.default_branch.clone(),
             my_username: my_username.clone(),
         })
@@ -130,7 +130,7 @@ pub async fn dispatch(
             ev.provider,
             Some(project.id),
             ev.project.full_name.clone(),
-            ev.project.ssh_url.clone(),
+            ev.project.remote_url.clone(),
             ev.project.default_branch.clone(),
         )
         .await?;
@@ -150,7 +150,7 @@ pub async fn dispatch(
 /// Spawn idempotent webhook registration for a newly-seen project. No-op (logged)
 /// when `PUBLIC_BASE_URL` is unset — operators then wire hooks by hand. Runs in
 /// the background so it never delays or fails the inbound webhook delivery.
-fn ensure_project_webhook(state: &AppState, service: &GitService, full_name: &str) {
+fn ensure_project_webhook(state: &AppState, service: &Service, full_name: &str) {
     // App-backed services receive events via a single app-level webhook (set on
     // the App itself), so per-repo registration is both unnecessary and outside
     // the App-token's scope.
@@ -497,7 +497,7 @@ mod tests {
             project: ProjectRef {
                 full_name: "acme/repo".into(),
                 project_slug: "acme__repo".into(),
-                ssh_url: "git@host:acme/repo.git".into(),
+                remote_url: "git@host:acme/repo.git".into(),
                 default_branch: "main".into(),
             },
             actor: "someone".into(),

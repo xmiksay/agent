@@ -13,12 +13,12 @@ use agent::auth;
 use agent::auth::store::AuthStore;
 use agent::auth::waiter::AuthWaiter;
 use agent::config::Config;
-use agent::git_service::GitServiceStore;
 use agent::jobs::hub::LiveSessions;
 use agent::jobs::registry::RunningTasks;
 use agent::jobs::store::TaskStore;
 use agent::project::ProjectStore;
 use agent::provider::ProviderRegistry;
+use agent::service::ServiceStore;
 use agent::workspace::Workspace;
 use agent::{api, spa, webhook, ws};
 
@@ -37,8 +37,8 @@ async fn main() -> anyhow::Result<()> {
     let db = Database::connect(&config.database_url).await?;
     migration::Migrator::up(&db, None).await?;
 
-    let git_service_store = GitServiceStore::new(db.clone());
-    let providers = ProviderRegistry::new(git_service_store.clone());
+    let service_store = ServiceStore::new(db.clone());
+    let providers = ProviderRegistry::new(service_store.clone());
     providers.reload().await?;
 
     let project_store = Arc::new(ProjectStore::new(db.clone()));
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         task_store,
         project_store,
-        git_service_store,
+        service_store,
         workspace,
         providers,
         auth_store,
@@ -101,7 +101,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tasks/{id}/message", post(api::handlers::push_message))
         .route("/api/tasks/{id}/diff", get(api::handlers::task_diff))
         .route("/api/tasks/{id}/events", get(api::handlers::task_events))
-        .route("/api/projects", get(api::projects::list_projects))
+        .route(
+            "/api/projects",
+            get(api::projects::list_projects).post(api::projects::create_project),
+        )
         .route("/api/projects/{id}", get(api::projects::get_project))
         .route(
             "/api/projects/{id}/config",
@@ -117,22 +120,22 @@ async fn main() -> anyhow::Result<()> {
             post(api::projects::register_webhook),
         )
         .route(
-            "/api/git_services",
-            get(api::git_services::list).post(api::git_services::create),
+            "/api/services",
+            get(api::services::list).post(api::services::create),
         )
         .route(
-            "/api/git_services/{id}",
-            get(api::git_services::get)
-                .put(api::git_services::update)
-                .delete(api::git_services::delete),
+            "/api/services/{id}",
+            get(api::services::get)
+                .put(api::services::update)
+                .delete(api::services::delete),
         )
         .route(
-            "/api/git_services/{id}/github_app/install",
-            get(api::git_services::github_app_install),
+            "/api/services/{id}/github_app/install",
+            get(api::services::github_app_install),
         )
         .route(
-            "/api/git_services/{id}/github_app/sync",
-            post(api::git_services::github_app_sync),
+            "/api/services/{id}/github_app/sync",
+            post(api::services::github_app_sync),
         )
         .route(
             "/api/auth_requests",
@@ -167,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
         // the `state` param naming an existing service).
         .route(
             "/github_app/callback",
-            get(api::git_services::github_app_callback),
+            get(api::services::github_app_callback),
         )
         // Single app-wide live stream. Auth is in-band (the client's first frame
         // is its token), so it sits outside the `/api/*` bearer middleware.

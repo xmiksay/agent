@@ -32,7 +32,7 @@ pub enum NoteTarget {
 pub trait GitProvider: Send + Sync {
     fn kind(&self) -> ProviderKind;
 
-    /// Which `git_services` row this client was built from.
+    /// Which `service` row this client was built from.
     fn service_id(&self) -> Uuid;
 
     /// Post a markdown comment on the given target.

@@ -296,13 +296,13 @@ mod tests {
     use crate::auth::store::AuthStore;
     use crate::auth::waiter::AuthWaiter;
     use crate::config::Config;
-    use crate::git_service::{GitServiceStore, NewGitService};
     use crate::jobs::hub::LiveSessions;
     use crate::jobs::registry::RunningTasks;
     use crate::jobs::store::TaskStore;
     use crate::jobs::types::TriggerReason;
     use crate::project::{ProjectStore, ProviderKind};
     use crate::provider::ProviderRegistry;
+    use crate::service::{NewService, ServiceStore};
     use crate::workspace::Workspace;
 
     async fn fresh_db() -> Option<(DatabaseConnection, String, String)> {
@@ -348,7 +348,7 @@ mod tests {
         Arc::new(TaskStore::new(
             db.clone(),
             config,
-            ProviderRegistry::new(GitServiceStore::new(db.clone())),
+            ProviderRegistry::new(ServiceStore::new(db.clone())),
             Arc::new(ProjectStore::new(db.clone())),
             Arc::new(Workspace::new("/tmp/agent-test")),
             RunningTasks::new(),
@@ -358,11 +358,11 @@ mod tests {
         ))
     }
 
-    /// Insert a git_service row so `tasks.git_service_id` satisfies its FK, and
+    /// Insert a service row so `tasks.service_id` satisfies its FK, and
     /// return its id.
     async fn seed_service(db: &DatabaseConnection) -> Uuid {
-        GitServiceStore::new(db.clone())
-            .create(NewGitService {
+        ServiceStore::new(db.clone())
+            .create(NewService {
                 kind: ProviderKind::Github,
                 slug: format!("svc-{}", Uuid::new_v4().simple()),
                 display_name: "test".into(),
@@ -377,7 +377,7 @@ mod tests {
                 trigger_label: String::new(),
             })
             .await
-            .expect("seed git_service")
+            .expect("seed service")
             .id
     }
 
