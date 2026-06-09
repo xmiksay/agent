@@ -17,7 +17,8 @@ const {
   store, busy, pendingApprovals, eventText, eventCount, hasEvents, taskNotifications, wsConnected, tokensSpent,
   isLive, isRunning, isPending, canRetry, canContinue, canKill, canChat,
   onApprovalResolved, diffText, diffError, diffLoading, loadDiff,
-  editing, editBranch, editDefaultBranch, savingEdit, startEdit, saveEdit,
+  editing, editBranch, editTitle, editDescription, editTaskState,
+  triggerHasTitle, triggerHasDescription, savingEdit, startEdit, saveEdit,
   confirmRun, retry, resume, pause, remove,
   message, sending, sendMessage, redefineGoal, stopAgent,
 } = useTaskDetail(toRef(props, "id"));
@@ -164,23 +165,42 @@ watch(pendingApprovals, (p) => {
       </dl>
     </header>
 
-    <!-- Edit (pending only). -->
-    <Accordion v-if="isPending" v-model:open="editing" title="Edit task" @update:open="(v) => v && startEdit()">
-      <div class="space-y-2 pt-3">
+    <!-- Edit task: state on any task; the run inputs (branch/title/description)
+         only while pending — before the task is tied to a run. -->
+    <Accordion v-model:open="editing" title="Edit task" @update:open="(v) => v && startEdit()">
+      <div class="space-y-3 pt-3">
         <div>
-          <label class="label">Branch</label>
-          <input
-            v-model="editBranch"
-            :disabled="savingEdit"
-            class="input font-mono"
-            placeholder="feature-branch"
-          />
+          <label class="label">State</label>
+          <select v-model="editTaskState" :disabled="savingEdit" class="input">
+            <option value="pending">pending</option>
+            <option value="working_on">working_on</option>
+            <option value="completed">completed</option>
+            <option value="failed">failed</option>
+          </select>
         </div>
-        <div>
-          <label class="label">Default branch (diff / MR base)</label>
-          <input v-model="editDefaultBranch" :disabled="savingEdit" class="input font-mono" />
-        </div>
-        <p class="text-xs text-muted">The branch can't equal the default branch.</p>
+        <template v-if="isPending">
+          <div>
+            <label class="label">Branch</label>
+            <input
+              v-model="editBranch"
+              :disabled="savingEdit"
+              class="input font-mono"
+              placeholder="feature-branch"
+            />
+            <p class="mt-1 text-xs text-muted">The branch can't equal the default branch.</p>
+          </div>
+          <div v-if="triggerHasTitle">
+            <label class="label">Title</label>
+            <input v-model="editTitle" :disabled="savingEdit" class="input" />
+          </div>
+          <div v-if="triggerHasDescription">
+            <label class="label">Description</label>
+            <textarea v-model="editDescription" rows="6" :disabled="savingEdit" class="textarea font-mono"></textarea>
+          </div>
+        </template>
+        <p v-else class="text-xs text-muted">
+          Branch, title and description can only be edited while the task is pending.
+        </p>
         <div class="flex justify-end gap-2">
           <button class="btn btn-ghost btn-sm" :disabled="savingEdit" @click="editing = false">Cancel</button>
           <button class="btn btn-primary btn-sm" :disabled="savingEdit" @click="saveEdit">
