@@ -30,6 +30,9 @@ pub struct ServiceView {
     pub trigger_mode: TriggerMode,
     /// Label name watched when `trigger_mode` includes labels.
     pub trigger_label: String,
+    /// Per-trigger-type model mapping (`trigger_type → model_id`). Filled by the
+    /// handlers (a separate query); empty when the service maps no types.
+    pub models: std::collections::BTreeMap<String, uuid::Uuid>,
     /// True once an App install has been recorded (non-empty `installation_id`).
     /// Lets the UI show install status without exposing the secret bundle.
     pub app_installed: bool,
@@ -82,6 +85,7 @@ impl ServiceView {
             auth_kind: svc.auth_kind,
             trigger_mode: svc.trigger_mode,
             trigger_label: svc.trigger_label,
+            models: std::collections::BTreeMap::new(),
             app_installed,
             gitlab_token,
             created_at: svc.created_at,
@@ -97,7 +101,18 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ServiceView>
         warn!(error = %e, "list services failed");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    Ok(Json(services.into_iter().map(ServiceView::from).collect()))
+    let mut views = Vec::with_capacity(services.len());
+    for svc in services {
+        let id = svc.id;
+        let mut view = ServiceView::from(svc);
+        view.models = state
+            .service_store
+            .trigger_models(id)
+            .await
+            .unwrap_or_default();
+        views.push(view);
+    }
+    Ok(Json(views))
 }
 
 pub async fn get(
@@ -110,7 +125,13 @@ pub async fn get(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(ServiceView::from(svc)))
+    let mut view = ServiceView::from(svc);
+    view.models = state
+        .service_store
+        .trigger_models(id)
+        .await
+        .unwrap_or_default();
+    Ok(Json(view))
 }
 
 pub async fn create(
@@ -128,12 +149,18 @@ pub async fn create(
         .create(req)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let id = svc.id;
     state
         .providers
-        .refresh(svc.id)
+        .refresh(id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mut view = ServiceView::from(svc);
+    view.models = state
+        .service_store
+        .trigger_models(id)
+        .await
+        .unwrap_or_default();
     view.generated_webhook_secret = generated;
     Ok((StatusCode::CREATED, Json(view)))
 }
@@ -175,10 +202,15 @@ pub async fn update(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     state
         .providers
-        .refresh(svc.id)
+        .refresh(id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mut view = ServiceView::from(svc);
+    view.models = state
+        .service_store
+        .trigger_models(id)
+        .await
+        .unwrap_or_default();
     view.generated_webhook_secret = generated;
     Ok(Json(view))
 }

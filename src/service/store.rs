@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -237,6 +238,10 @@ pub struct NewService {
     pub trigger_mode: TriggerMode,
     #[serde(default)]
     pub trigger_label: String,
+    /// Per-trigger-type model mapping to seed (`trigger_type → model_id`). Absent
+    /// → no mappings.
+    #[serde(default)]
+    pub models: Option<BTreeMap<String, Uuid>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -251,6 +256,20 @@ pub struct UpdateService {
     pub app_credentials: Option<serde_json::Value>,
     pub trigger_mode: Option<TriggerMode>,
     pub trigger_label: Option<String>,
+    /// Absent → leave the per-trigger-type model mapping unchanged; present →
+    /// replace it wholesale with this `trigger_type → model_id` map (empty clears).
+    pub models: Option<BTreeMap<String, Uuid>>,
+}
+
+/// Distinguish an absent field (`None`) from an explicit `null` (`Some(None)`)
+/// for `Option<Option<T>>` patch fields. Without this, serde collapses both to
+/// `None` and a clear-to-null is indistinguishable from "leave unchanged".
+pub(crate) fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
 }
 
 #[derive(Clone)]
@@ -321,6 +340,10 @@ impl ServiceStore {
             .await
             .context("failed to insert service")?;
 
+        if let Some(models) = new.models {
+            self.set_trigger_models(id, &models).await?;
+        }
+
         self.get(id)
             .await?
             .ok_or_else(|| anyhow!("service disappeared after insert"))
@@ -388,6 +411,10 @@ impl ServiceStore {
         active.updated_at = Set(Utc::now().into());
         active.update(&self.db).await?;
 
+        if let Some(models) = upd.models {
+            self.set_trigger_models(id, &models).await?;
+        }
+
         self.get(id)
             .await?
             .ok_or_else(|| anyhow!("service disappeared after update"))
@@ -402,6 +429,10 @@ impl ServiceStore {
             bail!("service not found");
         }
         Ok(())
+    }
+
+    pub(crate) fn db(&self) -> &DatabaseConnection {
+        &self.db
     }
 }
 

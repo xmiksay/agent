@@ -2,6 +2,7 @@ import { computed, onMounted, ref, watch, type Ref } from "vue";
 import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
 import { useStreamStore } from "../stores/stream";
+import { useModelsStore } from "../stores/models";
 import { authApi } from "../api/auth";
 import { tasksApi } from "../api/tasks";
 import { extractTaskNotifications } from "./useClaudeStream";
@@ -16,6 +17,7 @@ import type { AuthRequest, TaskEdits, TaskState } from "../types/api";
 export function useTaskDetail(idRef: Ref<string>) {
   const store = useTasksStore();
   const stream = useStreamStore();
+  const models = useModelsStore();
   const router = useRouter();
   const busy = ref<string | null>(null);
 
@@ -107,8 +109,16 @@ export function useTaskDetail(idRef: Ref<string>) {
   async function setup() {
     stream.start();
     await store.load(idRef.value);
-    await Promise.all([loadHistory(), reloadPending()]);
+    await Promise.all([loadHistory(), reloadPending(), models.refresh()]);
   }
+
+  // Resolve the task's model to a display label: its alias, else the raw id,
+  // else "default" when no per-task override is set.
+  const modelLabel = computed(() => {
+    const id = store.detail?.model_id;
+    if (!id) return "default";
+    return models.list.find((m) => m.id === id)?.alias ?? id;
+  });
 
   onMounted(setup);
   watch(idRef, setup);
@@ -165,6 +175,8 @@ export function useTaskDetail(idRef: Ref<string>) {
   const editTitle = ref("");
   const editDescription = ref("");
   const editTaskState = ref<TaskState>("pending");
+  // null = use the global/service default; a model id pins this task to it.
+  const editModelId = ref<string | null>(null);
   const savingEdit = ref(false);
 
   // trigger_data is a serialized TriggerReason; only some variants carry a
@@ -183,6 +195,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     editTitle.value = (triggerData.value?.title as string) ?? "";
     editDescription.value = (triggerData.value?.description as string) ?? "";
     editTaskState.value = store.detail?.task_state ?? "pending";
+    editModelId.value = store.detail?.model_id ?? null;
     editing.value = true;
   }
 
@@ -194,6 +207,8 @@ export function useTaskDetail(idRef: Ref<string>) {
         edits.branch = editBranch.value.trim() || undefined;
         if (triggerHasTitle.value) edits.title = editTitle.value.trim() || undefined;
         if (triggerHasDescription.value) edits.description = editDescription.value;
+        // null clears the override, a string pins the model (pending-only).
+        edits.model_id = editModelId.value;
       }
       await store.update(idRef.value, edits);
       editing.value = false;
@@ -290,6 +305,8 @@ export function useTaskDetail(idRef: Ref<string>) {
 
   return {
     store,
+    models,
+    modelLabel,
     busy,
     pendingApprovals,
     eventText,
@@ -317,6 +334,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     editTaskState,
     triggerHasTitle,
     triggerHasDescription,
+    editModelId,
     savingEdit,
     startEdit,
     saveEdit,

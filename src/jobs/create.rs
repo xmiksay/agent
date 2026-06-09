@@ -39,6 +39,14 @@ impl TaskStore {
                 .map(|b| b.branch_name)
                 .unwrap_or_else(|| issue_branch_name(*issue_iid, "")),
         });
+
+        // Seed the task's model from the owning service's mapping for this trigger
+        // type (falling back to the global default). Stored so the operator can
+        // see/override it before the run; run time re-resolves if the row was deleted.
+        let model_id = self
+            .default_model_for_project(project_id, trigger.trigger_type())
+            .await;
+
         let task = tasks::ActiveModel {
             id: Set(id),
             agent_state: Set(AGENT_COLD.to_string()),
@@ -53,6 +61,7 @@ impl TaskStore {
             session_id: Set(None),
             pid: Set(None),
             pending_message: Set(None),
+            model_id: Set(model_id),
         };
 
         tasks::Entity::insert(task)

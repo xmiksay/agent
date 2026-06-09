@@ -111,6 +111,7 @@ async fn seed_service(db: &DatabaseConnection) -> Uuid {
             app_credentials: None,
             trigger_mode: Default::default(),
             trigger_label: String::new(),
+            models: None,
         })
         .await
         .expect("seed service")
@@ -310,6 +311,101 @@ async fn list_filters_by_task_state() {
         [pend, work, done]
             .iter()
             .all(|id| all.iter().any(|t| &t.id == id))
+    );
+
+    drop(store);
+    drop(db);
+    drop_db(&admin, &name).await;
+}
+
+/// The model-selector rework: a new task inherits the owning service's mapping
+/// for its trigger type, and an unmapped trigger type falls back to the global
+/// default model.
+#[tokio::test]
+async fn task_inherits_service_trigger_model_then_global_default() {
+    use agent::models::{ModelProviderStore, ModelStore, NewModel};
+    use std::collections::BTreeMap;
+
+    let Some((db, name, admin)) = fresh_db().await else {
+        return;
+    };
+    let store = build_store(&db);
+
+    let service_id = seed_service(&db).await;
+    let project_id = ProjectStore::new(db.clone())
+        .upsert_project(NewProjectConfig {
+            provider: ProviderKind::Github,
+            service_id,
+            project_slug: format!("p-{}", Uuid::new_v4().simple()),
+            full_name: "acme/widgets".to_string(),
+            remote_url: "git@example.test:acme/widgets.git".to_string(),
+            default_branch: "main".to_string(),
+            my_username: "bot".to_string(),
+        })
+        .await
+        .expect("seed project")
+        .0
+        .id;
+
+    // The migration seeds exactly one provider (claude_code).
+    let provider_id = ModelProviderStore::new(db.clone()).list().await.unwrap()[0].id;
+    let models = ModelStore::new(db.clone());
+    let new_model = |model_id: &str, alias: &str, is_default: bool| NewModel {
+        provider_id,
+        model_id: model_id.to_string(),
+        alias: alias.to_string(),
+        input_price: 0.0,
+        output_price: 0.0,
+        cache_write_price: 0.0,
+        cache_read_price: 0.0,
+        thinking: false,
+        effort: None,
+        is_default,
+    };
+    let issue_model = models
+        .create(new_model("opus", "Opus", false))
+        .await
+        .unwrap();
+    let default_model = models
+        .create(new_model("haiku", "Haiku", true))
+        .await
+        .unwrap();
+
+    // Map the `issue` trigger type on the service to the issue model.
+    let mut map = BTreeMap::new();
+    map.insert("issue".to_string(), issue_model.id);
+    ServiceStore::new(db.clone())
+        .set_trigger_models(service_id, &map)
+        .await
+        .unwrap();
+
+    // An issue task inherits the mapped model.
+    let issue_id = new_task(&store, project_id, 1).await;
+    let (t, _) = store.get_task(issue_id).await.unwrap().unwrap();
+    assert_eq!(
+        t.model_id,
+        Some(issue_model.id),
+        "issue task inherits the service's per-trigger-type model"
+    );
+
+    // An MR-comment task (unmapped trigger type) falls back to the global default.
+    let mr_id = store
+        .create_task(
+            TriggerReason::MRComment {
+                mr_iid: 7,
+                comment: "hi".to_string(),
+                source_branch: "feature".to_string(),
+                url: "http://example.test/mr/7".to_string(),
+            },
+            project_id,
+        )
+        .await
+        .unwrap();
+    let (mt, _) = store.get_task(mr_id).await.unwrap().unwrap();
+    assert_eq!(
+        mt.model_id,
+        Some(default_model.id),
+        "unmapped trigger type inherits the global default model"
     );
 
     drop(store);

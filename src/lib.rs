@@ -10,6 +10,7 @@ pub mod auth;
 pub mod config;
 pub mod entity;
 pub mod jobs;
+pub mod models;
 pub mod project;
 pub mod provider;
 pub mod service;
@@ -22,6 +23,7 @@ use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::jobs::store::TaskStore;
+use crate::models::{ModelProviderStore, ModelStore};
 use crate::project::ProjectStore;
 use crate::provider::ProviderRegistry;
 use crate::service::ServiceStore;
@@ -33,6 +35,8 @@ pub struct AppState {
     pub task_store: Arc<TaskStore>,
     pub project_store: Arc<ProjectStore>,
     pub service_store: ServiceStore,
+    pub model_store: ModelStore,
+    pub model_provider_store: ModelProviderStore,
     pub workspace: Arc<Workspace>,
     pub providers: ProviderRegistry,
     pub auth_store: Arc<AuthStore>,

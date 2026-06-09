@@ -377,6 +377,7 @@ mod tests {
                 app_credentials: None,
                 trigger_mode: Default::default(),
                 trigger_label: String::new(),
+                models: None,
             })
             .await
             .expect("seed service")

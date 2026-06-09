@@ -7,11 +7,49 @@ use anyhow::{Context, Result};
 use sea_orm::*;
 use uuid::Uuid;
 
-use crate::entity::{task_sessions, tasks};
+use crate::entity::{service_models, task_sessions, tasks};
 use crate::jobs::store::TaskStore;
 use crate::jobs::types::TriggerReason;
+use crate::models::ResolvedModel;
 
 impl TaskStore {
+    /// The model (joined to its provider) a run should use: the task's stamped
+    /// pick, else the global default — falling through to the CLI's own default
+    /// when nothing is configured. A deleted model row never blocks a run.
+    pub async fn resolve_model(&self, task_model: Option<Uuid>) -> Option<ResolvedModel> {
+        if let Some(id) = task_model
+            && let Ok(Some(r)) = self.model_store().resolve(id).await
+        {
+            return Some(r);
+        }
+        self.model_store().resolve_default().await.ok().flatten()
+    }
+
+    /// The model id to stamp on a new task: the owning service's mapping for this
+    /// **trigger type** (`review_mr`, `issue_comment`, …), else the global
+    /// default. Best-effort — any miss yields `None`, and run time re-resolves, so
+    /// a stale row never blocks a task.
+    pub(crate) async fn default_model_for_project(
+        &self,
+        project_id: Uuid,
+        trigger_type: &str,
+    ) -> Option<Uuid> {
+        let service_id = match self.project_store().get_project_by_id(project_id).await {
+            Ok(Some(p)) => p.service_id,
+            _ => None,
+        };
+        if let Some(sid) = service_id
+            && let Ok(Some(m)) = service_models::Entity::find()
+                .filter(service_models::Column::ServiceId.eq(sid))
+                .filter(service_models::Column::TriggerType.eq(trigger_type))
+                .one(self.db())
+                .await
+        {
+            return Some(m.model_id);
+        }
+        self.model_store().default_model_id().await.ok().flatten()
+    }
+
     /// Diff the task's working tree against `origin/<default_branch>`.
     /// Two-dot (not merge-base) so the result captures everything the operator
     /// would expect to see for an in-flight task: branch commits, staged

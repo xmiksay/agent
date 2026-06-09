@@ -16,7 +16,11 @@ impl AgentBackend for ClaudeCode {
         "claude"
     }
 
-    fn build_args(&self, resume_session_id: Option<&str>) -> Vec<String> {
+    fn api_key_env(&self) -> &str {
+        "ANTHROPIC_API_KEY"
+    }
+
+    fn build_args(&self, resume_session_id: Option<&str>, model: Option<&str>) -> Vec<String> {
         // Interactive headless session: stream-json on both ends keeps the
         // process alive, reading operator messages from stdin and emitting
         // newline-delimited JSON events on stdout. `--replay-user-messages`
@@ -33,6 +37,12 @@ impl AgentBackend for ClaudeCode {
         if let Some(sid) = resume_session_id {
             args.push("-r".to_string());
             args.push(sid.to_string());
+        }
+        // The catalog model selection. `--model` accepts a model id or alias; when
+        // unset the CLI falls back to its own configured default.
+        if let Some(model) = model.filter(|m| !m.trim().is_empty()) {
+            args.push("--model".to_string());
+            args.push(model.to_string());
         }
         args.extend(
             [
@@ -156,7 +166,7 @@ mod tests {
 
     #[test]
     fn build_args_without_resume_is_interactive_stream_json() {
-        let args = ClaudeCode.build_args(None);
+        let args = ClaudeCode.build_args(None, None);
         assert_eq!(
             args,
             vec![
@@ -177,13 +187,36 @@ mod tests {
 
     #[test]
     fn build_args_with_resume_inserts_flag_after_print() {
-        let args = ClaudeCode.build_args(Some("sess-123"));
+        let args = ClaudeCode.build_args(Some("sess-123"), None);
         assert_eq!(&args[..3], &["--print", "-r", "sess-123"]);
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"--input-format".to_string()));
         // The control-protocol flags coexist with --resume.
         assert!(args.contains(&"--permission-prompt-tool".to_string()));
         assert!(args.contains(&"stdio".to_string()));
+    }
+
+    #[test]
+    fn build_args_appends_model_when_set() {
+        let args = ClaudeCode.build_args(None, Some("claude-opus-4-8"));
+        let i = args.iter().position(|a| a == "--model").expect("--model");
+        assert_eq!(args[i + 1], "claude-opus-4-8");
+        // Model flag sits after the resume slot, before the stream-json block.
+        assert_eq!(args[0], "--print");
+    }
+
+    #[test]
+    fn build_args_omits_model_when_blank() {
+        assert!(
+            !ClaudeCode
+                .build_args(None, Some("  "))
+                .contains(&"--model".to_string())
+        );
+        assert!(
+            !ClaudeCode
+                .build_args(None, None)
+                .contains(&"--model".to_string())
+        );
     }
 
     #[test]

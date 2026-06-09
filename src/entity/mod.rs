@@ -1,7 +1,10 @@
 pub mod auth_requests;
 pub mod events;
+pub mod model_providers;
+pub mod models;
 pub mod project_branches;
 pub mod projects;
 pub mod service;
+pub mod service_models;
 pub mod task_sessions;
 pub mod tasks;

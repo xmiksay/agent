@@ -16,6 +16,7 @@ use crate::jobs::lifecycle::{AGENT_FAILED, AGENT_PENDING, TASK_FAILED, TASK_STAT
 use crate::jobs::registry::RunningTasks;
 use crate::jobs::runner::run_job;
 use crate::jobs::types::{ClaudeOutput, TriggerReason};
+use crate::models::ModelStore;
 use crate::project::ProjectStore;
 use crate::provider::ProviderRegistry;
 use crate::workspace::Workspace;
@@ -27,6 +28,7 @@ pub struct TaskStore {
     config: Config,
     providers: ProviderRegistry,
     project_store: Arc<ProjectStore>,
+    model_store: ModelStore,
     workspace: Arc<Workspace>,
     running: RunningTasks,
     hub: LiveSessions,
@@ -50,6 +52,7 @@ impl TaskStore {
         Self {
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_jobs)),
             seen_events: Arc::new(Mutex::new(HashSet::new())),
+            model_store: ModelStore::new(db.clone()),
             db,
             config,
             providers,
@@ -109,11 +112,16 @@ impl TaskStore {
             );
         }
 
-        let edits_input =
-            edits.branch.is_some() || edits.title.is_some() || edits.description.is_some();
+        // Run-input fields (branch, title, description, model) drive the run and
+        // are only editable before it starts — once running the worktree is
+        // checked out, the prompt is built, and the model is locked in.
+        let edits_input = edits.branch.is_some()
+            || edits.title.is_some()
+            || edits.description.is_some()
+            || edits.model_id.is_some();
         if edits_input && task.task_state != "pending" {
             bail!(
-                "can only edit the branch, title or description while the task is pending \
+                "can only edit the branch, title, description or model while the task is pending \
                  (task_state: {})",
                 task.task_state
             );
@@ -174,6 +182,9 @@ impl TaskStore {
         if let Some(ts) = new_task_state {
             active.task_state = Set(ts);
         }
+        if let Some(model_id) = edits.model_id {
+            active.model_id = Set(model_id);
+        }
         active.update(&self.db).await?;
         Ok(())
     }
@@ -195,6 +206,10 @@ impl TaskStore {
 
     pub fn project_store(&self) -> &Arc<ProjectStore> {
         &self.project_store
+    }
+
+    pub fn model_store(&self) -> &ModelStore {
+        &self.model_store
     }
 
     pub fn workspace(&self) -> &Arc<Workspace> {
@@ -318,6 +333,10 @@ impl TaskStore {
 
             info!(%task_id, "job starting");
 
+            // Resolve the run's model (joined to its provider): the task's pick,
+            // else the global default (else the CLI's own default).
+            let model = store.resolve_model(task.model_id).await;
+
             let resume_session_id = task.session_id.clone();
             // Consume pending_message: clear the column before the run so a
             // crash doesn't replay the same message, and pass it as the prompt.
@@ -348,6 +367,7 @@ impl TaskStore {
                 semaphore,
                 resume_session_id,
                 prompt_override,
+                model,
             )
             .await;
 
@@ -459,4 +479,9 @@ pub struct TaskEdits {
     /// The trigger's description — pending-only, same reason. Only triggers that
     /// carry a description (issue triggers) accept this.
     pub description: Option<String>,
+    /// Operator override of the task's model, editable only while pending (like
+    /// `branch`). Outer `None` = leave unchanged; `Some(None)` = clear (revert to
+    /// the service/global default at run time); `Some(Some(id))` = set it.
+    #[serde(default, deserialize_with = "crate::service::store::double_option")]
+    pub model_id: Option<Option<Uuid>>,
 }

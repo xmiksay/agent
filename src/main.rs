@@ -16,6 +16,7 @@ use agent::config::Config;
 use agent::jobs::hub::LiveSessions;
 use agent::jobs::registry::RunningTasks;
 use agent::jobs::store::TaskStore;
+use agent::models::{ModelProviderStore, ModelStore};
 use agent::project::ProjectStore;
 use agent::provider::ProviderRegistry;
 use agent::service::ServiceStore;
@@ -38,6 +39,8 @@ async fn main() -> anyhow::Result<()> {
     migration::Migrator::up(&db, None).await?;
 
     let service_store = ServiceStore::new(db.clone());
+    let model_store = ModelStore::new(db.clone());
+    let model_provider_store = ModelProviderStore::new(db.clone());
     let providers = ProviderRegistry::new(service_store.clone());
     providers.reload().await?;
 
@@ -73,6 +76,8 @@ async fn main() -> anyhow::Result<()> {
         task_store,
         project_store,
         service_store,
+        model_store,
+        model_provider_store,
         workspace,
         providers,
         auth_store,
@@ -119,6 +124,26 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/projects/{id}/register_webhook",
             post(api::projects::register_webhook),
+        )
+        .route(
+            "/api/model_providers",
+            get(api::model_providers::list).post(api::model_providers::create),
+        )
+        .route(
+            "/api/model_providers/{id}",
+            get(api::model_providers::get)
+                .put(api::model_providers::update)
+                .delete(api::model_providers::delete),
+        )
+        .route(
+            "/api/models",
+            get(api::models::list).post(api::models::create),
+        )
+        .route(
+            "/api/models/{id}",
+            get(api::models::get)
+                .put(api::models::update)
+                .delete(api::models::delete),
         )
         .route(
             "/api/services",

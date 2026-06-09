@@ -2,15 +2,20 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useServicesStore } from "../stores/services";
+import { useModelsStore } from "../stores/models";
 import { servicesApi } from "../api/services";
 import ProviderBadge from "../components/ProviderBadge.vue";
+import { TRIGGER_TYPES } from "../util/triggerTypes";
 import type { AuthKind, GitLabTokenScope, UpdateService } from "../types/api";
 
 const props = defineProps<{ id: string }>();
 const store = useServicesStore();
+const models = useModelsStore();
 const router = useRouter();
 
 const draft = ref<UpdateService>({});
+// trigger_type -> model id; "" means unmapped and is dropped on submit.
+const triggerModels = ref<Record<string, string>>({});
 const tokenDraft = ref("");
 const webhookSecretDraft = ref("");
 const appIdDraft = ref("");
@@ -54,6 +59,7 @@ async function reload() {
       trigger_mode: store.detail.trigger_mode,
       trigger_label: store.detail.trigger_label,
     };
+    triggerModels.value = { ...store.detail.models };
     authKindDraft.value = store.detail.auth_kind;
     tokenDraft.value = "";
     webhookSecretDraft.value = "";
@@ -62,7 +68,10 @@ async function reload() {
   }
 }
 
-onMounted(reload);
+onMounted(() => {
+  reload();
+  models.refresh();
+});
 watch(() => props.id, reload);
 
 const fullWebhookUrl = computed(() => {
@@ -85,7 +94,7 @@ async function save() {
   saving.value = true;
   error.value = null;
   try {
-    const body: UpdateService = { ...draft.value };
+    const body: UpdateService = { ...draft.value, models: collectModels() };
     if (tokenDraft.value) body.token = tokenDraft.value;
     if (webhookSecretDraft.value) body.webhook_secret = webhookSecretDraft.value;
     if (isGithub.value) body.auth_kind = authKindDraft.value;
@@ -112,6 +121,15 @@ async function save() {
   } finally {
     saving.value = false;
   }
+}
+
+// Drop unset entries so the map only carries real trigger_type -> model id pairs.
+function collectModels(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(triggerModels.value)) {
+    if (v) out[k] = v;
+  }
+  return out;
 }
 
 async function installApp() {
@@ -394,6 +412,23 @@ function extractMessage(e: unknown): string {
             Issues with this label trigger the agent — works for GitHub App identities, which can't
             be assignees.
           </p>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Models per task type</label>
+          <p class="mb-2 text-xs text-muted">
+            Pick a model per trigger type. Unset types fall back to the global default.
+          </p>
+          <div class="grid grid-cols-2 gap-3">
+            <div v-for="t in TRIGGER_TYPES" :key="t.value">
+              <label class="label">{{ t.label }}</label>
+              <select v-model="triggerModels[t.value]" class="select">
+                <option value="">— none —</option>
+                <option v-for="m in models.options" :key="m.value" :value="m.value">
+                  {{ m.label }}
+                </option>
+              </select>
+            </div>
+          </div>
         </div>
         <div class="col-span-2">
           <label class="flex items-center gap-2">
