@@ -25,7 +25,7 @@ acts as itself when it comments and pushes.
 
 ## What is already prepared (#15)
 
-- **Schema** (`git_services`, migration `…_000018_add_git_service_app_auth`):
+- **Schema** (`service` table, migration `…_000018_add_git_service_app_auth`):
   the credential is a **type + value** pair — `auth_kind TEXT NOT NULL DEFAULT
   'pat'` (type) and `app_credentials JSONB NULL` (value, the provider-specific
   secret bundle). One JSON column instead of a flat union of every provider's
@@ -33,7 +33,7 @@ acts as itself when it comments and pushes.
   rows keep working unchanged (`pat`).
 - **Model** (`git_service::store`): `AuthKind { Pat, App }`, the typed
   `GitHubAppConfig` shape for the GitHub JSON, and
-  `GitService::credentials() -> ServiceCredentials` which parses+validates
+  `Service::credentials() -> ServiceCredentials` which parses+validates
   `app_credentials` against the service's provider.
 - **`ServiceCredentials`** enum: `Pat(String)`, `GitHubApp(GitHubAppConfig)`.
 - **The seam** (`provider::credentials::resolve_token`): the *single* place that
@@ -100,7 +100,7 @@ it at `https://ghes.example.com/api/v3`.
 - HTTPS clone/push already works unchanged: token-HTTPS transport (#22) auths
   GitHub as `x-access-token:<token>`, and an installation token slots straight
   in.
-- The **install flow**: `GET /api/git_services/{id}/github_app/install` resolves
+- The **install flow**: `GET /api/services/{id}/github_app/install` resolves
   the App's install URL (`GET /app` → `html_url`, with the service id as
   `state`); `GET /github_app/callback` captures `installation_id` back into
   `app_credentials`. App-auth services **skip** per-repo `ensure_webhook` in
@@ -115,7 +115,26 @@ default `assignee` trigger mode never fires for an App service. Set the service'
 `trigger_mode` to `label` (or `both`) with a `trigger_label` (e.g. `agent`): the
 App then fires whenever an issue carries that label, which an operator or
 automation can add. See the trigger-mode note in
-[`docs/architecture.md`](architecture.md) (`git_services` config).
+[`docs/architecture.md`](architecture.md) (`service` config).
+
+### Subscribe the App to events (required, not API-settable)
+The app-level webhook only delivers events the App is **subscribed to**, and that
+subscription is part of the App *definition* — it is **not** settable through the
+API. `POST /api/services/{id}/github_app/sync` registers the webhook **URL +
+secret** (`PATCH /app/hook/config`) but **cannot** add event subscriptions. A
+freshly created App has `events: []`, so it delivers only App-lifecycle events
+(`installation`, `installation_repositories`) and **never** `issues` /
+`issue_comment` — the webhook looks correctly registered (deliveries even return
+`200`) yet no task is ever created.
+
+Fix it once, in the App's own settings (**Permissions & events → Subscribe to
+events**): tick **Issues** (plus **Issue comment** and **Pull request** /
+**Pull request review** as needed) and save. Verify via the App's **Advanced →
+Recent Deliveries**, or `GET /app` (its `events` array should be non-empty).
+Permissions (`issues: write`) are separate from — and not a substitute for — the
+event subscription. The agent logs each inbound delivery with its source
+(`target=integration` for the app-level webhook, `target=repository` for a repo
+hook) so a missing-subscription App is obvious: no `received` line ever appears.
 
 ## GitLab bot identity (#10)
 
@@ -157,7 +176,7 @@ glab token create --group my-group \
 ```
 
 Store the printed token as the service's `token` with `auth_kind = 'pat'` (via
-`POST /api/git_services` or the SPA). The `bot_username` is the generated
+`POST /api/services` or the SPA). The `bot_username` is the generated
 `group_NNN_bot_agent-bot` handle — used only for display; the loop guard is the
 `BOT_NOTE_MARKER` on every posted note, not actor comparison.
 

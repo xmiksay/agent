@@ -45,7 +45,11 @@ pub async fn handle(
         GitLabEvent::MergeRequest(_) => "merge_request",
         GitLabEvent::Note(_) => "note",
     };
-    info!(slug = %slug, event = %event_name, "gitlab webhook received");
+    let delivery = headers
+        .get("X-Gitlab-Event-UUID")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-");
+    info!(slug = %slug, event = %event_name, delivery = %delivery, "gitlab webhook received");
 
     let expected = service.webhook_secret.as_bytes();
     let actual = headers
@@ -54,7 +58,7 @@ pub async fn handle(
         .unwrap_or("")
         .as_bytes();
     if expected.ct_eq(actual).unwrap_u8() != 1 {
-        warn!(slug = %slug, event = %event_name, "gitlab webhook REJECTED: X-Gitlab-Token mismatch (webhook secret differs from the service's)");
+        warn!(slug = %slug, event = %event_name, delivery = %delivery, "gitlab webhook REJECTED: X-Gitlab-Token mismatch (webhook secret differs from the service's)");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
