@@ -180,15 +180,45 @@ Store the printed token as the service's `token` with `auth_kind = 'pat'` (via
 `group_NNN_bot_agent-bot` handle — used only for display; the loop guard is the
 `BOT_NOTE_MARKER` on every posted note, not actor comparison.
 
-### Rotation
-The token expires within a year, so it must be rotated. Two options:
+#### Provisioning from the agent UI (no CLI)
 
+The agent can mint the bot token itself, so you never have to run `glab`:
+
+1. Create the GitLab service with an **owner-scoped bootstrap token** (your own
+   PAT, or any token with **Owner** on the group / **Maintainer+** on the
+   project) as `token`, `auth_kind = 'pat'`.
+2. On the service page, in **Bot access token**, pick the scope (group/project),
+   the namespace path-or-id, an optional name/expiry, and click **Provision** —
+   `POST /api/services/{id}/gitlab_token/provision`. The agent calls
+   `POST /api/v4/{groups|projects}/{ns}/access_tokens` with the bootstrap token,
+   minting a dedicated token (scopes `api` + `write_repository`, access level 40
+   = Maintainer), then **replaces** the service `token` with the minted value.
+   The owner token is used only for this one call and is not retained.
+
+Non-secret rotation metadata (`{ scope, namespace, token_id, expires_at }`) is
+persisted in the service's `app_credentials` bundle (the same JSONB GitHub Apps
+use for their config) and surfaced read-only on the service view as
+`gitlab_token`. The minted secret itself is never returned, exactly like a pasted
+`token`.
+
+> **Group tokens cover running + push.** A Group Access Token with `api` +
+> `write_repository` is all the agent needs: `api` drives notes/MRs/webhook
+> registration/self-rotation, `write_repository` authorizes git push over
+> token-HTTPS (#22, `https://oauth2:<token>@…`). `write_repository` implies read,
+> so `read_repository` is redundant; `read_api`/`read_user`/`ai_features` are
+> unused. The bot's role must be **Maintainer** to push protected branches and
+> register hooks — which is what the provisioner sets.
+
+### Rotation
+The token expires within a year, so it must be rotated. Options:
+
+- **In-app (wired):** the **Rotate** button on the service page —
+  `POST /api/services/{id}/gitlab_token/rotate` — calls
+  `POST {base_url}/api/v4/{groups|projects}/{ns}/access_tokens/{token_id}/rotate`
+  authenticated with the **current bot token** (its `api` scope authorizes
+  self-rotation), then persists the new value + expiry. Needs a token first
+  provisioned through the flow above (so `token_id`/`namespace` are known).
 - **Manual:** mint a fresh token before expiry and PATCH the service `token`.
-- **Automated:** the access-tokens API can rotate in place —
-  `POST {base_url}/api/v4/groups/{id}/access_tokens/{token_id}/rotate` (or the
-  `/projects/...` equivalent) revokes the old token and returns a new one with a
-  fresh expiry; persist the new value back to the service `token`. Not wired
-  today — documented for when unattended rotation is needed.
 
 ### Actor confirmation (end to end)
 - **Notes / MRs:** posted via `GitLabClient` with the bot token → authored by the

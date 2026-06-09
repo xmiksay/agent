@@ -1,6 +1,7 @@
 import { api } from "./client";
 import type {
   GitHubAppSyncResult,
+  ProvisionGitLabToken,
   ServiceView,
   NewService,
   UpdateService,
@@ -27,5 +28,17 @@ export const servicesApi = {
   },
   githubAppSync(id: string): Promise<GitHubAppSyncResult> {
     return api(`/api/services/${id}/github_app/sync`, { method: "POST" });
+  },
+  provisionGitlabToken(
+    id: string,
+    body: ProvisionGitLabToken,
+  ): Promise<ServiceView> {
+    return api(`/api/services/${id}/gitlab_token/provision`, {
+      method: "POST",
+      body,
+    });
+  },
+  rotateGitlabToken(id: string): Promise<ServiceView> {
+    return api(`/api/services/${id}/gitlab_token/rotate`, { method: "POST" });
   },
 };

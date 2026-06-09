@@ -138,6 +138,14 @@ async fn main() -> anyhow::Result<()> {
             post(api::services::github_app_sync),
         )
         .route(
+            "/api/services/{id}/gitlab_token/provision",
+            post(api::gitlab_token::provision),
+        )
+        .route(
+            "/api/services/{id}/gitlab_token/rotate",
+            post(api::gitlab_token::rotate),
+        )
+        .route(
             "/api/auth_requests",
             get(api::auth_requests::list_auth_requests),
         )
