@@ -42,11 +42,14 @@ pub async fn handle(
         .unwrap_or("")
         .to_string();
     let action = parse_action(&body);
-    info!(slug = %slug, event = %event_type, action = %action, "github webhook received");
+    let (hook_id, delivery, target) = source_headers(&headers);
+    info!(slug = %slug, event = %event_type, action = %action, hook_id = %hook_id, delivery = %delivery, target = %target, "github webhook received");
 
     if verify_signature(&service.webhook_secret, &headers, &body).is_err() {
-        // No secrets in the log — just the fact and the likely cause.
-        warn!(slug = %slug, event = %event_type, "github webhook REJECTED: X-Hub-Signature-256 mismatch (webhook secret differs from the service's)");
+        // No secrets in the log — just the fact, the source, and the likely cause.
+        // `target=integration` is the App's app-level webhook; `target=repository`
+        // is a repo hook — so a mismatch points at exactly which one to re-secret.
+        warn!(slug = %slug, event = %event_type, hook_id = %hook_id, target = %target, "github webhook REJECTED: X-Hub-Signature-256 mismatch (webhook secret differs from the service's)");
         return Err(StatusCode::UNAUTHORIZED);
     }
     if event_type.is_empty() {
@@ -72,6 +75,24 @@ pub async fn handle(
     info!(slug = %slug, event = %event_type, action = %action, tasks = task_ids.len(), "github webhook handled");
 
     Ok((StatusCode::CREATED, Json(WebhookResponse { task_ids })))
+}
+
+/// GitHub delivery-identifying headers for logging — lets a log line tell a
+/// repo-level hook (`target=repository`) apart from an App's app-level webhook
+/// (`target=integration`) when both deliver to the same URL. No secrets here.
+fn source_headers(headers: &HeaderMap) -> (String, String, String) {
+    let h = |k: &str| {
+        headers
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+            .to_string()
+    };
+    (
+        h("X-GitHub-Hook-ID"),
+        h("X-GitHub-Delivery"),
+        h("X-GitHub-Hook-Installation-Target-Type"),
+    )
 }
 
 /// Best-effort `action` field for logging (`opened`, `labeled`, …); `-` if absent.
