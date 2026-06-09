@@ -37,6 +37,7 @@ function blank(): NewModel {
     cache_read_price: 0,
     thinking: false,
     is_default: false,
+    unbound: false,
   };
 }
 
@@ -148,6 +149,19 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div class="rounded-md border border-signal-danger/60 bg-signal-danger/5 p-3">
+        <label class="flex items-start gap-2">
+          <input v-model="form.unbound" type="checkbox" class="mt-0.5 h-4 w-4 accent-signal-danger" />
+          <span>
+            <span class="block text-sm font-bold text-signal-danger">⚠ Unbound (dangerous)</span>
+            <span class="mt-0.5 block text-xs text-muted">
+              Runs every command — including arbitrary shell — with no approval.
+              Only enable for fully trusted, sandboxed setups.
+            </span>
+          </span>
+        </label>
+      </div>
+
       <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>
 
       <div class="flex gap-2">
@@ -191,7 +205,16 @@ onMounted(async () => {
             <td class="text-right font-mono text-xs text-muted">${{ m.input_price }}</td>
             <td class="text-right font-mono text-xs text-muted">${{ m.output_price }}</td>
             <td>
-              <span v-if="m.is_default" class="pill bg-signal-ok/15 text-signal-ok">default</span>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span v-if="m.is_default" class="pill bg-signal-ok/15 text-signal-ok">default</span>
+                <span
+                  v-if="m.unbound"
+                  class="pill border-signal-danger bg-signal-danger/15 font-bold text-signal-danger"
+                  title="Runs every command with no approval"
+                >
+                  ⚠ UNBOUND
+                </span>
+              </div>
             </td>
             <td class="text-right">
               <button

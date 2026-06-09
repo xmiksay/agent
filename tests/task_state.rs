@@ -361,6 +361,7 @@ async fn task_inherits_service_trigger_model_then_global_default() {
         thinking: false,
         effort: None,
         is_default,
+        unbound: false,
     };
     let issue_model = models
         .create(new_model("opus", "Opus", false))

@@ -32,6 +32,7 @@ async function reload() {
       cache_read_price: store.detail.cache_read_price,
       thinking: store.detail.thinking,
       is_default: store.detail.is_default,
+      unbound: store.detail.unbound,
     };
     effort.value = store.detail.effort ?? "";
   }
@@ -82,6 +83,13 @@ function extractMessage(e: unknown): string {
       <h1 class="font-display text-2xl font-bold tracking-tight">{{ detail.alias }}</h1>
       <span class="font-mono text-sm text-faint">{{ detail.model_id }}</span>
       <span v-if="detail.is_default" class="pill bg-signal-ok/15 text-signal-ok">default</span>
+      <span
+        v-if="detail.unbound"
+        class="pill border-signal-danger bg-signal-danger/15 font-bold text-signal-danger"
+        title="Runs every command with no approval"
+      >
+        ⚠ UNBOUND
+      </span>
       <button class="btn btn-danger btn-sm ml-auto" @click="remove">Delete model</button>
     </header>
 
@@ -139,6 +147,19 @@ function extractMessage(e: unknown): string {
             <span class="text-sm text-ink">Global default model</span>
           </label>
         </div>
+      </div>
+
+      <div class="rounded-md border border-signal-danger/60 bg-signal-danger/5 p-3">
+        <label class="flex items-start gap-2">
+          <input v-model="draft.unbound" type="checkbox" class="mt-0.5 h-4 w-4 accent-signal-danger" />
+          <span>
+            <span class="block text-sm font-bold text-signal-danger">⚠ Unbound (dangerous)</span>
+            <span class="mt-0.5 block text-xs text-muted">
+              Runs every command — including arbitrary shell — with no approval.
+              Only enable for fully trusted, sandboxed setups.
+            </span>
+          </span>
+        </label>
       </div>
 
       <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>

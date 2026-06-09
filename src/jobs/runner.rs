@@ -120,7 +120,13 @@ pub async fn run_job(
     };
     info!(%prompt, program = backend.program(), model = ?model_arg, "running agent");
 
-    let agent_args = backend.build_args(resume_session_id.as_deref(), model_arg.as_deref());
+    // DANGEROUS when set: an `unbound` model runs with no permission gating.
+    let unbound = model.as_ref().is_some_and(|m| m.unbound);
+    if unbound {
+        warn!(%task_id, model = ?model_arg, "running UNBOUND: all tool calls allowed without approval");
+    }
+    let agent_args =
+        backend.build_args(resume_session_id.as_deref(), model_arg.as_deref(), unbound);
 
     // `gh`/`glab` and the agent's own `git push` inside the worktree authenticate
     // against the same token (already resolved above for git transport).

@@ -8,9 +8,15 @@ export const useModelsStore = defineStore("models", () => {
   const detail = ref<AiModel | null>(null);
   const loading = ref(false);
 
-  // { value: id, label: alias } pairs for binding into <select> menus.
+  // { value: id, label: alias } pairs for binding into <select> menus. Unbound
+  // (dangerous) models get a ⚠ … (unbound) label so the foot-gun is visible in
+  // every dropdown; `unbound` is exposed too for richer rendering.
   const options = computed(() =>
-    list.value.map((m) => ({ value: m.id, label: m.alias })),
+    list.value.map((m) => ({
+      value: m.id,
+      label: m.unbound ? `⚠ ${m.alias} (unbound)` : m.alias,
+      unbound: m.unbound,
+    })),
   );
 
   async function refresh() {

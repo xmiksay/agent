@@ -14,7 +14,7 @@ import { useTaskDetail } from "../composables/useTaskDetail";
 const props = defineProps<{ id: string }>();
 
 const {
-  store, models, modelLabel, busy, pendingApprovals, eventText, eventCount, hasEvents, taskNotifications, wsConnected, tokensSpent,
+  store, models, modelLabel, modelUnbound, busy, pendingApprovals, eventText, eventCount, hasEvents, taskNotifications, wsConnected, tokensSpent,
   isLive, isRunning, isPending, canRetry, canContinue, canKill, canChat,
   onApprovalResolved, diffText, diffError, diffLoading, loadDiff,
   editing, editBranch, editTitle, editDescription, editTaskState,
@@ -63,6 +63,15 @@ watch(pendingApprovals, (p) => {
 
 <template>
   <section v-if="store.detail" class="space-y-4">
+    <!-- Unbound model: prominent danger banner — this task runs every command
+         with no operator approval. -->
+    <div
+      v-if="modelUnbound"
+      class="rounded-md border border-signal-danger bg-signal-danger/15 px-4 py-3 text-sm font-bold text-signal-danger"
+    >
+      ⚠ This task runs an UNBOUND model: all commands run without approval.
+    </div>
+
     <!-- Header: identity, status, link to origin, and the primary controls. -->
     <header class="card space-y-3 p-5">
       <div class="flex flex-wrap items-center gap-3">

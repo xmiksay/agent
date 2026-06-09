@@ -25,6 +25,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub effort: Option<String>,
     pub is_default: bool,
+    /// **Dangerous.** When true, the agent runs with
+    /// `--dangerously-skip-permissions`: all tool calls (incl. arbitrary Bash)
+    /// run with no allowlist check and no operator approval.
+    pub unbound: bool,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

@@ -35,6 +35,10 @@ pub struct AiModel {
     pub effort: Option<String>,
     /// The single global fallback model (used when neither task nor service picks one).
     pub is_default: bool,
+    /// **Dangerous.** When true, a task running this model is given
+    /// `--dangerously-skip-permissions` — every tool call (incl. arbitrary Bash)
+    /// runs with no allowlist check and no operator approval. The UI must flag it.
+    pub unbound: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -53,6 +57,7 @@ impl AiModel {
             thinking: m.thinking,
             effort: m.effort,
             is_default: m.is_default,
+            unbound: m.unbound,
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
         }
@@ -68,6 +73,8 @@ pub struct ResolvedModel {
     pub alias: String,
     pub provider_kind: String,
     pub api_key: Option<String>,
+    /// **Dangerous.** Drives `--dangerously-skip-permissions` in the runner.
+    pub unbound: bool,
 }
 
 impl ResolvedModel {
@@ -77,6 +84,7 @@ impl ResolvedModel {
             alias: m.alias,
             provider_kind: p.kind,
             api_key: p.api_key,
+            unbound: m.unbound,
         }
     }
 }
@@ -100,6 +108,9 @@ pub struct NewModel {
     pub effort: Option<String>,
     #[serde(default)]
     pub is_default: bool,
+    /// **Dangerous** — see `AiModel::unbound`.
+    #[serde(default)]
+    pub unbound: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -116,6 +127,8 @@ pub struct UpdateModel {
     #[serde(default, deserialize_with = "crate::service::store::double_option")]
     pub effort: Option<Option<String>>,
     pub is_default: Option<bool>,
+    /// **Dangerous** — see `AiModel::unbound`.
+    pub unbound: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -199,6 +212,7 @@ impl ModelStore {
             thinking: Set(new.thinking),
             effort: Set(normalize_effort(new.effort)),
             is_default: Set(new.is_default),
+            unbound: Set(new.unbound),
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
         };
@@ -259,6 +273,9 @@ impl ModelStore {
         }
         if let Some(v) = upd.is_default {
             active.is_default = Set(v);
+        }
+        if let Some(v) = upd.unbound {
+            active.unbound = Set(v);
         }
         active.updated_at = Set(Utc::now().into());
         active.update(&self.db).await?;
