@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::entity::{task_sessions, tasks};
 use crate::jobs::store::TaskStore;
+use crate::jobs::types::TriggerReason;
 
 impl TaskStore {
     /// Diff the task's working tree against `origin/<default_branch>`.
@@ -127,6 +128,35 @@ impl TaskStore {
             .await
             .context("looking up resumable task for branch")?;
         Ok(row.map(|t| t.id))
+    }
+
+    /// The existing task tracking issue `issue_iid` on this project, if any —
+    /// the dedup anchor (issue #35) so an edited/re-fired issue webhook refreshes
+    /// its task instead of spawning a duplicate. Matches the iid carried in
+    /// `trigger_data` (no dedicated column) and returns the most recent. At
+    /// single-operator scale the issue-task set per project is small, so the
+    /// match runs in-memory rather than as a JSON SQL predicate.
+    pub async fn find_issue_task(
+        &self,
+        project_id: Uuid,
+        issue_iid: u64,
+    ) -> Result<Option<tasks::Model>> {
+        let rows = tasks::Entity::find()
+            .filter(tasks::Column::ProjectId.eq(project_id))
+            .filter(tasks::Column::TriggerType.eq("issue"))
+            .order_by_desc(tasks::Column::CreatedAt)
+            .all(self.db())
+            .await
+            .context("looking up existing issue task")?;
+        for row in rows {
+            if let Ok(TriggerReason::Issue { iid, .. }) =
+                serde_json::from_value::<TriggerReason>(row.trigger_data.clone())
+                && iid == issue_iid
+            {
+                return Ok(Some(row));
+            }
+        }
+        Ok(None)
     }
 
     /// Persisted hub-frame history from `events`, ordered by `seq`. Carries

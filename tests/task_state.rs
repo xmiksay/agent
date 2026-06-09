@@ -227,6 +227,55 @@ async fn patch_validation_and_branch_gate() {
 }
 
 #[tokio::test]
+async fn issue_task_dedup_and_description_update() {
+    let Some((db, name, admin)) = fresh_db().await else {
+        return;
+    };
+    let store = build_store(&db);
+    let project_id = seed_project(&db).await;
+
+    let id = new_task(&store, project_id, 7).await;
+
+    // The issue's task is found by iid (the dedup anchor); an untracked issue
+    // returns nothing, so dispatch falls through to creating a fresh task.
+    let found = store.find_issue_task(project_id, 7).await.unwrap();
+    assert_eq!(found.map(|t| t.id), Some(id));
+    assert!(
+        store
+            .find_issue_task(project_id, 8)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // An edited issue webhook rewrites the stored title + description in place
+    // instead of creating a second task.
+    store
+        .update_issue_description(id, "new title", "new body")
+        .await
+        .expect("update issue description");
+
+    let (t, _) = store.get_task(id).await.unwrap().unwrap();
+    match serde_json::from_value::<TriggerReason>(t.trigger_data).unwrap() {
+        TriggerReason::Issue {
+            iid,
+            title,
+            description,
+            ..
+        } => {
+            assert_eq!(iid, 7);
+            assert_eq!(title, "new title");
+            assert_eq!(description, "new body");
+        }
+        other => panic!("expected issue trigger, got {other:?}"),
+    }
+
+    drop(store);
+    drop(db);
+    drop_db(&admin, &name).await;
+}
+
+#[tokio::test]
 async fn list_filters_by_task_state() {
     let Some((db, name, admin)) = fresh_db().await else {
         return;

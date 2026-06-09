@@ -122,6 +122,27 @@ pub async fn dispatch(
         return Ok(vec![]);
     }
 
+    // Issue dedup (issue #35): one task per issue. If a task already tracks this
+    // issue, refresh its stored description rather than spawning a duplicate —
+    // editing the issue updates the existing work instead of forking it. (A
+    // distinct edit clears the event_id dedupe above because that key hashes the
+    // title+description; an identical re-fire is already dropped there.)
+    if let TriggerReason::Issue {
+        iid,
+        title,
+        description,
+        ..
+    } = &trigger
+        && let Some(existing) = state.task_store.find_issue_task(project.id, *iid).await?
+    {
+        state
+            .task_store
+            .update_issue_description(existing.id, title, description)
+            .await?;
+        info!(task_id = %existing.id, iid, "issue already tracked; updated description instead of creating a task");
+        return Ok(vec![existing.id]);
+    }
+
     let id = state.task_store.create_task(trigger, project.id).await?;
     info!(%id, project = %ev.project.full_name, autofire = service.autofire, "task created from webhook");
 
