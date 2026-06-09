@@ -5,6 +5,10 @@
 use anyhow::{Context, Result};
 use minijinja::Environment;
 use serde::Serialize;
+use tracing::warn;
+use uuid::Uuid;
+
+use crate::project::store::ProjectStore;
 
 /// Runtime values exposed to the `.env` template as `{{ branch }}` etc.
 #[derive(Debug, Serialize)]
@@ -57,6 +61,24 @@ pub fn parse_env_file(text: &str) -> Vec<(String, String)> {
             Some((key.to_string(), value.to_string()))
         })
         .collect()
+}
+
+impl ProjectStore {
+    /// Render a project's `env_file` template into spawn `(key, value)` pairs. A
+    /// missing project or a malformed template yields an empty set (the error is
+    /// logged), so a bad env never blocks the run.
+    pub async fn spawn_env(&self, project_id: Uuid, ctx: &EnvContext) -> Vec<(String, String)> {
+        let Ok(Some(pc)) = self.get_project_by_id(project_id).await else {
+            return Vec::new();
+        };
+        match build_env_vars(&pc.env_file, ctx) {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                warn!(%project_id, error = %e, "skipping project env: template error");
+                Vec::new()
+            }
+        }
+    }
 }
 
 #[cfg(test)]

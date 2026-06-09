@@ -22,6 +22,7 @@ mod m20260608_000019_drop_one_github_index;
 mod m20260608_000020_add_git_service_trigger;
 mod m20260609_000021_rename_git_services_to_service;
 mod m20260609_000022_normalize_tasks_and_runs;
+mod m20260609_000023_create_models;
 
 pub struct Migrator;
 
@@ -51,6 +52,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260608_000020_add_git_service_trigger::Migration),
             Box::new(m20260609_000021_rename_git_services_to_service::Migration),
             Box::new(m20260609_000022_normalize_tasks_and_runs::Migration),
+            Box::new(m20260609_000023_create_models::Migration),
         ]
     }
 }

@@ -34,6 +34,11 @@ pub struct Model {
     pub pid: Option<i64>,
     #[sea_orm(column_type = "Text", nullable)]
     pub pending_message: Option<String>,
+    /// The catalog model this task runs (FK → `models`, `SET NULL` on delete).
+    /// Seeded at creation from the owning service's default; the operator may
+    /// override it while the task is pending. `None` resolves to the service
+    /// default, then the global default, at run time.
+    pub model_id: Option<Uuid>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

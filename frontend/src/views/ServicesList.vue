@@ -2,10 +2,13 @@
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useServicesStore } from "../stores/services";
+import { useModelsStore } from "../stores/models";
 import ProviderBadge from "../components/ProviderBadge.vue";
+import { TRIGGER_TYPES } from "../util/triggerTypes";
 import type { NewService, ProviderKind } from "../types/api";
 
 const store = useServicesStore();
+const models = useModelsStore();
 const router = useRouter();
 
 function open(id: string) {
@@ -14,6 +17,8 @@ function open(id: string) {
 
 const showForm = ref(false);
 const form = ref<NewService>(blank());
+// trigger_type -> model id; "" means unmapped and is dropped on submit.
+const triggerModels = ref<Record<string, string>>({});
 const appId = ref("");
 const privateKey = ref("");
 const saving = ref(false);
@@ -36,6 +41,15 @@ function blank(): NewService {
   };
 }
 
+// Drop unset entries so the map only carries real trigger_type -> model id pairs.
+function collectModels(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(triggerModels.value)) {
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
 // App auth is a GitHub-only flow today; force PAT for GitLab.
 const isApp = computed(() => form.value.kind === "github" && form.value.auth_kind === "app");
 
@@ -55,7 +69,7 @@ async function submit() {
   saving.value = true;
   error.value = null;
   try {
-    const body: NewService = { ...form.value };
+    const body: NewService = { ...form.value, models: collectModels() };
     if (isApp.value) {
       // App services authenticate via app_credentials; installation_id is
       // captured later by the install flow, so it's omitted here.
@@ -67,6 +81,7 @@ async function submit() {
     const created = await store.create(body);
     generatedSecret.value = created.generated_webhook_secret ?? null;
     form.value = blank();
+    triggerModels.value = {};
     appId.value = "";
     privateKey.value = "";
     showForm.value = false;
@@ -103,7 +118,10 @@ function webhookHelp(kind: ProviderKind) {
     : "Configure as a Webhook in GitLab: secret token = the webhook_secret, triggers: Issues / Merge requests / Comments.";
 }
 
-onMounted(() => store.refresh());
+onMounted(() => {
+  store.refresh();
+  models.refresh();
+});
 </script>
 
 <template>
@@ -220,6 +238,23 @@ onMounted(() => store.refresh());
             be assignees.
           </span>
         </label>
+        <div class="col-span-2">
+          <span class="label">Models per task type</span>
+          <p class="mb-2 text-xs text-muted">
+            Pick a model per trigger type. Unset types fall back to the global default.
+          </p>
+          <div class="grid grid-cols-2 gap-3">
+            <label v-for="t in TRIGGER_TYPES" :key="t.value" class="flex flex-col">
+              <span class="label">{{ t.label }}</span>
+              <select v-model="triggerModels[t.value]" class="select">
+                <option value="">— none —</option>
+                <option v-for="m in models.options" :key="m.value" :value="m.value">
+                  {{ m.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+        </div>
         <label class="col-span-2 flex items-center gap-2">
           <input v-model="form.autofire" type="checkbox" class="h-4 w-4" />
           <span class="text-sm text-ink">Autofire (run new tasks immediately)</span>

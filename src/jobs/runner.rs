@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
-use crate::agent::{AgentBackend, ClaudeCode};
+use crate::agent::resolve_backend;
 use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
@@ -17,9 +17,8 @@ use crate::jobs::prompt::build_prompt;
 use crate::jobs::store::TaskStore;
 use crate::jobs::stream::{Stream, pump_stream};
 use crate::jobs::types::TriggerReason;
-use crate::project::{
-    BranchStatus, EnvContext, NewBranchEntry, ProjectStore, ProviderKind, build_env_vars,
-};
+use crate::models::ResolvedModel;
+use crate::project::{BranchStatus, EnvContext, NewBranchEntry, ProjectStore, ProviderKind};
 use crate::provider::{GitProvider, resolve_token};
 use crate::service::Service;
 use crate::workspace::Workspace;
@@ -47,6 +46,7 @@ pub async fn run_job(
     semaphore: Arc<Semaphore>,
     resume_session_id: Option<String>,
     prompt_override: Option<String>,
+    model: Option<ResolvedModel>,
 ) -> Result<()> {
     let project_slug = slugify(&project_path);
     // The branch is derived and persisted at task-creation time (TaskStore::
@@ -90,8 +90,9 @@ pub async fn run_job(
         .clone_or_fetch(&work_dir, &https_auth, &branch, &default_branch)
         .await?;
 
-    // Hardcoded to Claude Code for now; a future per-task config will choose.
-    let backend: Arc<dyn AgentBackend> = Arc::new(ClaudeCode);
+    // The selected model's provider picks the backend/CLI; `model_arg` is its
+    // `model_id` (None → default backend + the CLI's own default model).
+    let (backend, model_arg) = resolve_backend(model.as_ref())?;
 
     if let Some(pid) = project_id {
         let issue_iid = trigger.issue_iid().map(|v| v as i64);
@@ -117,9 +118,9 @@ pub async fn run_job(
         Some(p) if !p.trim().is_empty() => p,
         _ => build_prompt(&trigger, &branch, service.kind),
     };
-    info!(%prompt, program = backend.program(), "running agent");
+    info!(%prompt, program = backend.program(), model = ?model_arg, "running agent");
 
-    let agent_args = backend.build_args(resume_session_id.as_deref());
+    let agent_args = backend.build_args(resume_session_id.as_deref(), model_arg.as_deref());
 
     // `gh`/`glab` and the agent's own `git push` inside the worktree authenticate
     // against the same token (already resolved above for git transport).
@@ -127,9 +128,7 @@ pub async fn run_job(
     cmd.args(&agent_args).current_dir(&work_dir);
     // Project-configured env first, so reserved vars below always win. The stored
     // value is a minijinja template rendered against the task's runtime vars.
-    if let Some(pid) = project_id
-        && let Ok(Some(pc)) = project_store.get_project_by_id(pid).await
-    {
+    if let Some(pid) = project_id {
         let ctx = EnvContext {
             branch: branch.clone(),
             default_branch: default_branch.clone(),
@@ -138,16 +137,14 @@ pub async fn run_job(
             service: service.slug.clone(),
             task_id: task_id.to_string(),
         };
-        match build_env_vars(&pc.env_file, &ctx) {
-            Ok(pairs) => {
-                for (key, value) in pairs {
-                    cmd.env(key, value);
-                }
-            }
-            Err(e) => {
-                warn!(%task_id, project = %project_path, error = %e, "skipping project env: template error")
-            }
+        for (key, value) in project_store.spawn_env(pid, &ctx).await {
+            cmd.env(key, value);
         }
+    }
+    // Provider API key (API-mode) after project env so a project can't clobber it;
+    // absent, the CLI runs on its subscription login.
+    if let Some(key) = model.as_ref().and_then(|m| m.api_key.as_deref()) {
+        cmd.env(backend.api_key_env(), key);
     }
     let mut child = cmd
         .env(provider_token_var, &provider_token_value)

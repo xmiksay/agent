@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+/// Every `trigger_type()` value, in one place — the keys a service's per-type
+/// model mapping (`service_models`) is allowed to use.
+pub const TRIGGER_TYPES: [&str; 5] = [
+    "issue",
+    "review_mr",
+    "fix_review",
+    "mr_comment",
+    "issue_comment",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TriggerReason {

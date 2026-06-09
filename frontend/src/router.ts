@@ -30,6 +30,28 @@ export const router = createRouter({
       props: true,
     },
     {
+      path: "/models",
+      name: "models",
+      component: () => import("./views/ModelsList.vue"),
+    },
+    {
+      path: "/models/:id",
+      name: "model-detail",
+      component: () => import("./views/ModelDetail.vue"),
+      props: true,
+    },
+    {
+      path: "/model_providers",
+      name: "model-providers",
+      component: () => import("./views/ProvidersList.vue"),
+    },
+    {
+      path: "/model_providers/:id",
+      name: "model-provider-detail",
+      component: () => import("./views/ProviderDetail.vue"),
+      props: true,
+    },
+    {
       path: "/auth_requests",
       name: "auth-queue",
       component: () => import("./views/AuthRequestsQueue.vue"),

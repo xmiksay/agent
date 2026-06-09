@@ -368,6 +368,7 @@ mod tests {
             session_id: None,
             pid: None,
             pending_message: None,
+            model_id: None,
         };
         // ...but the derived overlay says "running".
         let view = TaskView {

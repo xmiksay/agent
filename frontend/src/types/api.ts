@@ -25,6 +25,8 @@ export interface Task {
   service_id: string | null;
   session_id: string | null;
   pid: number | null;
+  // The chosen catalog model for this task; null = use the global default.
+  model_id: string | null;
 }
 
 /** A lifecycle action applicable to many tasks at once. `run` confirms a
@@ -133,6 +135,9 @@ export interface ServiceView {
   trigger_mode: TriggerMode;
   // The label name watched when trigger_mode includes labels; "" otherwise.
   trigger_label: string;
+  // Per-trigger-type model mapping: trigger_type -> model id (uuid). {} when
+  // nothing mapped.
+  models: Record<string, string>;
   // Present only on a create/update response when the webhook secret was just
   // auto-generated (left blank). Revealed once; never returned by list/get.
   generated_webhook_secret?: string | null;
@@ -171,6 +176,9 @@ export interface NewService {
   app_credentials?: AppCredentials;
   trigger_mode?: TriggerMode;
   trigger_label?: string;
+  // Per-trigger-type model mapping. Sending it replaces the whole mapping;
+  // {} clears it.
+  models?: Record<string, string>;
 }
 
 export interface UpdateService {
@@ -184,6 +192,9 @@ export interface UpdateService {
   app_credentials?: AppCredentials;
   trigger_mode?: TriggerMode;
   trigger_label?: string;
+  // Per-trigger-type model mapping. Omit to leave unchanged; sending it replaces
+  // the whole mapping; {} clears it.
+  models?: Record<string, string>;
 }
 
 export interface BranchEntry {
@@ -270,6 +281,8 @@ export interface TaskEdits {
   task_state?: TaskState;
   title?: string;
   description?: string;
+  // null clears the per-task model override (back to the global default).
+  model_id?: string | null;
 }
 
 export type StatsGroupBy = "project" | "service" | "branch" | "trigger_type";
@@ -306,4 +319,82 @@ export interface AuthRequest {
   created_at: string;
   resolved_at: string | null;
   metadata?: AuthRequestMetadata | null;
+}
+
+// A model provider — a managed DB entity carrying an optional API key and a
+// `kind` drawn from the system-defined backend keys.
+export interface ModelProviderView {
+  id: string;
+  kind: string;
+  name: string;
+  // Indicates an API key is stored; the key itself is write-only.
+  has_api_key: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewModelProvider {
+  kind: string;
+  name: string;
+  api_key?: string;
+}
+
+export interface UpdateModelProvider {
+  kind?: string;
+  name?: string;
+  // Nullable patch: null clears the key, a string sets it, omit to leave it.
+  api_key?: string | null;
+}
+
+export interface ModelProvidersListResponse {
+  providers: ModelProviderView[];
+  // System-defined backend keys a provider's `kind` may be.
+  kinds: string[];
+}
+
+// Extended-thinking effort level; null disables it.
+export type ModelEffort = "low" | "medium" | "high";
+
+// A catalog entry for an AI model the agent can run.
+export interface AiModel {
+  id: string;
+  provider_id: string;
+  model_id: string;
+  alias: string;
+  input_price: number;
+  output_price: number;
+  cache_write_price: number;
+  cache_read_price: number;
+  thinking: boolean;
+  effort: ModelEffort | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewModel {
+  provider_id: string;
+  model_id: string;
+  alias: string;
+  input_price: number;
+  output_price: number;
+  cache_write_price: number;
+  cache_read_price: number;
+  thinking: boolean;
+  effort?: ModelEffort | null;
+  is_default: boolean;
+}
+
+export interface UpdateModel {
+  provider_id?: string;
+  model_id?: string;
+  alias?: string;
+  input_price?: number;
+  output_price?: number;
+  cache_write_price?: number;
+  cache_read_price?: number;
+  thinking?: boolean;
+  // null clears the effort; omit to leave unchanged.
+  effort?: ModelEffort | null;
+  is_default?: boolean;
 }

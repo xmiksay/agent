@@ -1,10 +1,40 @@
-use anyhow::Result;
+use std::sync::Arc;
+
+use anyhow::{Result, bail};
 
 use crate::jobs::types::ClaudeOutput;
+use crate::models::ResolvedModel;
 
 pub mod claude;
 
 pub use claude::ClaudeCode;
+
+/// Every system-defined provider `kind` that has a wired backend — the choices
+/// a provider row's `kind` may take. Keep in sync with `backend_for`.
+pub const KNOWN_PROVIDER_KINDS: [&str; 1] = ["claude_code"];
+
+/// Resolve a provider's system-defined `kind` to its agent backend. This is the
+/// seam the issue calls "provider resolved from model, run correct command": the
+/// model's provider row names a kind, and this picks the CLI that runs it. Only
+/// `claude_code` is wired today.
+pub fn backend_for(kind: &str) -> Result<Arc<dyn AgentBackend>> {
+    match kind {
+        "claude_code" => Ok(Arc::new(ClaudeCode)),
+        other => bail!("no agent backend for provider kind '{other}'"),
+    }
+}
+
+/// Resolve a selected catalog model into its backend plus the `model_id` arg the
+/// CLI is given. `None` (no model configured) → the default backend and no
+/// explicit model, so the CLI uses its own default.
+pub fn resolve_backend(
+    model: Option<&ResolvedModel>,
+) -> Result<(Arc<dyn AgentBackend>, Option<String>)> {
+    let kind = model
+        .map(|m| m.provider_kind.as_str())
+        .unwrap_or("claude_code");
+    Ok((backend_for(kind)?, model.map(|m| m.model_id.clone())))
+}
 
 /// A `can_use_tool` permission prompt parsed off the agent's stdout control
 /// protocol. `input` is the tool's verbatim input object (e.g. `{"command": …}`
@@ -41,11 +71,16 @@ pub trait AgentBackend: Send + Sync {
     /// so clients know which agent produced an event (e.g. `claude`).
     fn name(&self) -> &str;
 
+    /// Environment variable that carries the provider's API key when the provider
+    /// is configured to run in API mode (rather than on a subscription login).
+    fn api_key_env(&self) -> &str;
+
     /// Args for an interactive session: bidirectional stream-json plus an
-    /// optional resume session id. The initial prompt and any follow-up operator
-    /// messages are written to the process's stdin (see `encode_user_message`),
-    /// not passed as args.
-    fn build_args(&self, resume_session_id: Option<&str>) -> Vec<String>;
+    /// optional resume session id and an optional `model` (the catalog model's
+    /// `model_id`, passed to the CLI's model flag; `None` lets the CLI use its
+    /// own default). The initial prompt and any follow-up operator messages are
+    /// written to the process's stdin (see `encode_user_message`), not as args.
+    fn build_args(&self, resume_session_id: Option<&str>, model: Option<&str>) -> Vec<String>;
 
     /// Encode one operator message as a single stdin line in the backend's
     /// streaming-input format.
