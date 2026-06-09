@@ -368,6 +368,10 @@ export interface AiModel {
   thinking: boolean;
   effort: ModelEffort | null;
   is_default: boolean;
+  // DANGEROUS: a task on this model runs every tool call — including arbitrary
+  // shell — with no permission gating or operator approval
+  // (--dangerously-skip-permissions). Only for fully trusted, sandboxed setups.
+  unbound: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -383,6 +387,8 @@ export interface NewModel {
   thinking: boolean;
   effort?: ModelEffort | null;
   is_default: boolean;
+  // See AiModel.unbound. Defaults false server-side.
+  unbound?: boolean;
 }
 
 export interface UpdateModel {
@@ -397,4 +403,6 @@ export interface UpdateModel {
   // null clears the effort; omit to leave unchanged.
   effort?: ModelEffort | null;
   is_default?: boolean;
+  // See AiModel.unbound.
+  unbound?: boolean;
 }

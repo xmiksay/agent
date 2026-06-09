@@ -20,19 +20,18 @@ impl AgentBackend for ClaudeCode {
         "ANTHROPIC_API_KEY"
     }
 
-    fn build_args(&self, resume_session_id: Option<&str>, model: Option<&str>) -> Vec<String> {
+    fn build_args(
+        &self,
+        resume_session_id: Option<&str>,
+        model: Option<&str>,
+        unbound: bool,
+    ) -> Vec<String> {
         // Interactive headless session: stream-json on both ends keeps the
         // process alive, reading operator messages from stdin and emitting
         // newline-delimited JSON events on stdout. `--replay-user-messages`
         // echoes each stdin message back on stdout so it shows up in the live
         // timeline. Each turn ends with a `{"type":"result", ...}` event; the
         // process exits when stdin closes (EOF) — our graceful Stop.
-        //
-        // `--permission-mode default --permission-prompt-tool stdio` routes
-        // tool-permission prompts over the stream-json control protocol: the CLI
-        // emits a `control_request`/`can_use_tool` on stdout and waits for our
-        // `control_response` on stdin. That replaces the old PreToolUse hook —
-        // trivially-safe tools are auto-allowed, everything else prompts us.
         let mut args = vec!["--print".to_string()];
         if let Some(sid) = resume_session_id {
             args.push("-r".to_string());
@@ -52,13 +51,29 @@ impl AgentBackend for ClaudeCode {
                 "stream-json",
                 "--verbose",
                 "--replay-user-messages",
-                "--permission-mode",
-                "default",
-                "--permission-prompt-tool",
-                "stdio",
             ]
             .map(String::from),
         );
+        if unbound {
+            // DANGEROUS: skip all permission prompts — every tool call (incl.
+            // arbitrary Bash) runs unchecked. Opted into per model via `unbound`.
+            args.push("--dangerously-skip-permissions".to_string());
+        } else {
+            // `--permission-mode default --permission-prompt-tool stdio` routes
+            // tool-permission prompts over the stream-json control protocol: the
+            // CLI emits a `control_request`/`can_use_tool` on stdout and waits for
+            // our `control_response` on stdin — trivially-safe tools are
+            // auto-allowed, everything else prompts us.
+            args.extend(
+                [
+                    "--permission-mode",
+                    "default",
+                    "--permission-prompt-tool",
+                    "stdio",
+                ]
+                .map(String::from),
+            );
+        }
         args
     }
 
@@ -166,7 +181,7 @@ mod tests {
 
     #[test]
     fn build_args_without_resume_is_interactive_stream_json() {
-        let args = ClaudeCode.build_args(None, None);
+        let args = ClaudeCode.build_args(None, None, false);
         assert_eq!(
             args,
             vec![
@@ -187,7 +202,7 @@ mod tests {
 
     #[test]
     fn build_args_with_resume_inserts_flag_after_print() {
-        let args = ClaudeCode.build_args(Some("sess-123"), None);
+        let args = ClaudeCode.build_args(Some("sess-123"), None, false);
         assert_eq!(&args[..3], &["--print", "-r", "sess-123"]);
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"--input-format".to_string()));
@@ -198,7 +213,7 @@ mod tests {
 
     #[test]
     fn build_args_appends_model_when_set() {
-        let args = ClaudeCode.build_args(None, Some("claude-opus-4-8"));
+        let args = ClaudeCode.build_args(None, Some("claude-opus-4-8"), false);
         let i = args.iter().position(|a| a == "--model").expect("--model");
         assert_eq!(args[i + 1], "claude-opus-4-8");
         // Model flag sits after the resume slot, before the stream-json block.
@@ -209,14 +224,27 @@ mod tests {
     fn build_args_omits_model_when_blank() {
         assert!(
             !ClaudeCode
-                .build_args(None, Some("  "))
+                .build_args(None, Some("  "), false)
                 .contains(&"--model".to_string())
         );
         assert!(
             !ClaudeCode
-                .build_args(None, None)
+                .build_args(None, None, false)
                 .contains(&"--model".to_string())
         );
+    }
+
+    #[test]
+    fn build_args_unbound_skips_permission_gating() {
+        let args = ClaudeCode.build_args(None, None, true);
+        // Unbound swaps the permission-prompt flow for the dangerous skip flag.
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(!args.contains(&"--permission-prompt-tool".to_string()));
+        assert!(!args.contains(&"--permission-mode".to_string()));
+        // The gated path keeps the prompt tool and omits the dangerous flag.
+        let gated = ClaudeCode.build_args(None, None, false);
+        assert!(!gated.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(gated.contains(&"--permission-prompt-tool".to_string()));
     }
 
     #[test]

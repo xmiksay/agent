@@ -120,6 +120,14 @@ export function useTaskDetail(idRef: Ref<string>) {
     return models.list.find((m) => m.id === id)?.alias ?? id;
   });
 
+  // True when this task's resolved model runs with no permission gating — drives
+  // the prominent danger banner in the task header.
+  const modelUnbound = computed(() => {
+    const id = store.detail?.model_id;
+    if (!id) return false;
+    return models.list.find((m) => m.id === id)?.unbound ?? false;
+  });
+
   onMounted(setup);
   watch(idRef, setup);
 
@@ -307,6 +315,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     store,
     models,
     modelLabel,
+    modelUnbound,
     busy,
     pendingApprovals,
     eventText,

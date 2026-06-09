@@ -78,9 +78,16 @@ pub trait AgentBackend: Send + Sync {
     /// Args for an interactive session: bidirectional stream-json plus an
     /// optional resume session id and an optional `model` (the catalog model's
     /// `model_id`, passed to the CLI's model flag; `None` lets the CLI use its
-    /// own default). The initial prompt and any follow-up operator messages are
+    /// own default). When `unbound` is true the backend runs **without permission
+    /// gating** (every tool call allowed, no operator approval) — a dangerous mode
+    /// the model opts into. The initial prompt and follow-up operator messages are
     /// written to the process's stdin (see `encode_user_message`), not as args.
-    fn build_args(&self, resume_session_id: Option<&str>, model: Option<&str>) -> Vec<String>;
+    fn build_args(
+        &self,
+        resume_session_id: Option<&str>,
+        model: Option<&str>,
+        unbound: bool,
+    ) -> Vec<String>;
 
     /// Encode one operator message as a single stdin line in the backend's
     /// streaming-input format.
