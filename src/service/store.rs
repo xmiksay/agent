@@ -6,10 +6,10 @@ use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::entity::git_services;
+use crate::entity::service;
 use crate::project::ProviderKind;
 
-/// How a `git_service` authenticates against its provider.
+/// How a `service` authenticates against its provider.
 ///
 /// `Pat` covers both GitHub/GitLab personal access tokens and GitLab
 /// **Group/Project Access Tokens** (the agent's independent bot identity, #10) —
@@ -45,7 +45,7 @@ impl FromStr for AuthKind {
     }
 }
 
-/// How an issue event triggers the agent for a `git_service`.
+/// How an issue event triggers the agent for a `service`.
 ///
 /// `Assignee` (today's behavior, the default) fires when the bot is among the
 /// issue's assignees. `Label` fires when the issue carries `trigger_label` —
@@ -113,7 +113,7 @@ pub struct GitHubAppConfig {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct GitService {
+pub struct Service {
     pub id: Uuid,
     pub kind: ProviderKind,
     pub slug: String,
@@ -136,8 +136,8 @@ pub struct GitService {
     pub updated_at: DateTime<Utc>,
 }
 
-impl GitService {
-    fn from_model(m: git_services::Model) -> Result<Self> {
+impl Service {
+    fn from_model(m: service::Model) -> Result<Self> {
         Ok(Self {
             id: m.id,
             kind: m.kind.parse()?,
@@ -217,7 +217,7 @@ fn require_nonempty(value: &str, name: &str) -> Result<()> {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct NewGitService {
+pub struct NewService {
     pub kind: ProviderKind,
     pub slug: String,
     pub display_name: String,
@@ -240,7 +240,7 @@ pub struct NewGitService {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct UpdateGitService {
+pub struct UpdateService {
     pub display_name: Option<String>,
     pub base_url: Option<String>,
     pub token: Option<String>,
@@ -254,39 +254,39 @@ pub struct UpdateGitService {
 }
 
 #[derive(Clone)]
-pub struct GitServiceStore {
+pub struct ServiceStore {
     db: DatabaseConnection,
 }
 
-impl GitServiceStore {
+impl ServiceStore {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 
-    pub async fn list(&self) -> Result<Vec<GitService>> {
-        let rows = git_services::Entity::find()
-            .order_by_asc(git_services::Column::Kind)
-            .order_by_asc(git_services::Column::Slug)
+    pub async fn list(&self) -> Result<Vec<Service>> {
+        let rows = service::Entity::find()
+            .order_by_asc(service::Column::Kind)
+            .order_by_asc(service::Column::Slug)
             .all(&self.db)
             .await?;
-        rows.into_iter().map(GitService::from_model).collect()
+        rows.into_iter().map(Service::from_model).collect()
     }
 
-    pub async fn get(&self, id: Uuid) -> Result<Option<GitService>> {
-        let row = git_services::Entity::find_by_id(id).one(&self.db).await?;
-        row.map(GitService::from_model).transpose()
+    pub async fn get(&self, id: Uuid) -> Result<Option<Service>> {
+        let row = service::Entity::find_by_id(id).one(&self.db).await?;
+        row.map(Service::from_model).transpose()
     }
 
-    pub async fn get_by_slug(&self, kind: ProviderKind, slug: &str) -> Result<Option<GitService>> {
-        let row = git_services::Entity::find()
-            .filter(git_services::Column::Kind.eq(kind.as_str()))
-            .filter(git_services::Column::Slug.eq(slug))
+    pub async fn get_by_slug(&self, kind: ProviderKind, slug: &str) -> Result<Option<Service>> {
+        let row = service::Entity::find()
+            .filter(service::Column::Kind.eq(kind.as_str()))
+            .filter(service::Column::Slug.eq(slug))
             .one(&self.db)
             .await?;
-        row.map(GitService::from_model).transpose()
+        row.map(Service::from_model).transpose()
     }
 
-    pub async fn create(&self, new: NewGitService) -> Result<GitService> {
+    pub async fn create(&self, new: NewService) -> Result<Service> {
         validate_slug(&new.slug)?;
         // Reject an `app` service whose app_credentials are missing/malformed.
         build_credentials(
@@ -299,7 +299,7 @@ impl GitServiceStore {
 
         let now: DateTime<Utc> = Utc::now();
         let id = Uuid::new_v4();
-        let active = git_services::ActiveModel {
+        let active = service::ActiveModel {
             id: Set(id),
             kind: Set(new.kind.as_str().to_string()),
             slug: Set(new.slug),
@@ -316,21 +316,21 @@ impl GitServiceStore {
             created_at: Set(now.into()),
             updated_at: Set(now.into()),
         };
-        git_services::Entity::insert(active)
+        service::Entity::insert(active)
             .exec(&self.db)
             .await
-            .context("failed to insert git_service")?;
+            .context("failed to insert service")?;
 
         self.get(id)
             .await?
-            .ok_or_else(|| anyhow!("git_service disappeared after insert"))
+            .ok_or_else(|| anyhow!("service disappeared after insert"))
     }
 
-    pub async fn update(&self, id: Uuid, upd: UpdateGitService) -> Result<GitService> {
+    pub async fn update(&self, id: Uuid, upd: UpdateService) -> Result<Service> {
         let current = self
             .get(id)
             .await?
-            .ok_or_else(|| anyhow!("git_service not found"))?;
+            .ok_or_else(|| anyhow!("service not found"))?;
 
         // Resolve the post-patch state (None = keep current) and validate that an
         // `app` service still has well-formed credentials before writing.
@@ -349,10 +349,10 @@ impl GitServiceStore {
             app_credentials.as_ref(),
         )?;
 
-        let mut active: git_services::ActiveModel = git_services::Entity::find_by_id(id)
+        let mut active: service::ActiveModel = service::Entity::find_by_id(id)
             .one(&self.db)
             .await?
-            .ok_or_else(|| anyhow!("git_service not found"))?
+            .ok_or_else(|| anyhow!("service not found"))?
             .into();
 
         if let Some(v) = upd.display_name {
@@ -390,16 +390,16 @@ impl GitServiceStore {
 
         self.get(id)
             .await?
-            .ok_or_else(|| anyhow!("git_service disappeared after update"))
+            .ok_or_else(|| anyhow!("service disappeared after update"))
     }
 
     pub async fn delete(&self, id: Uuid) -> Result<()> {
-        let res = git_services::Entity::delete_by_id(id)
+        let res = service::Entity::delete_by_id(id)
             .exec(&self.db)
             .await
-            .context("failed to delete git_service")?;
+            .context("failed to delete service")?;
         if res.rows_affected == 0 {
-            bail!("git_service not found");
+            bail!("service not found");
         }
         Ok(())
     }
@@ -433,7 +433,7 @@ mod tests {
             "webhook_secret": "s",
             "bot_username": "bot"
         }"#;
-        let new: NewGitService = serde_json::from_str(json).unwrap();
+        let new: NewService = serde_json::from_str(json).unwrap();
         assert!(!new.autofire);
     }
 
@@ -449,7 +449,7 @@ mod tests {
             "bot_username": "bot",
             "autofire": true
         }"#;
-        let new: NewGitService = serde_json::from_str(json).unwrap();
+        let new: NewService = serde_json::from_str(json).unwrap();
         assert!(new.autofire);
     }
 
@@ -464,7 +464,7 @@ mod tests {
             "webhook_secret": "s",
             "bot_username": "bot"
         }"#;
-        let new: NewGitService = serde_json::from_str(json).unwrap();
+        let new: NewService = serde_json::from_str(json).unwrap();
         assert_eq!(new.auth_kind, AuthKind::Pat);
     }
 
@@ -492,7 +492,7 @@ mod tests {
             "webhook_secret": "s",
             "bot_username": "bot"
         }"#;
-        let new: NewGitService = serde_json::from_str(json).unwrap();
+        let new: NewService = serde_json::from_str(json).unwrap();
         assert_eq!(new.trigger_mode, TriggerMode::Assignee);
         assert!(new.trigger_label.is_empty());
     }
@@ -510,14 +510,14 @@ mod tests {
             "trigger_mode": "both",
             "trigger_label": "agent"
         }"#;
-        let new: NewGitService = serde_json::from_str(json).unwrap();
+        let new: NewService = serde_json::from_str(json).unwrap();
         assert_eq!(new.trigger_mode, TriggerMode::Both);
         assert_eq!(new.trigger_label, "agent");
     }
 
     #[test]
     fn update_git_service_trigger_fields_default_to_none() {
-        let upd: UpdateGitService = serde_json::from_str("{}").unwrap();
+        let upd: UpdateService = serde_json::from_str("{}").unwrap();
         assert!(upd.trigger_mode.is_none());
         assert!(upd.trigger_label.is_none());
     }
@@ -526,9 +526,9 @@ mod tests {
         kind: ProviderKind,
         auth_kind: AuthKind,
         app_credentials: Option<serde_json::Value>,
-    ) -> GitService {
+    ) -> Service {
         let now = Utc::now();
-        GitService {
+        Service {
             id: Uuid::nil(),
             kind,
             slug: "s".into(),

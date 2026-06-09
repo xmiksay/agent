@@ -17,7 +17,7 @@ pub struct Model {
     pub env_file: String,
     #[sea_orm(column_type = "Text")]
     pub notes: String,
-    pub git_service_id: Option<Uuid>,
+    pub service_id: Option<Uuid>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }
@@ -27,12 +27,12 @@ pub enum Relation {
     #[sea_orm(has_many = "super::project_branches::Entity")]
     Branch,
     #[sea_orm(
-        belongs_to = "super::git_services::Entity",
-        from = "Column::GitServiceId",
-        to = "super::git_services::Column::Id",
+        belongs_to = "super::service::Entity",
+        from = "Column::ServiceId",
+        to = "super::service::Column::Id",
         on_delete = "SetNull"
     )]
-    GitService,
+    Service,
 }
 
 impl Related<super::project_branches::Entity> for Entity {
@@ -41,9 +41,9 @@ impl Related<super::project_branches::Entity> for Entity {
     }
 }
 
-impl Related<super::git_services::Entity> for Entity {
+impl Related<super::service::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::GitService.def()
+        Relation::Service.def()
     }
 }
 

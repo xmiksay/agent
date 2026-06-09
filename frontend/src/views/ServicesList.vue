@@ -1,26 +1,26 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { useGitServicesStore } from "../stores/git_services";
+import { useServicesStore } from "../stores/services";
 import ProviderBadge from "../components/ProviderBadge.vue";
-import type { NewGitService, ProviderKind } from "../types/api";
+import type { NewService, ProviderKind } from "../types/api";
 
-const store = useGitServicesStore();
+const store = useServicesStore();
 const router = useRouter();
 
 function open(id: string) {
-  router.push(`/git_services/${id}`);
+  router.push(`/services/${id}`);
 }
 
 const showForm = ref(false);
-const form = ref<NewGitService>(blank());
+const form = ref<NewService>(blank());
 const appId = ref("");
 const privateKey = ref("");
 const saving = ref(false);
 const error = ref<string | null>(null);
 const generatedSecret = ref<string | null>(null);
 
-function blank(): NewGitService {
+function blank(): NewService {
   return {
     kind: "gitlab",
     slug: "",
@@ -55,7 +55,7 @@ async function submit() {
   saving.value = true;
   error.value = null;
   try {
-    const body: NewGitService = { ...form.value };
+    const body: NewService = { ...form.value };
     if (isApp.value) {
       // App services authenticate via app_credentials; installation_id is
       // captured later by the install flow, so it's omitted here.
@@ -78,7 +78,7 @@ async function submit() {
 }
 
 async function remove(id: string, slug: string) {
-  if (!confirm(`Delete git service "${slug}"? Projects keep their data but lose their link.`)) {
+  if (!confirm(`Delete service "${slug}"? Projects keep their data but lose their link.`)) {
     return;
   }
   try {
@@ -110,7 +110,7 @@ onMounted(() => store.refresh());
   <section class="space-y-6">
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="font-display text-2xl font-bold tracking-tight">Git services</h1>
+        <h1 class="font-display text-2xl font-bold tracking-tight">Services</h1>
         <p class="mt-1 text-sm text-muted">
           Provider connections — tokens and webhook secrets stay write-only.
         </p>
@@ -252,7 +252,7 @@ onMounted(() => store.refresh());
 
     <div v-if="store.loading" class="text-muted">Loading…</div>
     <div v-else-if="!store.list.length" class="card p-10 text-center text-faint">
-      No git services configured. Add one to start receiving webhooks.
+      No services configured. Add one to start receiving webhooks.
     </div>
     <div v-else class="card overflow-x-auto">
       <table class="tbl">
@@ -270,7 +270,7 @@ onMounted(() => store.refresh());
             <td><ProviderBadge :provider="s.kind" /></td>
             <td>
               <RouterLink
-                :to="`/git_services/${s.id}`"
+                :to="`/services/${s.id}`"
                 class="font-medium text-ink hover:text-accent"
                 @click.stop
               >

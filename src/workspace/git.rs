@@ -26,12 +26,15 @@ pub struct HttpsAuth {
 }
 
 impl HttpsAuth {
-    /// Build from the repo's SSH URL (`git@host:path.git` or
-    /// `ssh://git@host[:port]/path.git`), the provider kind (selects the HTTPS
-    /// username + token env var), and a resolved access token.
-    pub fn from_ssh_url(ssh_url: &str, kind: ProviderKind, token: &str) -> Result<Self> {
-        let (host, path) =
-            parse_ssh_url(ssh_url).with_context(|| format!("parsing ssh url {ssh_url}"))?;
+    /// Build from the repo's remote URL — accepts either an SSH form
+    /// (`git@host:path.git`, `ssh://git@host[:port]/path.git`) or an HTTP(S) form
+    /// (`https://host/path.git`, with any `user[:pass]@` userinfo stripped) — plus
+    /// the provider kind (selects the HTTPS username + token env var) and a
+    /// resolved access token. Both forms normalize to a secret-free
+    /// `https://{host}/{path}` remote that the credential helper authenticates.
+    pub fn from_remote_url(remote_url: &str, kind: ProviderKind, token: &str) -> Result<Self> {
+        let (host, path) = parse_remote_url(remote_url)
+            .with_context(|| format!("parsing remote url {remote_url}"))?;
         let remote_url = format!("https://{host}/{path}");
         let (user, token_env) = match kind {
             ProviderKind::Github => ("x-access-token", "GH_TOKEN"),
@@ -49,6 +52,25 @@ impl HttpsAuth {
             token: token.to_string(),
         })
     }
+}
+
+/// Split a remote into `(host, path-without-leading-slash)`. Handles HTTP(S)
+/// (`http(s)://[user[:pass]@]host/path`), the scp-like `[user@]host:path`, and
+/// the `ssh://[user@]host[:port]/path` forms.
+fn parse_remote_url(url: &str) -> Result<(String, String)> {
+    if let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
+        // Strip any `user[:pass]@` userinfo so no secret survives into origin.
+        let rest = rest.rsplit_once('@').map(|(_, h)| h).unwrap_or(rest);
+        let (authority, path) = rest
+            .split_once('/')
+            .ok_or_else(|| anyhow!("http url missing path: {url}"))?;
+        let host = authority.split(':').next().unwrap_or(authority);
+        return Ok((host.to_string(), path.trim_start_matches('/').to_string()));
+    }
+    parse_ssh_url(url)
 }
 
 /// Split an SSH remote into `(host, path-without-leading-slash)`. Handles both
@@ -225,9 +247,12 @@ mod tests {
 
     #[test]
     fn https_auth_from_scp_style_github() {
-        let a =
-            HttpsAuth::from_ssh_url("git@github.com:owner/repo.git", ProviderKind::Github, "tok")
-                .unwrap();
+        let a = HttpsAuth::from_remote_url(
+            "git@github.com:owner/repo.git",
+            ProviderKind::Github,
+            "tok",
+        )
+        .unwrap();
         assert_eq!(a.remote_url, "https://github.com/owner/repo.git");
         assert_eq!(a.token_env, "GH_TOKEN");
         assert!(a.credential_helper.contains("username=x-access-token"));
@@ -236,7 +261,7 @@ mod tests {
 
     #[test]
     fn https_auth_from_scp_style_gitlab_subgroup() {
-        let a = HttpsAuth::from_ssh_url(
+        let a = HttpsAuth::from_remote_url(
             "git@gitlab.example.com:group/sub/repo.git",
             ProviderKind::Gitlab,
             "tok",
@@ -252,7 +277,7 @@ mod tests {
 
     #[test]
     fn https_auth_from_ssh_scheme_with_port() {
-        let a = HttpsAuth::from_ssh_url(
+        let a = HttpsAuth::from_remote_url(
             "ssh://git@gitlab.example.com:2222/group/repo.git",
             ProviderKind::Gitlab,
             "tok",
@@ -262,10 +287,23 @@ mod tests {
     }
 
     #[test]
-    fn https_auth_rejects_non_ssh() {
-        assert!(
-            HttpsAuth::from_ssh_url("https://github.com/o/r.git", ProviderKind::Github, "t")
-                .is_err()
-        );
+    fn https_auth_accepts_https_url() {
+        let a = HttpsAuth::from_remote_url("https://github.com/o/r.git", ProviderKind::Github, "t")
+            .unwrap();
+        assert_eq!(a.remote_url, "https://github.com/o/r.git");
+        assert_eq!(a.token_env, "GH_TOKEN");
+    }
+
+    #[test]
+    fn https_auth_strips_userinfo_from_https_url() {
+        // An operator-pasted remote may carry `user@` (or `user:pass@`); the
+        // persisted origin must come out secret-free.
+        let a = HttpsAuth::from_remote_url(
+            "https://x-access-token:ghp_secret@github.com/o/r.git",
+            ProviderKind::Github,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(a.remote_url, "https://github.com/o/r.git");
     }
 }

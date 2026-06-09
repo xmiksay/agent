@@ -68,7 +68,7 @@ pub async fn task_stats(
 
     // Service slugs for service-grouped labels.
     let services = state
-        .git_service_store
+        .service_store
         .list()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -92,11 +92,11 @@ pub async fn task_stats(
             ),
             "service" => {
                 let key = t
-                    .git_service_id
+                    .service_id
                     .map(|id| id.to_string())
                     .unwrap_or_else(|| "_no_service".into());
                 let label = t
-                    .git_service_id
+                    .service_id
                     .and_then(|id| service_slug.get(&id).cloned())
                     .unwrap_or_else(|| "(no service)".into());
                 (key, label)

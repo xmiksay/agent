@@ -254,8 +254,8 @@ impl TaskStore {
                 }
             };
 
-            let Some(service_id) = task.git_service_id else {
-                error!(%task_id, "task has no git_service_id");
+            let Some(service_id) = task.service_id else {
+                error!(%task_id, "task has no service_id");
                 let _ = fail().await;
                 return;
             };
@@ -263,7 +263,7 @@ impl TaskStore {
             let service = match store.providers.service(service_id).await {
                 Some(s) => s,
                 None => {
-                    error!(%task_id, %service_id, "git_service not loaded");
+                    error!(%task_id, %service_id, "service not loaded");
                     let _ = fail().await;
                     return;
                 }

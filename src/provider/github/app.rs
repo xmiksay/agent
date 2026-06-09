@@ -16,7 +16,7 @@ use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::Serialize;
 
-use crate::git_service::GitHubAppConfig;
+use crate::service::GitHubAppConfig;
 
 /// Refresh this long before the stated `expires_at` so a token never goes stale
 /// mid-request.

@@ -7,14 +7,14 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::git_service::{
-    AuthKind, GitService, NewGitService, ServiceCredentials, TriggerMode, UpdateGitService,
-};
 use crate::project::ProviderKind;
 use crate::provider::github;
+use crate::service::{
+    AuthKind, NewService, Service, ServiceCredentials, TriggerMode, UpdateService,
+};
 
 #[derive(Serialize)]
-pub struct GitServiceView {
+pub struct ServiceView {
     pub id: Uuid,
     pub kind: ProviderKind,
     pub slug: String,
@@ -48,15 +48,11 @@ pub struct GitServiceView {
 /// A random webhook secret, used when the operator leaves the field blank. Two
 /// v4 UUIDs (hex, no dashes) = 64 chars of CSPRNG-backed entropy.
 fn generate_webhook_secret() -> String {
-    format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
-impl GitServiceView {
-    fn from(svc: GitService) -> Self {
+impl ServiceView {
+    fn from(svc: Service) -> Self {
         let webhook_path = format!("/webhook/{}/{}", svc.kind.as_str(), svc.slug);
         let app_installed = svc
             .app_credentials
@@ -84,33 +80,31 @@ impl GitServiceView {
     }
 }
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<GitServiceView>>, StatusCode> {
-    let services = state.git_service_store.list().await.map_err(|e| {
-        warn!(error = %e, "list git_services failed");
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ServiceView>>, StatusCode> {
+    let services = state.service_store.list().await.map_err(|e| {
+        warn!(error = %e, "list services failed");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    Ok(Json(
-        services.into_iter().map(GitServiceView::from).collect(),
-    ))
+    Ok(Json(services.into_iter().map(ServiceView::from).collect()))
 }
 
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<GitServiceView>, StatusCode> {
+) -> Result<Json<ServiceView>, StatusCode> {
     let svc = state
-        .git_service_store
+        .service_store
         .get(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(GitServiceView::from(svc)))
+    Ok(Json(ServiceView::from(svc)))
 }
 
 pub async fn create(
     State(state): State<AppState>,
-    Json(mut req): Json<NewGitService>,
-) -> Result<(StatusCode, Json<GitServiceView>), (StatusCode, String)> {
+    Json(mut req): Json<NewService>,
+) -> Result<(StatusCode, Json<ServiceView>), (StatusCode, String)> {
     // Blank secret → generate one and reveal it once in the response.
     let generated = req.webhook_secret.trim().is_empty().then(|| {
         let s = generate_webhook_secret();
@@ -118,7 +112,7 @@ pub async fn create(
         s
     });
     let svc = state
-        .git_service_store
+        .service_store
         .create(req)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -127,7 +121,7 @@ pub async fn create(
         .refresh(svc.id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut view = GitServiceView::from(svc);
+    let mut view = ServiceView::from(svc);
     view.generated_webhook_secret = generated;
     Ok((StatusCode::CREATED, Json(view)))
 }
@@ -135,8 +129,8 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Json(mut req): Json<UpdateGitService>,
-) -> Result<Json<GitServiceView>, (StatusCode, String)> {
+    Json(mut req): Json<UpdateService>,
+) -> Result<Json<ServiceView>, (StatusCode, String)> {
     // A blank/omitted secret means "keep" — unless none is stored yet, in which
     // case generate one and reveal it (mirrors create). A non-empty kept secret
     // is never revealed, preserving the write-only invariant.
@@ -148,7 +142,7 @@ pub async fn update(
     let mut generated = None;
     if blank {
         let current = state
-            .git_service_store
+            .service_store
             .get(id)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -163,7 +157,7 @@ pub async fn update(
         }
     }
     let svc = state
-        .git_service_store
+        .service_store
         .update(id, req)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -172,7 +166,7 @@ pub async fn update(
         .refresh(svc.id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut view = GitServiceView::from(svc);
+    let mut view = ServiceView::from(svc);
     view.generated_webhook_secret = generated;
     Ok(Json(view))
 }
@@ -182,7 +176,7 @@ pub async fn delete(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     state
-        .git_service_store
+        .service_store
         .delete(id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
@@ -202,18 +196,18 @@ pub struct InstallUrlView {
     pub install_url: String,
 }
 
-/// `GET /api/git_services/{id}/github_app/install` — resolve the App's install
+/// `GET /api/services/{id}/github_app/install` — resolve the App's install
 /// URL (with the service id round-tripped as `state`). Bearer-gated.
 pub async fn github_app_install(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<InstallUrlView>, (StatusCode, String)> {
     let svc = state
-        .git_service_store
+        .service_store
         .get(id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "git_service not found".to_string()))?;
+        .ok_or((StatusCode::NOT_FOUND, "service not found".to_string()))?;
     let cfg = match svc.credentials() {
         Ok(ServiceCredentials::GitHubApp(cfg)) => cfg,
         _ => {
@@ -254,7 +248,7 @@ pub async fn github_app_callback(
     };
 
     let svc = state
-        .git_service_store
+        .service_store
         .get(service_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -285,10 +279,10 @@ pub async fn github_app_callback(
         );
 
     state
-        .git_service_store
+        .service_store
         .update(
             service_id,
-            UpdateGitService {
+            UpdateService {
                 app_credentials: Some(creds),
                 ..Default::default()
             },
@@ -302,7 +296,7 @@ pub async fn github_app_callback(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     info!(%service_id, %installation_id, "GitHub App installed; persisted installation_id");
 
-    Ok(Redirect::to(&format!("/git_services/{service_id}")))
+    Ok(Redirect::to(&format!("/services/{service_id}")))
 }
 
 #[derive(Serialize)]
@@ -321,11 +315,11 @@ pub async fn github_app_sync(
     Path(id): Path<Uuid>,
 ) -> Result<Json<GitHubAppSyncResult>, (StatusCode, String)> {
     let svc = state
-        .git_service_store
+        .service_store
         .get(id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "git_service not found".to_string()))?;
+        .ok_or((StatusCode::NOT_FOUND, "service not found".to_string()))?;
     let cfg = match svc.credentials() {
         Ok(ServiceCredentials::GitHubApp(cfg)) => cfg,
         _ => {
@@ -350,12 +344,15 @@ pub async fn github_app_sync(
             StatusCode::INTERNAL_SERVER_ERROR,
             "app_credentials is not an object".to_string(),
         ))?
-        .insert("installation_id".to_string(), installation_id.clone().into());
+        .insert(
+            "installation_id".to_string(),
+            installation_id.clone().into(),
+        );
     state
-        .git_service_store
+        .service_store
         .update(
             id,
-            UpdateGitService {
+            UpdateService {
                 app_credentials: Some(creds),
                 ..Default::default()
             },
@@ -382,9 +379,13 @@ pub async fn github_app_sync(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let message = if webhook_registered {
-        format!("Installed (installation {installation_id}); app-level webhook registered. Make sure the App is subscribed to Issues / Pull request / comment events.")
+        format!(
+            "Installed (installation {installation_id}); app-level webhook registered. Make sure the App is subscribed to Issues / Pull request / comment events."
+        )
     } else {
-        format!("Installed (installation {installation_id}). Set PUBLIC_BASE_URL so the webhook can be registered automatically too.")
+        format!(
+            "Installed (installation {installation_id}). Set PUBLIC_BASE_URL so the webhook can be registered automatically too."
+        )
     };
     info!(%id, %installation_id, webhook_registered, "GitHub App synced");
     Ok(Json(GitHubAppSyncResult {

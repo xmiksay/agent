@@ -21,6 +21,17 @@ export const useProjectsStore = defineStore("projects", () => {
     detail.value = await projectsApi.get(id);
   }
 
+  async function create(body: {
+    service_id: string;
+    full_name: string;
+    default_branch?: string;
+    remote_url?: string;
+  }) {
+    const created = await projectsApi.create(body);
+    await refresh();
+    return created;
+  }
+
   async function updateAllowedOps(id: string, ops: string[]) {
     const updated = await projectsApi.updateConfig(id, {
       allowed_operations: ops,
@@ -45,6 +56,7 @@ export const useProjectsStore = defineStore("projects", () => {
     loading,
     refresh,
     load,
+    create,
     updateAllowedOps,
     updateEnvFile,
   };

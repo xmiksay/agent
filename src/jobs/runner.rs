@@ -11,7 +11,6 @@ use crate::agent::{AgentBackend, ClaudeCode};
 use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
-use crate::git_service::GitService;
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::permission::handle_permission;
 use crate::jobs::prompt::build_prompt;
@@ -22,6 +21,7 @@ use crate::project::{
     BranchStatus, EnvContext, NewBranchEntry, ProjectStore, ProviderKind, build_env_vars,
 };
 use crate::provider::{GitProvider, resolve_token};
+use crate::service::Service;
 use crate::workspace::Workspace;
 use crate::workspace::git::HttpsAuth;
 use crate::workspace::layout::slugify;
@@ -30,7 +30,7 @@ use crate::workspace::layout::slugify;
 pub async fn run_job(
     task_id: uuid::Uuid,
     trigger: TriggerReason,
-    service: GitService,
+    service: Service,
     project_id: Option<uuid::Uuid>,
     git_url: String,
     project_path: String,
@@ -81,10 +81,11 @@ pub async fn run_job(
         ProviderKind::Gitlab => "GITLAB_TOKEN",
     };
 
-    // git_url is the SSH URL (git@host:path.git) populated by the webhook
-    // normalizers; derive a token-HTTPS remote from it so clone/push need no host
-    // SSH key and no secret is written into .git/config.
-    let https_auth = HttpsAuth::from_ssh_url(&git_url, service.kind, &provider_token_value)?;
+    // git_url is the project's remote — an SSH (git@host:path.git) or HTTPS URL,
+    // from the webhook normalizers or operator-supplied at manual creation. Either
+    // way we derive a token-HTTPS remote from it so clone/push need no host SSH key
+    // and no secret is written into .git/config.
+    let https_auth = HttpsAuth::from_remote_url(&git_url, service.kind, &provider_token_value)?;
     workspace
         .clone_or_fetch(&work_dir, &https_auth, &branch, &default_branch)
         .await?;

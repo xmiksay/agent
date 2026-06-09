@@ -22,7 +22,7 @@ export interface Task {
   provider: ProviderKind;
   branch: string | null;
   project_id: string | null;
-  git_service_id: string | null;
+  service_id: string | null;
   session_id: string | null;
   pid: number | null;
 }
@@ -68,7 +68,7 @@ export interface TaskDetail extends Task {
 export interface ProjectConfig {
   id: string;
   provider: ProviderKind;
-  git_service_id: string | null;
+  service_id: string | null;
   project_slug: string;
   full_name: string;
   remote_url: string;
@@ -91,7 +91,7 @@ export type AuthKind = "pat" | "app";
 // assignee) gets triggered.
 export type TriggerMode = "assignee" | "label" | "both";
 
-export interface GitServiceView {
+export interface ServiceView {
   id: string;
   kind: ProviderKind;
   slug: string;
@@ -127,7 +127,7 @@ export interface GitHubAppSyncResult {
 // carried via auth_kind === "pat".
 export type AppCredentials = Record<string, string>;
 
-export interface NewGitService {
+export interface NewService {
   kind: ProviderKind;
   slug: string;
   display_name: string;
@@ -142,7 +142,7 @@ export interface NewGitService {
   trigger_label?: string;
 }
 
-export interface UpdateGitService {
+export interface UpdateService {
   display_name?: string;
   base_url?: string;
   token?: string;

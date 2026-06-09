@@ -40,7 +40,7 @@ pub struct TaskDetail {
     pub task: TaskView,
     pub result: Option<crate::entity::task_results::Model>,
     /// Absolute path to this task's git worktree on the agent host.
-    /// `None` if the task's git_service can no longer be resolved.
+    /// `None` if the task's service can no longer be resolved.
     pub work_dir: Option<String>,
 }
 
@@ -91,7 +91,7 @@ pub async fn get_task(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let work_dir = match task.git_service_id {
+    let work_dir = match task.service_id {
         Some(sid) => state.task_store.providers().service(sid).await.map(|svc| {
             let project_slug = slugify(&task.project_path);
             let branch = task
@@ -155,20 +155,20 @@ pub async fn create_task(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "project not found".to_string()))?;
 
-    let git_service_id = project.git_service_id.ok_or((
+    let service_id = project.service_id.ok_or((
         StatusCode::BAD_REQUEST,
-        "project has no git_service_id".to_string(),
+        "project has no service_id".to_string(),
     ))?;
 
     let id = state
         .task_store
         .create_task(
             payload.trigger,
-            git_service_id,
+            service_id,
             project.provider,
             Some(project.id),
             project.full_name,
-            project.ssh_url,
+            project.remote_url,
             project.default_branch,
         )
         .await
@@ -342,7 +342,7 @@ mod tests {
             provider: "github".to_string(),
             branch: Some("b".to_string()),
             project_id: None,
-            git_service_id: None,
+            service_id: None,
             session_id: None,
             pid: None,
             pending_message: None,

@@ -2,7 +2,7 @@ use sea_orm::entity::prelude::*;
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize)]
-#[sea_orm(table_name = "git_services")]
+#[sea_orm(table_name = "service")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,

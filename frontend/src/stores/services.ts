@@ -1,45 +1,45 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { gitServicesApi } from "../api/git_services";
+import { servicesApi } from "../api/services";
 import type {
-  GitServiceView,
-  NewGitService,
-  UpdateGitService,
+  ServiceView,
+  NewService,
+  UpdateService,
 } from "../types/api";
 
-export const useGitServicesStore = defineStore("git_services", () => {
-  const list = ref<GitServiceView[]>([]);
-  const detail = ref<GitServiceView | null>(null);
+export const useServicesStore = defineStore("services", () => {
+  const list = ref<ServiceView[]>([]);
+  const detail = ref<ServiceView | null>(null);
   const loading = ref(false);
 
   async function refresh() {
     loading.value = true;
     try {
-      list.value = await gitServicesApi.list();
+      list.value = await servicesApi.list();
     } finally {
       loading.value = false;
     }
   }
 
   async function load(id: string) {
-    detail.value = await gitServicesApi.get(id);
+    detail.value = await servicesApi.get(id);
   }
 
-  async function create(body: NewGitService) {
-    const created = await gitServicesApi.create(body);
+  async function create(body: NewService) {
+    const created = await servicesApi.create(body);
     list.value = [...list.value, created];
     return created;
   }
 
-  async function update(id: string, body: UpdateGitService) {
-    const updated = await gitServicesApi.update(id, body);
+  async function update(id: string, body: UpdateService) {
+    const updated = await servicesApi.update(id, body);
     list.value = list.value.map((s) => (s.id === id ? updated : s));
     if (detail.value?.id === id) detail.value = updated;
     return updated;
   }
 
   async function remove(id: string) {
-    await gitServicesApi.remove(id);
+    await servicesApi.remove(id);
     list.value = list.value.filter((s) => s.id !== id);
     if (detail.value?.id === id) detail.value = null;
   }

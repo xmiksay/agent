@@ -2,14 +2,14 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
-import { useGitServicesStore } from "../stores/git_services";
+import { useServicesStore } from "../stores/services";
 import TaskRow from "../components/TaskRow.vue";
 import NewTaskModal from "../components/NewTaskModal.vue";
 import { taskSpentSecs } from "../util/duration";
 import type { Task } from "../types/api";
 
 const store = useTasksStore();
-const gitServices = useGitServicesStore();
+const services = useServicesStore();
 const router = useRouter();
 // Two orthogonal server-side filters: the operator lifecycle and the runtime
 // disposition. Both ride along on every refresh (and the live poll).
@@ -69,7 +69,7 @@ function sortValue(t: Task, key: SortKey): string | number {
 // Service options come from the connected services; project options are derived
 // from the tasks actually present, so the dropdown only lists projects with runs.
 const serviceOptions = computed(() =>
-  gitServices.list.map((s) => ({ id: s.id, label: s.display_name })),
+  services.list.map((s) => ({ id: s.id, label: s.display_name })),
 );
 const projectOptions = computed(() => {
   const seen = new Map<string, string>();
@@ -84,7 +84,7 @@ const projectOptions = computed(() => {
 const filteredTasks = computed(() =>
   store.tasks.filter(
     (t) =>
-      (!serviceId.value || t.git_service_id === serviceId.value) &&
+      (!serviceId.value || t.service_id === serviceId.value) &&
       (!projectId.value || t.project_id === projectId.value),
   ),
 );
@@ -121,7 +121,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(() => {
   reload();
-  gitServices.refresh();
+  services.refresh();
   nowTimer = setInterval(() => (now.value = new Date()), 1000);
   pollTimer = setInterval(() => store.refresh(activeFilters(), true), 10_000);
 });

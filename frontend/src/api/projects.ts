@@ -11,6 +11,14 @@ export const projectsApi = {
   list(): Promise<ProjectListItem[]> {
     return api("/api/projects");
   },
+  create(body: {
+    service_id: string;
+    full_name: string;
+    default_branch?: string;
+    remote_url?: string;
+  }): Promise<ProjectConfig> {
+    return api("/api/projects", { method: "POST", body });
+  },
   get(id: string): Promise<ProjectDetailResponse> {
     return api(`/api/projects/${id}`);
   },

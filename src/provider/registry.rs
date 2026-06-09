@@ -6,27 +6,27 @@ use tokio::sync::RwLock;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::git_service::{GitService, GitServiceStore};
 use crate::project::ProviderKind;
 use crate::provider::GitProvider;
 use crate::provider::github::GitHubClient;
 use crate::provider::gitlab::GitLabClient;
+use crate::service::{Service, ServiceStore};
 
-/// Cache of provider clients keyed by `git_service.id`. Rebuilt whenever a
+/// Cache of provider clients keyed by `service.id`. Rebuilt whenever a
 /// service is added, updated, or removed.
 #[derive(Clone)]
 pub struct ProviderRegistry {
-    store: GitServiceStore,
+    store: ServiceStore,
     by_id: Arc<RwLock<HashMap<Uuid, Entry>>>,
 }
 
 struct Entry {
-    service: GitService,
+    service: Service,
     client: Arc<dyn GitProvider>,
 }
 
 impl ProviderRegistry {
-    pub fn new(store: GitServiceStore) -> Self {
+    pub fn new(store: ServiceStore) -> Self {
         Self {
             store,
             by_id: Arc::new(RwLock::new(HashMap::new())),
@@ -35,7 +35,7 @@ impl ProviderRegistry {
 
     /// Load all services from the database and rebuild the cache.
     pub async fn reload(&self) -> Result<()> {
-        let services = self.store.list().await.context("listing git_services")?;
+        let services = self.store.list().await.context("listing services")?;
         let mut map = HashMap::with_capacity(services.len());
         for svc in services {
             match build_client(&svc) {
@@ -49,7 +49,7 @@ impl ProviderRegistry {
                     );
                 }
                 Err(e) => {
-                    warn!(slug = %svc.slug, error = %e, "skipping git_service: cannot build client");
+                    warn!(slug = %svc.slug, error = %e, "skipping service: cannot build client");
                 }
             }
         }
@@ -66,10 +66,10 @@ impl ProviderRegistry {
     pub async fn require(&self, service_id: Uuid) -> Result<Arc<dyn GitProvider>> {
         self.get(service_id)
             .await
-            .ok_or_else(|| anyhow!("no git_service configured for {service_id}"))
+            .ok_or_else(|| anyhow!("no service configured for {service_id}"))
     }
 
-    pub async fn service(&self, service_id: Uuid) -> Option<GitService> {
+    pub async fn service(&self, service_id: Uuid) -> Option<Service> {
         let guard = self.by_id.read().await;
         guard.get(&service_id).map(|e| e.service.clone())
     }
@@ -97,7 +97,7 @@ impl ProviderRegistry {
     }
 }
 
-fn build_client(svc: &GitService) -> Result<Arc<dyn GitProvider>> {
+fn build_client(svc: &Service) -> Result<Arc<dyn GitProvider>> {
     let creds = svc.credentials()?;
     Ok(match svc.kind {
         ProviderKind::Gitlab => {

@@ -31,11 +31,11 @@ pub async fn handle(
     Json(event): Json<GitLabEvent>,
 ) -> Result<(StatusCode, Json<WebhookResponse>), StatusCode> {
     let service = state
-        .git_service_store
+        .service_store
         .get_by_slug(ProviderKind::Gitlab, &slug)
         .await
         .map_err(|e| {
-            warn!(error = %e, "git_service lookup failed");
+            warn!(error = %e, "service lookup failed");
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -84,7 +84,7 @@ fn project_ref(p: &Project) -> ProjectRef {
     ProjectRef {
         full_name: p.path_with_namespace.clone(),
         project_slug: slugify(&p.path_with_namespace),
-        ssh_url: p.git_ssh_url.clone(),
+        remote_url: p.git_ssh_url.clone(),
         default_branch: p.default_branch.clone(),
     }
 }

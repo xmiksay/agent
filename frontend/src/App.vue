@@ -17,7 +17,7 @@ const stream = useStreamStore();
 const nav = [
   { to: "/", label: "Tasks", icon: "▦" },
   { to: "/projects", label: "Projects", icon: "◇" },
-  { to: "/git_services", label: "Services", icon: "⬡" },
+  { to: "/services", label: "Services", icon: "⬡" },
   { to: "/auth_requests", label: "Auth queue", icon: "⚿" },
   { to: "/stats", label: "Stats", icon: "▤" },
 ];

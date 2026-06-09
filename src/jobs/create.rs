@@ -20,7 +20,7 @@ impl TaskStore {
     pub async fn create_task(
         &self,
         trigger: TriggerReason,
-        git_service_id: Uuid,
+        service_id: Uuid,
         provider: ProviderKind,
         project_id: Option<Uuid>,
         project_path: String,
@@ -67,7 +67,7 @@ impl TaskStore {
             provider: Set(provider.as_str().to_string()),
             branch: Set(branch),
             project_id: Set(project_id),
-            git_service_id: Set(Some(git_service_id)),
+            service_id: Set(Some(service_id)),
             session_id: Set(None),
             pid: Set(None),
             pending_message: Set(None),
@@ -95,8 +95,8 @@ impl TaskStore {
             .context("failed to deserialize trigger")?;
         let provider: ProviderKind = task.provider.parse()?;
         let service_id = task
-            .git_service_id
-            .ok_or_else(|| anyhow::anyhow!("task has no git_service_id; cannot retry"))?;
+            .service_id
+            .ok_or_else(|| anyhow::anyhow!("task has no service_id; cannot retry"))?;
 
         let new_id = self
             .create_task(
