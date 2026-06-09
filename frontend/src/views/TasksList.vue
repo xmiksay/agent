@@ -6,19 +6,16 @@ import { useServicesStore } from "../stores/services";
 import TaskRow from "../components/TaskRow.vue";
 import NewTaskModal from "../components/NewTaskModal.vue";
 import { taskSpentSecs } from "../util/duration";
-import type { Task } from "../types/api";
+import { useTaskFilters } from "../util/taskFilters";
+import type { BulkAction, Task } from "../types/api";
 
 const store = useTasksStore();
 const services = useServicesStore();
 const router = useRouter();
-// Two orthogonal server-side filters: the operator lifecycle and the runtime
-// disposition. Both ride along on every refresh (and the live poll).
-const taskState = ref("");
-const agentState = ref("");
-// Service + project filters are applied client-side over the loaded set, so
-// changing them is instant and never refetches.
-const serviceId = ref("");
-const projectId = ref("");
+// Two orthogonal server-side filters (taskState/agentState) and two client-side
+// ones (serviceId/projectId). All four persist to localStorage so the operator
+// returns to the same view across reloads.
+const { taskState, agentState, serviceId, projectId } = useTaskFilters();
 const newTaskOpen = ref(false);
 // Single shared `now` so the whole table re-renders together; ticks once a
 // second so still-accruing durations look live.
@@ -100,6 +97,89 @@ const sortedTasks = computed(() => {
   });
 });
 
+// --- Fast filters ------------------------------------------------------------
+// One-click presets over the server-side state filters; "clear" also drops the
+// client-side service/project filters for a full reset.
+function fastFilter(kind: "running" | "pending" | "clear") {
+  if (kind === "clear") {
+    taskState.value = "";
+    agentState.value = "";
+    serviceId.value = "";
+    projectId.value = "";
+  } else if (kind === "running") {
+    taskState.value = "";
+    agentState.value = "running";
+  } else {
+    agentState.value = "";
+    taskState.value = "pending";
+  }
+}
+
+// --- Selection + bulk actions ------------------------------------------------
+const selected = ref<Set<string>>(new Set());
+const bulkBusy = ref<BulkAction | null>(null);
+
+function toggle(id: string) {
+  const next = new Set(selected.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selected.value = next;
+}
+
+const selectedCount = computed(() => selected.value.size);
+// Select-all reflects the *filtered* set, per the issue: "Select all (filtered)".
+const allSelected = computed(
+  () => sortedTasks.value.length > 0 && sortedTasks.value.every((t) => selected.value.has(t.id)),
+);
+const someSelected = computed(
+  () => sortedTasks.value.some((t) => selected.value.has(t.id)) && !allSelected.value,
+);
+
+function toggleAll() {
+  selected.value = allSelected.value
+    ? new Set()
+    : new Set(sortedTasks.value.map((t) => t.id));
+}
+
+function clearSelection() {
+  selected.value = new Set();
+}
+
+const bulkLabels: Record<BulkAction, string> = {
+  run: "Run",
+  pause: "Pause",
+  resume: "Resume",
+  delete: "Delete",
+};
+
+async function runBulk(action: BulkAction) {
+  const ids = Array.from(selected.value);
+  if (!ids.length) return;
+  if (action === "delete" && !confirm(`Delete ${ids.length} task(s)? This cannot be undone.`))
+    return;
+  if (action === "pause" && !confirm(`Pause ${ids.length} task(s)? Sessions are kept for resume.`))
+    return;
+
+  bulkBusy.value = action;
+  try {
+    const res = await store.bulk(action, ids);
+    if (res.failed.length) {
+      const detail = res.failed
+        .slice(0, 5)
+        .map((f) => `• ${f.error}`)
+        .join("\n");
+      const more = res.failed.length > 5 ? `\n…and ${res.failed.length - 5} more` : "";
+      alert(`${res.succeeded.length} succeeded, ${res.failed.length} failed:\n${detail}${more}`);
+    }
+    clearSelection();
+    await reload();
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e));
+  } finally {
+    bulkBusy.value = null;
+  }
+}
+
 function activeFilters() {
   return {
     task_state: taskState.value || undefined,
@@ -130,16 +210,32 @@ onUnmounted(() => {
   if (pollTimer !== null) clearInterval(pollTimer);
 });
 watch([taskState, agentState], reload);
+// Drop selected ids that fell out of the loaded set (deleted, or filtered away
+// server-side) so the bulk count never lies about what it'll act on.
+watch(
+  () => store.tasks,
+  (list) => {
+    const live = new Set(list.map((t) => t.id));
+    if (![...selected.value].every((id) => live.has(id))) {
+      selected.value = new Set([...selected.value].filter((id) => live.has(id)));
+    }
+  },
+);
 </script>
 
 <template>
   <section>
-    <div class="mb-6 flex items-center justify-between">
+    <div class="mb-6 flex items-start justify-between gap-4">
       <div>
         <h1 class="font-display text-2xl font-bold tracking-tight">Tasks</h1>
         <p class="mt-1 text-sm text-muted">Agent runs across every connected repo.</p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <div class="flex items-center gap-1">
+          <button class="btn btn-subtle btn-sm" @click="fastFilter('running')">Running</button>
+          <button class="btn btn-subtle btn-sm" @click="fastFilter('pending')">Pending</button>
+          <button class="btn btn-subtle btn-sm" @click="fastFilter('clear')">Clear</button>
+        </div>
         <select v-model="serviceId" class="select w-40">
           <option value="">All services</option>
           <option v-for="s in serviceOptions" :key="s.id" :value="s.id">{{ s.label }}</option>
@@ -169,11 +265,60 @@ watch([taskState, agentState], reload);
 
     <NewTaskModal :open="newTaskOpen" @close="newTaskOpen = false" @created="onCreated" />
 
+    <div
+      v-if="selectedCount"
+      class="card mb-3 flex flex-wrap items-center gap-2 px-4 py-2"
+    >
+      <span class="text-sm font-medium text-ink">{{ selectedCount }} selected</span>
+      <span class="mx-1 h-4 w-px bg-line-2"></span>
+      <button
+        class="btn btn-subtle btn-sm text-accent"
+        :disabled="!!bulkBusy"
+        @click="runBulk('run')"
+      >
+        {{ bulkBusy === "run" ? "running…" : "Run" }}
+      </button>
+      <button
+        class="btn btn-subtle btn-sm text-signal-release"
+        :disabled="!!bulkBusy"
+        @click="runBulk('pause')"
+      >
+        {{ bulkBusy === "pause" ? "pausing…" : "Pause" }}
+      </button>
+      <button
+        class="btn btn-subtle btn-sm text-signal-ok"
+        :disabled="!!bulkBusy"
+        @click="runBulk('resume')"
+      >
+        {{ bulkBusy === "resume" ? "resuming…" : "Resume" }}
+      </button>
+      <button
+        class="btn btn-subtle btn-sm text-signal-danger"
+        :disabled="!!bulkBusy"
+        @click="runBulk('delete')"
+      >
+        {{ bulkBusy === "delete" ? "deleting…" : "Delete" }}
+      </button>
+      <button class="btn btn-subtle btn-sm ml-auto" :disabled="!!bulkBusy" @click="clearSelection">
+        Clear selection
+      </button>
+    </div>
+
     <div v-if="store.loading" class="card px-4 py-10 text-center text-muted">Loading…</div>
     <div v-else class="card overflow-x-auto">
       <table class="tbl">
         <thead>
           <tr>
+            <th class="w-8">
+              <input
+                type="checkbox"
+                class="cursor-pointer align-middle accent-accent"
+                :checked="allSelected"
+                :indeterminate="someSelected"
+                aria-label="Select all filtered tasks"
+                @change="toggleAll"
+              />
+            </th>
             <th class="cursor-pointer select-none" @click="sortBy('created')">
               Created<span v-if="sortKey === 'created'"> {{ sortAsc ? "▲" : "▼" }}</span>
             </th>
@@ -201,9 +346,17 @@ watch([taskState, agentState], reload);
           </tr>
         </thead>
         <tbody>
-          <TaskRow v-for="t in sortedTasks" :key="t.id" :task="t" :now="now" @changed="reload" />
+          <TaskRow
+            v-for="t in sortedTasks"
+            :key="t.id"
+            :task="t"
+            :now="now"
+            :selected="selected.has(t.id)"
+            @changed="reload"
+            @toggle="toggle(t.id)"
+          />
           <tr v-if="!sortedTasks.length">
-            <td colspan="10" class="py-10 text-center text-faint">
+            <td colspan="11" class="py-10 text-center text-faint">
               {{ store.tasks.length ? "No tasks match these filters." : "No tasks yet." }}
             </td>
           </tr>

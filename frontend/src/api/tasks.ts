@@ -1,5 +1,7 @@
 import { api } from "./client";
 import type {
+  BulkAction,
+  BulkActionResponse,
   NewTaskBody,
   PersistedEvent,
   StatsQuery,
@@ -41,6 +43,9 @@ export const tasksApi = {
   },
   remove(id: string): Promise<void> {
     return api(`/api/tasks/${id}`, { method: "DELETE" });
+  },
+  bulk(action: BulkAction, ids: string[]): Promise<BulkActionResponse> {
+    return api("/api/tasks/bulk", { method: "POST", body: { action, ids } });
   },
   events(id: string): Promise<{ events: PersistedEvent[] }> {
     return api(`/api/tasks/${id}/events`);

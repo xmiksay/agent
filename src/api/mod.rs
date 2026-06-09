@@ -1,4 +1,5 @@
 pub mod auth_requests;
+pub mod bulk;
 pub mod gitlab_token;
 pub mod handlers;
 pub mod projects;
