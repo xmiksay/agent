@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
-use crate::entity::{task_results, tasks};
+use crate::entity::{task_sessions, tasks};
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::lifecycle::{AGENT_FAILED, AGENT_PENDING, TASK_FAILED, TASK_STATES};
 use crate::jobs::registry::RunningTasks;
@@ -108,43 +108,33 @@ impl TaskStore {
             );
         }
 
-        let edits_branch = edits.branch.is_some() || edits.default_branch.is_some();
+        let edits_branch = edits.branch.is_some();
         if edits_branch && task.task_state != "pending" {
             bail!(
-                "can only edit branch fields while the task is pending (task_state: {})",
+                "can only edit the branch while the task is pending (task_state: {})",
                 task.task_state
             );
         }
 
-        // Effective post-edit values, used for the cross-field branch guard.
-        let default_branch = edits
-            .default_branch
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&task.default_branch)
-            .to_string();
-        let branch = match edits.branch.as_deref().map(str::trim) {
-            Some(b) => {
-                if b.is_empty() {
-                    bail!("branch must not be empty");
-                }
-                b.to_string()
-            }
-            None => task
-                .branch
-                .clone()
-                .unwrap_or_else(|| default_branch.clone()),
-        };
-        if branch == default_branch {
-            bail!("refusing to set task branch to the default branch '{default_branch}'");
-        }
-
         let new_task_state = edits.task_state.clone();
+        let project_id = task.project_id;
         let mut active: tasks::ActiveModel = task.into();
-        if edits_branch {
-            active.branch = Set(Some(branch));
-            active.default_branch = Set(default_branch);
+        if let Some(b) = edits.branch.as_deref().map(str::trim) {
+            if b.is_empty() {
+                bail!("branch must not be empty");
+            }
+            // The default branch is a project property now — load it for the
+            // "never run on the default branch" guard.
+            let default_branch = self
+                .project_store
+                .get_project_by_id(project_id)
+                .await?
+                .map(|p| p.default_branch)
+                .unwrap_or_default();
+            if b == default_branch {
+                bail!("refusing to set task branch to the default branch '{default_branch}'");
+            }
+            active.branch = Set(Some(b.to_string()));
         }
         if let Some(ts) = new_task_state {
             active.task_state = Set(ts);
@@ -207,7 +197,8 @@ impl TaskStore {
         // both would share one worktree. Different branches each have their own
         // clone and run concurrently. At single-operator scale the live set is
         // small, so check hub liveness over the un-finished tasks on this branch.
-        if let (Some(pid), Some(branch)) = (task.project_id, task.branch.clone()) {
+        if let Some(branch) = task.branch.clone() {
+            let pid = task.project_id;
             let siblings = tasks::Entity::find()
                 .filter(tasks::Column::ProjectId.eq(pid))
                 .filter(tasks::Column::Branch.eq(branch.clone()))
@@ -254,8 +245,20 @@ impl TaskStore {
                 }
             };
 
-            let Some(service_id) = task.service_id else {
-                error!(%task_id, "task has no service_id");
+            // Where/how the task runs is resolved through its project, not stored
+            // on the task: project → remote/default_branch/provider, and the owning
+            // service for tokens + notes.
+            let project = match store.project_store.get_project_by_id(task.project_id).await {
+                Ok(Some(p)) => p,
+                _ => {
+                    error!(%task_id, project_id = %task.project_id, "task project not found");
+                    let _ = fail().await;
+                    return;
+                }
+            };
+
+            let Some(service_id) = project.service_id else {
+                error!(%task_id, "task project has no service");
                 let _ = fail().await;
                 return;
             };
@@ -294,10 +297,10 @@ impl TaskStore {
                 task_id,
                 trigger,
                 service.clone(),
-                task.project_id,
-                task.git_url.clone(),
-                task.project_path.clone(),
-                task.default_branch.clone(),
+                Some(task.project_id),
+                project.remote_url.clone(),
+                project.full_name.clone(),
+                project.default_branch.clone(),
                 task.branch.clone(),
                 store.config.clone(),
                 provider,
@@ -332,18 +335,36 @@ impl TaskStore {
         Ok(())
     }
 
-    /// Replace the one-to-one result row (each turn overwrites the prior one).
+    /// Record the current run's metrics. Sessions are 1:N per task: turns within
+    /// one agent run (same `session_id`) accumulate into a single row, while a new
+    /// run (fresh `session_id`) starts a new row, so the history is preserved.
     pub(crate) async fn replace_result(&self, task_id: Uuid, output: &ClaudeOutput) -> Result<()> {
-        task_results::Entity::delete_many()
-            .filter(task_results::Column::TaskId.eq(task_id))
-            .exec(&self.db)
-            .await
-            .context("clearing prior turn result")?;
+        if !output.session_id.is_empty()
+            && let Some(existing) = task_sessions::Entity::find()
+                .filter(task_sessions::Column::TaskId.eq(task_id))
+                .filter(task_sessions::Column::SessionId.eq(output.session_id.clone()))
+                .one(&self.db)
+                .await
+                .context("looking up session row")?
+        {
+            let mut active: task_sessions::ActiveModel = existing.into();
+            active.cost_usd = Set(output.total_cost_usd);
+            active.input_tokens = Set(output.input_tokens as i64);
+            active.output_tokens = Set(output.output_tokens as i64);
+            active.num_turns = Set(output.num_turns as i32);
+            active.is_error = Set(output.is_error);
+            active.result_text = Set(output.result.clone());
+            active
+                .update(&self.db)
+                .await
+                .context("updating session row")?;
+            return Ok(());
+        }
         self.save_result(task_id, output).await
     }
 
     async fn save_result(&self, task_id: Uuid, output: &ClaudeOutput) -> Result<()> {
-        let result = task_results::ActiveModel {
+        let result = task_sessions::ActiveModel {
             id: Set(Uuid::new_v4()),
             task_id: Set(task_id),
             cost_usd: Set(output.total_cost_usd),
@@ -353,18 +374,19 @@ impl TaskStore {
             is_error: Set(output.is_error),
             result_text: Set(output.result.clone()),
             session_id: Set(output.session_id.clone()),
+            created_at: Set(chrono::Utc::now().into()),
         };
 
-        task_results::Entity::insert(result)
+        task_sessions::Entity::insert(result)
             .exec(&self.db)
             .await
-            .context("failed to insert task result")?;
+            .context("failed to insert task session")?;
 
         Ok(())
     }
 
     async fn save_error_result(&self, task_id: Uuid, error: &str) -> Result<()> {
-        let result = task_results::ActiveModel {
+        let result = task_sessions::ActiveModel {
             id: Set(Uuid::new_v4()),
             task_id: Set(task_id),
             cost_usd: Set(0.0),
@@ -374,12 +396,13 @@ impl TaskStore {
             is_error: Set(true),
             result_text: Set(error.to_string()),
             session_id: Set(String::new()),
+            created_at: Set(chrono::Utc::now().into()),
         };
 
-        task_results::Entity::insert(result)
+        task_sessions::Entity::insert(result)
             .exec(&self.db)
             .await
-            .context("failed to insert error result")?;
+            .context("failed to insert error session")?;
 
         Ok(())
     }
@@ -390,7 +413,6 @@ impl TaskStore {
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct TaskEdits {
     pub branch: Option<String>,
-    pub default_branch: Option<String>,
     /// Operator override of the human lifecycle axis. Allowed on any task,
     /// regardless of its current state (unlike the branch fields).
     pub task_state: Option<String>,

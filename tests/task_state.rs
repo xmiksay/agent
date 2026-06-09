@@ -13,14 +13,14 @@ use std::sync::Arc;
 use agent::auth::store::AuthStore;
 use agent::auth::waiter::AuthWaiter;
 use agent::config::Config;
-use agent::service::{ServiceStore, NewService};
 use agent::jobs::hub::LiveSessions;
 use agent::jobs::lifecycle::derive_agent_state;
 use agent::jobs::registry::RunningTasks;
 use agent::jobs::store::{TaskEdits, TaskStore};
 use agent::jobs::types::TriggerReason;
-use agent::project::{ProjectStore, ProviderKind};
+use agent::project::{NewProjectConfig, ProjectStore, ProviderKind};
 use agent::provider::ProviderRegistry;
+use agent::service::{NewService, ServiceStore};
 use agent::workspace::Workspace;
 use migration::MigratorTrait;
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
@@ -117,17 +117,29 @@ async fn seed_service(db: &DatabaseConnection) -> Uuid {
         .id
 }
 
-async fn new_task(store: &Arc<TaskStore>, service_id: Uuid, iid: u64) -> Uuid {
-    store
-        .create_task(
-            issue_trigger(iid),
+/// Seed a service + a project linked to it, returning the project id (the only
+/// link a task needs now).
+async fn seed_project(db: &DatabaseConnection) -> Uuid {
+    let service_id = seed_service(db).await;
+    ProjectStore::new(db.clone())
+        .upsert_project(NewProjectConfig {
+            provider: ProviderKind::Github,
             service_id,
-            ProviderKind::Github,
-            None,
-            "acme/widgets".to_string(),
-            "git@example.test:acme/widgets.git".to_string(),
-            "main".to_string(),
-        )
+            project_slug: format!("p-{}", Uuid::new_v4().simple()),
+            full_name: "acme/widgets".to_string(),
+            remote_url: "git@example.test:acme/widgets.git".to_string(),
+            default_branch: "main".to_string(),
+            my_username: "bot".to_string(),
+        })
+        .await
+        .expect("seed project")
+        .0
+        .id
+}
+
+async fn new_task(store: &Arc<TaskStore>, project_id: Uuid, iid: u64) -> Uuid {
+    store
+        .create_task(issue_trigger(iid), project_id)
         .await
         .expect("create task")
 }
@@ -135,7 +147,6 @@ async fn new_task(store: &Arc<TaskStore>, service_id: Uuid, iid: u64) -> Uuid {
 fn patch_task_state(ts: &str) -> TaskEdits {
     TaskEdits {
         branch: None,
-        default_branch: None,
         task_state: Some(ts.to_string()),
     }
 }
@@ -147,9 +158,9 @@ async fn create_seeds_two_axes() {
         return;
     };
     let store = build_store(&db);
-    let svc = seed_service(&db).await;
+    let project_id = seed_project(&db).await;
 
-    let id = new_task(&store, svc, 1).await;
+    let id = new_task(&store, project_id, 1).await;
     let (t, _) = store.get_task(id).await.unwrap().unwrap();
     assert_eq!(t.agent_state, "cold", "durable agent_state after create");
     assert_eq!(t.task_state, "pending", "task_state after create");
@@ -167,8 +178,8 @@ async fn patch_validation_and_branch_gate() {
         return;
     };
     let store = build_store(&db);
-    let svc = seed_service(&db).await;
-    let id = new_task(&store, svc, 1).await;
+    let project_id = seed_project(&db).await;
+    let id = new_task(&store, project_id, 1).await;
 
     // Invalid value rejected.
     let err = store
@@ -200,14 +211,13 @@ async fn patch_validation_and_branch_gate() {
             id,
             TaskEdits {
                 branch: Some("feature".to_string()),
-                default_branch: None,
                 task_state: None,
             },
         )
         .await
         .unwrap_err();
     assert!(
-        err.to_string().contains("can only edit branch fields"),
+        err.to_string().contains("can only edit the branch"),
         "branch edit on non-pending task must be rejected: {err}"
     );
 
@@ -222,11 +232,11 @@ async fn list_filters_by_task_state() {
         return;
     };
     let store = build_store(&db);
-    let svc = seed_service(&db).await;
+    let project_id = seed_project(&db).await;
 
-    let pend = new_task(&store, svc, 1).await;
-    let work = new_task(&store, svc, 2).await;
-    let done = new_task(&store, svc, 3).await;
+    let pend = new_task(&store, project_id, 1).await;
+    let work = new_task(&store, project_id, 2).await;
+    let done = new_task(&store, project_id, 3).await;
     store
         .update_task(work, patch_task_state("working_on"))
         .await

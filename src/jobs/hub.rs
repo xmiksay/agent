@@ -13,7 +13,7 @@
 //! Frames keep a single monotonic `seq` per task. The in-memory `history` holds
 //! the whole active session; `flushed` tracks how much of it is already in the
 //! DB. Every frame kind (agent event, auth_request, status) consumes a `seq` and
-//! is persisted to `task_events` with its `kind`, so the persisted history is a
+//! is persisted to `events` with its `kind`, so the persisted history is a
 //! complete, contiguous (seqs 0..N-1) record of both directions of the session.
 //! The seq counter is seeded from the persisted length, so the frontend can
 //! dedupe REST history against live frames by `seq` with no gaps.
@@ -30,7 +30,7 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::agent::{AgentBackend, PermissionDecision};
-use crate::entity::task_events;
+use crate::entity::events;
 
 /// Persist to `event_log` once this many unflushed events accumulate.
 const FLUSH_BATCH: usize = 100;
@@ -74,7 +74,7 @@ pub struct Envelope {
 
 struct History {
     /// `(seq, kind, payload)` for the whole active session; `flushed` counts how
-    /// many leading entries are already persisted in `task_events`.
+    /// many leading entries are already persisted in `events`.
     items: Vec<(u64, EnvelopeKind, Value)>,
     flushed: usize,
 }
@@ -339,34 +339,34 @@ impl LiveSessions {
     /// session. Equals the next seq because every frame is persisted
     /// contiguously, so live `seq`s continue past the durable history.
     async fn persisted_len(&self, task_id: Uuid) -> u64 {
-        task_events::Entity::find()
-            .filter(task_events::Column::TaskId.eq(task_id))
+        events::Entity::find()
+            .filter(events::Column::TaskId.eq(task_id))
             .count(&self.db)
             .await
             .unwrap_or_else(|e| {
-                warn!(%task_id, error = %e, "failed to count persisted task_events");
+                warn!(%task_id, error = %e, "failed to count persisted events");
                 0
             })
     }
 
-    /// Append a batch of frames to `task_events` (one row per frame). Best-effort:
+    /// Append a batch of frames to `events` (one row per frame). Best-effort:
     /// a failed flush is logged, and the frames remain available live — history
     /// just isn't durable for those.
     async fn append_to_db(&self, task_id: Uuid, batch: &[(u64, EnvelopeKind, Value)]) {
         if batch.is_empty() {
             return;
         }
-        let rows: Vec<task_events::ActiveModel> = batch
+        let rows: Vec<events::ActiveModel> = batch
             .iter()
-            .map(|(seq, kind, payload)| task_events::ActiveModel {
+            .map(|(seq, kind, payload)| events::ActiveModel {
                 task_id: Set(task_id),
                 seq: Set(*seq as i64),
                 kind: Set(kind.as_db_str().to_string()),
                 payload: Set(payload.clone()),
             })
             .collect();
-        if let Err(e) = task_events::Entity::insert_many(rows).exec(&self.db).await {
-            error!(%task_id, error = %e, "failed to flush event batch to task_events");
+        if let Err(e) = events::Entity::insert_many(rows).exec(&self.db).await {
+            error!(%task_id, error = %e, "failed to flush event batch to events");
         }
     }
 }

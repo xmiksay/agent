@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use sea_orm::*;
 use uuid::Uuid;
 
-use crate::entity::{task_results, tasks};
+use crate::entity::{task_sessions, tasks};
 use crate::jobs::store::TaskStore;
 
 impl TaskStore {
@@ -27,8 +27,14 @@ impl TaskStore {
             .context("db error")?
             .ok_or_else(|| anyhow::anyhow!("task not found"))?;
 
-        let Some(service_id) = task.service_id else {
-            anyhow::bail!("task has no service_id");
+        let project = self
+            .project_store()
+            .get_project_by_id(task.project_id)
+            .await
+            .context("loading task project")?
+            .ok_or_else(|| anyhow::anyhow!("task project not found"))?;
+        let Some(service_id) = project.service_id else {
+            anyhow::bail!("task project has no service");
         };
         let service = self
             .providers()
@@ -36,8 +42,10 @@ impl TaskStore {
             .await
             .ok_or_else(|| anyhow::anyhow!("service not loaded"))?;
 
-        let project_slug = slugify(&task.project_path);
-        let branch = task.branch.unwrap_or_else(|| task.default_branch.clone());
+        let project_slug = slugify(&project.full_name);
+        let branch = task
+            .branch
+            .unwrap_or_else(|| project.default_branch.clone());
         let branch_slug = slugify(&branch);
         let work_dir = self
             .workspace()
@@ -47,7 +55,7 @@ impl TaskStore {
             anyhow::bail!("branch checkout missing at {}", work_dir.display());
         }
 
-        let base = format!("origin/{}", task.default_branch);
+        let base = format!("origin/{}", project.default_branch);
         let out = Command::new("git")
             .arg("-C")
             .arg(&work_dir)
@@ -121,16 +129,13 @@ impl TaskStore {
         Ok(row.map(|t| t.id))
     }
 
-    /// Persisted hub-frame history from `task_events`, ordered by `seq`. Carries
+    /// Persisted hub-frame history from `events`, ordered by `seq`. Carries
     /// every frame kind (event / auth_request / status) with its `seq` + `kind`.
-    pub async fn task_events(
-        &self,
-        task_id: Uuid,
-    ) -> Result<Vec<crate::entity::task_events::Model>> {
-        use crate::entity::task_events;
-        task_events::Entity::find()
-            .filter(task_events::Column::TaskId.eq(task_id))
-            .order_by_asc(task_events::Column::Seq)
+    pub async fn task_events(&self, task_id: Uuid) -> Result<Vec<crate::entity::events::Model>> {
+        use crate::entity::events;
+        events::Entity::find()
+            .filter(events::Column::TaskId.eq(task_id))
+            .order_by_asc(events::Column::Seq)
             .all(self.db())
             .await
             .context("loading task events")
@@ -139,7 +144,7 @@ impl TaskStore {
     pub async fn get_task(
         &self,
         task_id: Uuid,
-    ) -> Result<Option<(tasks::Model, Option<task_results::Model>)>> {
+    ) -> Result<Option<(tasks::Model, Option<task_sessions::Model>)>> {
         let task = tasks::Entity::find_by_id(task_id)
             .one(self.db())
             .await
@@ -149,8 +154,10 @@ impl TaskStore {
             return Ok(None);
         };
 
-        let result = task_results::Entity::find()
-            .filter(task_results::Column::TaskId.eq(task_id))
+        // Sessions are 1:N; surface the most recent run for the detail view.
+        let result = task_sessions::Entity::find()
+            .filter(task_sessions::Column::TaskId.eq(task_id))
+            .order_by_desc(task_sessions::Column::CreatedAt)
             .one(self.db())
             .await
             .context("db error")?;

@@ -11,7 +11,7 @@ use sea_orm::*;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::entity::{task_results, tasks};
+use crate::entity::{task_sessions, tasks};
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::store::TaskStore;
 
@@ -185,11 +185,12 @@ impl TaskStore {
     /// otherwise a minimal row is created. The disposition reason no longer lives
     /// in a `status` value, so it has to be recorded here.
     pub(crate) async fn note_task_result(&self, task_id: Uuid, text: &str) -> Result<()> {
-        let existing = task_results::Entity::find()
-            .filter(task_results::Column::TaskId.eq(task_id))
+        let existing = task_sessions::Entity::find()
+            .filter(task_sessions::Column::TaskId.eq(task_id))
+            .order_by_desc(task_sessions::Column::CreatedAt)
             .one(self.db())
             .await
-            .context("looking up task result for note")?;
+            .context("looking up task session for note")?;
 
         match existing {
             Some(row) => {
@@ -198,7 +199,7 @@ impl TaskStore {
                 } else {
                     format!("{}\n{text}", row.result_text)
                 };
-                let mut active: task_results::ActiveModel = row.into();
+                let mut active: task_sessions::ActiveModel = row.into();
                 active.result_text = Set(combined);
                 active
                     .update(self.db())
@@ -206,7 +207,7 @@ impl TaskStore {
                     .context("appending result note")?;
             }
             None => {
-                let row = task_results::ActiveModel {
+                let row = task_sessions::ActiveModel {
                     id: Set(Uuid::new_v4()),
                     task_id: Set(task_id),
                     cost_usd: Set(0.0),
@@ -216,8 +217,9 @@ impl TaskStore {
                     is_error: Set(false),
                     result_text: Set(text.to_string()),
                     session_id: Set(String::new()),
+                    created_at: Set(chrono::Utc::now().into()),
                 };
-                task_results::Entity::insert(row)
+                task_sessions::Entity::insert(row)
                     .exec(self.db())
                     .await
                     .context("inserting result note")?;
@@ -300,7 +302,7 @@ mod tests {
     use crate::jobs::registry::RunningTasks;
     use crate::jobs::store::TaskStore;
     use crate::jobs::types::TriggerReason;
-    use crate::project::{ProjectStore, ProviderKind};
+    use crate::project::{NewProjectConfig, ProjectStore, ProviderKind};
     use crate::provider::ProviderRegistry;
     use crate::service::{NewService, ServiceStore};
     use crate::workspace::Workspace;
@@ -381,6 +383,25 @@ mod tests {
             .id
     }
 
+    /// Insert a project linked to `service_id` so `tasks.project_id` satisfies its
+    /// FK, and return its id.
+    async fn seed_project(db: &DatabaseConnection, service_id: Uuid) -> Uuid {
+        ProjectStore::new(db.clone())
+            .upsert_project(NewProjectConfig {
+                provider: ProviderKind::Github,
+                service_id,
+                project_slug: format!("p-{}", Uuid::new_v4().simple()),
+                full_name: "acme/widgets".into(),
+                remote_url: "git@x:acme/widgets.git".into(),
+                default_branch: "main".into(),
+                my_username: "bot".into(),
+            })
+            .await
+            .expect("seed project")
+            .0
+            .id
+    }
+
     /// create → confirm(pre-spawn) → run → warm → PATCH → terminal finish,
     /// asserting both `task_state` (persisted) and the derived `agent_state` at
     /// each step. Replays the exact column writes + hub flags the runner makes,
@@ -394,6 +415,7 @@ mod tests {
         let hub = LiveSessions::new(db.clone());
         let store = store_with(&db, hub.clone());
         let service_id = seed_service(&db).await;
+        let project_id = seed_project(&db, service_id).await;
 
         let id = store
             .create_task(
@@ -403,12 +425,7 @@ mod tests {
                     description: String::new(),
                     url: "http://x/7".into(),
                 },
-                service_id,
-                ProviderKind::Github,
-                None,
-                "acme/widgets".into(),
-                "git@x:acme/widgets.git".into(),
-                "main".into(),
+                project_id,
             )
             .await
             .unwrap();
@@ -458,7 +475,6 @@ mod tests {
                 id,
                 crate::jobs::store::TaskEdits {
                     branch: None,
-                    default_branch: None,
                     task_state: Some("working_on".into()),
                 },
             )
@@ -505,6 +521,7 @@ mod tests {
         let hub = LiveSessions::new(db.clone());
         let store = store_with(&db, hub);
         let svc = seed_service(&db).await;
+        let project_id = seed_project(&db, svc).await;
 
         let mk = |iid: u64| TriggerReason::Issue {
             iid,
@@ -512,42 +529,9 @@ mod tests {
             description: String::new(),
             url: format!("http://x/{iid}"),
         };
-        let inflight = store
-            .create_task(
-                mk(1),
-                svc,
-                ProviderKind::Github,
-                None,
-                "p".into(),
-                "git@x:p.git".into(),
-                "main".into(),
-            )
-            .await
-            .unwrap();
-        let confirmed = store
-            .create_task(
-                mk(2),
-                svc,
-                ProviderKind::Github,
-                None,
-                "p".into(),
-                "git@x:p.git".into(),
-                "main".into(),
-            )
-            .await
-            .unwrap();
-        let pending = store
-            .create_task(
-                mk(3),
-                svc,
-                ProviderKind::Github,
-                None,
-                "p".into(),
-                "git@x:p.git".into(),
-                "main".into(),
-            )
-            .await
-            .unwrap();
+        let inflight = store.create_task(mk(1), project_id).await.unwrap();
+        let confirmed = store.create_task(mk(2), project_id).await.unwrap();
+        let pending = store.create_task(mk(3), project_id).await.unwrap();
         // Simulate a turn in flight (no finished_at).
         store
             .set_states(inflight, "cold", "working_on")
