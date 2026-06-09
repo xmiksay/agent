@@ -40,8 +40,10 @@ pub enum TriggerReason {
 impl TriggerReason {
     pub fn event_id(&self) -> String {
         match self {
-            // Hash title+description so editing the issue creates a new task,
-            // but a no-op re-fire (same content twice in a row) is deduped.
+            // Hash title+description so a no-op re-fire (identical content) is
+            // deduped, while a genuine edit produces a fresh key and reaches the
+            // dispatcher — which routes it to `update_issue_description` on the
+            // issue's existing task rather than spawning a new one (issue #35).
             Self::Issue {
                 iid,
                 title,

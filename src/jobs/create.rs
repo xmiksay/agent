@@ -64,6 +64,45 @@ impl TaskStore {
         Ok(id)
     }
 
+    /// Refresh an existing issue task's stored title + description in place — the
+    /// dedup path (issue #35) for a re-fired/edited issue webhook. Only the
+    /// trigger payload that the next run (or resume) reads is rewritten; the
+    /// task's state, branch, and session are left untouched.
+    pub async fn update_issue_description(
+        &self,
+        task_id: Uuid,
+        title: &str,
+        description: &str,
+    ) -> Result<()> {
+        let task = tasks::Entity::find_by_id(task_id)
+            .one(self.db())
+            .await
+            .context("db error")?
+            .ok_or_else(|| anyhow::anyhow!("task not found"))?;
+
+        let mut trigger: TriggerReason = serde_json::from_value(task.trigger_data.clone())
+            .context("failed to deserialize trigger")?;
+        let TriggerReason::Issue {
+            title: t,
+            description: d,
+            ..
+        } = &mut trigger
+        else {
+            anyhow::bail!("task {task_id} is not an issue task");
+        };
+        *t = title.to_string();
+        *d = description.to_string();
+
+        let trigger_data = serde_json::to_value(&trigger).context("failed to serialize trigger")?;
+        let mut active: tasks::ActiveModel = task.into();
+        active.trigger_data = Set(trigger_data);
+        active
+            .update(self.db())
+            .await
+            .context("updating issue trigger")?;
+        Ok(())
+    }
+
     /// Clone an existing task's trigger into a fresh pending row and immediately
     /// confirm it. Returns the new task's id.
     pub async fn retry_task(self: &Arc<Self>, task_id: Uuid) -> Result<Uuid> {
