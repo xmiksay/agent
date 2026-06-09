@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
             get(api::handlers::list_tasks).post(api::handlers::create_task),
         )
         .route("/api/tasks/stats", get(api::stats::task_stats))
+        .route("/api/tasks/bulk", post(api::bulk::bulk_action))
         .route(
             "/api/tasks/{id}",
             get(api::handlers::get_task)

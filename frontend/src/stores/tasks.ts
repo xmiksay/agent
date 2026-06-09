@@ -1,7 +1,14 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { tasksApi } from "../api/tasks";
-import type { NewTaskBody, Task, TaskDetail, TaskEdits } from "../types/api";
+import type {
+  BulkAction,
+  BulkActionResponse,
+  NewTaskBody,
+  Task,
+  TaskDetail,
+  TaskEdits,
+} from "../types/api";
 
 export const useTasksStore = defineStore("tasks", () => {
   const tasks = ref<Task[]>([]);
@@ -62,6 +69,11 @@ export const useTasksStore = defineStore("tasks", () => {
     if (detail.value?.id === id) detail.value = null;
   }
 
+  // Apply one lifecycle action across many tasks; the caller refreshes after.
+  async function bulk(action: BulkAction, ids: string[]): Promise<BulkActionResponse> {
+    return tasksApi.bulk(action, ids);
+  }
+
   return {
     tasks,
     detail,
@@ -75,5 +87,6 @@ export const useTasksStore = defineStore("tasks", () => {
     kill,
     update,
     remove,
+    bulk,
   };
 });

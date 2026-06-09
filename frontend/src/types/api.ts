@@ -27,6 +27,17 @@ export interface Task {
   pid: number | null;
 }
 
+/** A lifecycle action applicable to many tasks at once. `run` confirms a
+ *  pending task or resumes a paused one (chosen per task on the server). */
+export type BulkAction = "run" | "pause" | "resume" | "delete";
+
+/** Per-id outcome of a bulk action: a bad row reports here instead of failing
+ *  the whole batch. */
+export interface BulkActionResponse {
+  succeeded: string[];
+  failed: { id: string; error: string }[];
+}
+
 /** One frame on the task live stream (see src/ws/mod.rs `Envelope`). */
 export type EnvelopeKind = "event" | "auth_request" | "status";
 

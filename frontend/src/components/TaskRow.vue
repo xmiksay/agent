@@ -10,8 +10,8 @@ import type { Task } from "../types/api";
 // One task row. Owns its own busy + inline-edit state (only one action runs per
 // row at a time) and talks to the store directly; the parent just re-fetches the
 // list when something changed.
-const props = defineProps<{ task: Task; now: Date }>();
-const emit = defineEmits<{ (e: "changed"): void }>();
+const props = defineProps<{ task: Task; now: Date; selected: boolean }>();
+const emit = defineEmits<{ (e: "changed"): void; (e: "toggle"): void }>();
 
 const store = useTasksStore();
 const router = useRouter();
@@ -112,7 +112,16 @@ async function saveEdit() {
 </script>
 
 <template>
-  <tr class="cursor-pointer" @click="openTask">
+  <tr class="cursor-pointer" :class="selected ? 'bg-accent/5' : ''" @click="openTask">
+    <td class="w-8" @click.stop>
+      <input
+        type="checkbox"
+        class="cursor-pointer align-middle accent-accent"
+        :checked="selected"
+        aria-label="Select task"
+        @change="emit('toggle')"
+      />
+    </td>
     <td class="whitespace-nowrap text-xs text-faint">{{ created(task) }}</td>
     <td><ProviderBadge :provider="task.provider" /></td>
     <td class="max-w-[220px]">
