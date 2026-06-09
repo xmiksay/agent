@@ -5,7 +5,7 @@ import { useStreamStore } from "../stores/stream";
 import { authApi } from "../api/auth";
 import { tasksApi } from "../api/tasks";
 import { extractTaskNotifications } from "./useClaudeStream";
-import type { AuthRequest } from "../types/api";
+import type { AuthRequest, TaskEdits, TaskState } from "../types/api";
 
 /**
  * Everything behind the task detail view: REST detail/result, the live event
@@ -156,25 +156,46 @@ export function useTaskDetail(idRef: Ref<string>) {
     }
   }
 
-  // --- Edit task (pending only) ----------------------------------------------
+  // --- Edit task -------------------------------------------------------------
+  // `task_state` is editable on any task; the run inputs (branch, and the
+  // trigger's title/description that drive the prompt) only while pending —
+  // before the task is related to a run.
   const editing = ref(false);
   const editBranch = ref("");
-  const editDefaultBranch = ref("");
+  const editTitle = ref("");
+  const editDescription = ref("");
+  const editTaskState = ref<TaskState>("pending");
   const savingEdit = ref(false);
+
+  // trigger_data is a serialized TriggerReason; only some variants carry a
+  // title/description, so the form shows those inputs conditionally.
+  const triggerData = computed(() => {
+    const d = store.detail?.trigger_data;
+    return d && typeof d === "object" ? (d as Record<string, unknown>) : null;
+  });
+  const triggerHasTitle = computed(() => typeof triggerData.value?.title === "string");
+  const triggerHasDescription = computed(
+    () => typeof triggerData.value?.description === "string",
+  );
 
   function startEdit() {
     editBranch.value = store.detail?.branch ?? "";
-    editDefaultBranch.value = store.detail?.default_branch ?? "";
+    editTitle.value = (triggerData.value?.title as string) ?? "";
+    editDescription.value = (triggerData.value?.description as string) ?? "";
+    editTaskState.value = store.detail?.task_state ?? "pending";
     editing.value = true;
   }
 
   async function saveEdit() {
     savingEdit.value = true;
     try {
-      await store.update(idRef.value, {
-        branch: editBranch.value.trim() || undefined,
-        default_branch: editDefaultBranch.value.trim() || undefined,
-      });
+      const edits: TaskEdits = { task_state: editTaskState.value };
+      if (isPending.value) {
+        edits.branch = editBranch.value.trim() || undefined;
+        if (triggerHasTitle.value) edits.title = editTitle.value.trim() || undefined;
+        if (triggerHasDescription.value) edits.description = editDescription.value;
+      }
+      await store.update(idRef.value, edits);
       editing.value = false;
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
@@ -291,7 +312,11 @@ export function useTaskDetail(idRef: Ref<string>) {
     loadDiff,
     editing,
     editBranch,
-    editDefaultBranch,
+    editTitle,
+    editDescription,
+    editTaskState,
+    triggerHasTitle,
+    triggerHasDescription,
     savingEdit,
     startEdit,
     saveEdit,

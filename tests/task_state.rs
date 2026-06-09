@@ -146,8 +146,8 @@ async fn new_task(store: &Arc<TaskStore>, project_id: Uuid, iid: u64) -> Uuid {
 
 fn patch_task_state(ts: &str) -> TaskEdits {
     TaskEdits {
-        branch: None,
         task_state: Some(ts.to_string()),
+        ..Default::default()
     }
 }
 
@@ -211,7 +211,7 @@ async fn patch_validation_and_branch_gate() {
             id,
             TaskEdits {
                 branch: Some("feature".to_string()),
-                task_state: None,
+                ..Default::default()
             },
         )
         .await

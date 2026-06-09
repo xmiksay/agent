@@ -474,8 +474,8 @@ mod tests {
             .update_task(
                 id,
                 crate::jobs::store::TaskEdits {
-                    branch: None,
                     task_state: Some("working_on".into()),
+                    ..Default::default()
                 },
             )
             .await
@@ -570,6 +570,91 @@ mod tests {
             (p.agent_state.as_str(), p.task_state.as_str()),
             ("cold", "pending")
         );
+
+        drop(store);
+        drop(db);
+        drop_db(&admin, &name).await;
+    }
+
+    /// A pending issue task's title/description (the prompt inputs, stored in
+    /// trigger_data) are editable, the edit survives the JSON round-trip, and
+    /// once the task leaves `pending` the same edit is refused.
+    #[tokio::test]
+    async fn edit_trigger_title_and_description() {
+        use crate::jobs::store::TaskEdits;
+
+        let Some((db, name, admin)) = fresh_db().await else {
+            return;
+        };
+        let hub = LiveSessions::new(db.clone());
+        let store = store_with(&db, hub);
+        let svc = seed_service(&db).await;
+        let project_id = seed_project(&db, svc).await;
+
+        let id = store
+            .create_task(
+                TriggerReason::Issue {
+                    iid: 9,
+                    title: "old title".into(),
+                    description: "old body".into(),
+                    url: "http://x/9".into(),
+                },
+                project_id,
+            )
+            .await
+            .unwrap();
+
+        store
+            .update_task(
+                id,
+                TaskEdits {
+                    title: Some("new title".into()),
+                    description: Some("new body".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let (t, _) = store.get_task(id).await.unwrap().unwrap();
+        let trigger: TriggerReason = serde_json::from_value(t.trigger_data).unwrap();
+        match trigger {
+            TriggerReason::Issue {
+                title, description, ..
+            } => {
+                assert_eq!(title, "new title");
+                assert_eq!(description, "new body");
+            }
+            other => panic!("expected Issue, got {other:?}"),
+        }
+
+        // Leave pending → the prompt inputs are frozen.
+        store.set_states(id, "cold", "working_on").await.unwrap();
+        let err = store
+            .update_task(
+                id,
+                TaskEdits {
+                    title: Some("too late".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("pending"), "got: {err}");
+
+        // task_state, by contrast, stays editable on a non-pending task.
+        store
+            .update_task(
+                id,
+                TaskEdits {
+                    task_state: Some("completed".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let (t, _) = store.get_task(id).await.unwrap().unwrap();
+        assert_eq!(t.task_state, "completed");
 
         drop(store);
         drop(db);

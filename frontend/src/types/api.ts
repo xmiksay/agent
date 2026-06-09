@@ -251,12 +251,14 @@ export interface NewTaskBody {
   trigger: TriggerReason;
 }
 
-/** Editable task fields. `branch`/`default_branch` are pending-only; `task_state`
- *  (the operator lifecycle) can be set on any task. Only provided keys change. */
+/** Editable task fields. `branch`/`title`/`description` are the run inputs —
+ *  pending-only; `task_state` (the operator lifecycle) can be set on any task.
+ *  Only provided keys change. */
 export interface TaskEdits {
   branch?: string;
-  default_branch?: string;
   task_state?: TaskState;
+  title?: string;
+  description?: string;
 }
 
 export type StatsGroupBy = "project" | "service" | "branch" | "trigger_type";
