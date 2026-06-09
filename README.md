@@ -33,7 +33,7 @@ Copy `.env.example` to `.env` and set:
 
 The Vue SPA is baked into the release binary by `rust-embed` — no runtime path override.
 
-Forge credentials (GitLab, GitHub, …) are **not** in `.env` — they live in the `git_services` table and are managed via the admin UI.
+Forge credentials (GitLab, GitHub, …) are **not** in `.env` — they live in the `service` table and are managed via the admin UI.
 
 ### 2. Run
 
@@ -154,12 +154,12 @@ All routes under `/api/*` require `Authorization: Bearer $API_BEARER_TOKEN` if t
 ### Projects, services, approvals
 
 - `GET /api/projects` / `GET /api/projects/{id}` / `PUT /api/projects/{id}/config` / `GET /api/projects/{id}/branches`
-- `GET /api/git_services` / `POST /api/git_services`
-- `GET /api/git_services/{id}` / `PUT /api/git_services/{id}` / `DELETE /api/git_services/{id}`
+- `GET /api/services` / `POST /api/services`
+- `GET /api/services/{id}` / `PUT /api/services/{id}` / `DELETE /api/services/{id}`
 - `GET /api/auth_requests` *(optional `?status=`, `?task_id=`)*
 - `GET /api/auth_requests/{id}` / `POST /api/auth_requests/{id}/resolve`
 
-Token and webhook secret on git services are write-only — they're never returned by `GET /api/git_services`.
+Token and webhook secret on git services are write-only — they're never returned by `GET /api/services`.
 
 ## Operator approvals (PreToolUse hook)
 

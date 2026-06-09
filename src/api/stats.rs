@@ -75,6 +75,18 @@ pub async fn task_stats(
     let service_slug: HashMap<Uuid, String> =
         services.into_iter().map(|s| (s.id, s.slug)).collect();
 
+    // project_id → (display name, owning service) — the fields tasks used to
+    // carry inline are now resolved through the project.
+    let projects = state
+        .project_store
+        .list_projects()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let project_meta: HashMap<Uuid, (String, Option<Uuid>)> = projects
+        .into_iter()
+        .map(|p| (p.id, (p.full_name, p.service_id)))
+        .collect();
+
     let now = Utc::now();
     let mut buckets: HashMap<String, StatsRow> = HashMap::new();
     let mut total_secs: i64 = 0;
@@ -83,31 +95,29 @@ pub async fn task_stats(
     for t in rows {
         let secs = duration_secs(&t, now);
         total_secs += secs;
+        let project_name = project_meta
+            .get(&t.project_id)
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| "(unknown project)".into());
         let (key, label) = match group_by {
-            "project" => (
-                t.project_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "_no_project".into()),
-                t.project_path.clone(),
-            ),
+            "project" => (t.project_id.to_string(), project_name),
             "service" => {
-                let key = t
-                    .service_id
+                let sid = project_meta.get(&t.project_id).and_then(|(_, s)| *s);
+                let key = sid
                     .map(|id| id.to_string())
                     .unwrap_or_else(|| "_no_service".into());
-                let label = t
-                    .service_id
+                let label = sid
                     .and_then(|id| service_slug.get(&id).cloned())
                     .unwrap_or_else(|| "(no service)".into());
                 (key, label)
             }
             "branch" => {
                 // Branch labels are unique enough on their own; but qualify the
-                // key with project_path so the same branch name on two repos
+                // key with the project so the same branch name on two repos
                 // doesn't collapse into one row.
                 let branch = t.branch.clone().unwrap_or_else(|| "(no branch)".into());
-                let key = format!("{}::{branch}", t.project_path);
-                let label = format!("{branch}  · {}", t.project_path);
+                let key = format!("{project_name}::{branch}");
+                let label = format!("{branch}  · {project_name}");
                 (key, label)
             }
             _ => (t.trigger_type.clone(), t.trigger_type.clone()),

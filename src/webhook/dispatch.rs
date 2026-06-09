@@ -122,18 +122,7 @@ pub async fn dispatch(
         return Ok(vec![]);
     }
 
-    let id = state
-        .task_store
-        .create_task(
-            trigger,
-            service.id,
-            ev.provider,
-            Some(project.id),
-            ev.project.full_name.clone(),
-            ev.project.remote_url.clone(),
-            ev.project.default_branch.clone(),
-        )
-        .await?;
+    let id = state.task_store.create_task(trigger, project.id).await?;
     info!(%id, project = %ev.project.full_name, autofire = service.autofire, "task created from webhook");
 
     // Autofire services skip the manual confirm step: start the task immediately.

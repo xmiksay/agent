@@ -9,7 +9,7 @@ use sea_orm::*;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::entity::{task_results, tasks};
+use crate::entity::{task_sessions, tasks};
 use crate::jobs::lifecycle::{
     AGENT_COLD, AGENT_FAILED, AGENT_PENDING, TASK_FAILED, TASK_WORKING_ON,
 };
@@ -102,8 +102,8 @@ impl TaskStore {
         active.pid = Set(None);
         active.update(self.db()).await?;
 
-        task_results::Entity::delete_many()
-            .filter(task_results::Column::TaskId.eq(task_id))
+        task_sessions::Entity::delete_many()
+            .filter(task_sessions::Column::TaskId.eq(task_id))
             .exec(self.db())
             .await
             .context("failed to clear previous task result")?;

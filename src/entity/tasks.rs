@@ -19,16 +19,16 @@ pub struct Model {
     pub task_state: String,
     pub trigger_type: String,
     pub trigger_data: Json,
-    pub project_path: String,
-    pub git_url: String,
-    pub default_branch: String,
     pub created_at: DateTimeWithTimeZone,
     pub started_at: Option<DateTimeWithTimeZone>,
     pub finished_at: Option<DateTimeWithTimeZone>,
-    pub provider: String,
     pub branch: Option<String>,
-    pub project_id: Option<Uuid>,
-    pub service_id: Option<Uuid>,
+    /// The work item's project. Everything else about where/how the task runs —
+    /// remote URL, default branch, provider, owning service — is resolved through
+    /// this at run time (`project_id → projects → service`), not duplicated here.
+    pub project_id: Uuid,
+    /// The current/working claude CLI session id, for `--resume`. Set once the
+    /// agent emits its init frame; the per-run history lives in `task_sessions`.
     #[sea_orm(column_type = "Text", nullable)]
     pub session_id: Option<String>,
     pub pid: Option<i64>,
@@ -38,29 +38,22 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(has_one = "super::task_results::Entity")]
-    TaskResult,
+    #[sea_orm(has_many = "super::task_sessions::Entity")]
+    TaskSession,
     #[sea_orm(has_many = "super::auth_requests::Entity")]
     AuthRequest,
     #[sea_orm(
         belongs_to = "super::projects::Entity",
         from = "Column::ProjectId",
         to = "super::projects::Column::Id",
-        on_delete = "SetNull"
+        on_delete = "Cascade"
     )]
     Project,
-    #[sea_orm(
-        belongs_to = "super::service::Entity",
-        from = "Column::ServiceId",
-        to = "super::service::Column::Id",
-        on_delete = "SetNull"
-    )]
-    Service,
 }
 
-impl Related<super::task_results::Entity> for Entity {
+impl Related<super::task_sessions::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::TaskResult.def()
+        Relation::TaskSession.def()
     }
 }
 
@@ -73,12 +66,6 @@ impl Related<super::auth_requests::Entity> for Entity {
 impl Related<super::projects::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Project.def()
-    }
-}
-
-impl Related<super::service::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Service.def()
     }
 }
 

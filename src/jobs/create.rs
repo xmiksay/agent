@@ -13,20 +13,12 @@ use crate::entity::tasks;
 use crate::jobs::lifecycle::{AGENT_COLD, TASK_PENDING};
 use crate::jobs::store::TaskStore;
 use crate::jobs::types::TriggerReason;
-use crate::project::ProviderKind;
 
 impl TaskStore {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create_task(
-        &self,
-        trigger: TriggerReason,
-        service_id: Uuid,
-        provider: ProviderKind,
-        project_id: Option<Uuid>,
-        project_path: String,
-        git_url: String,
-        default_branch: String,
-    ) -> Result<Uuid> {
+    /// Create a fresh `pending` task for `project_id`. Where/how it runs (remote,
+    /// default branch, provider, owning service) is resolved from the project at
+    /// run time, not stored on the task.
+    pub async fn create_task(&self, trigger: TriggerReason, project_id: Uuid) -> Result<Uuid> {
         let id = Uuid::new_v4();
         let trigger_data = serde_json::to_value(&trigger).context("failed to serialize trigger")?;
 
@@ -39,18 +31,13 @@ impl TaskStore {
             | TriggerReason::FixReview { source_branch, .. }
             | TriggerReason::MRComment { source_branch, .. } => source_branch.clone(),
             TriggerReason::Issue { iid, title, .. } => issue_branch_name(*iid, title),
-            TriggerReason::IssueComment { issue_iid, .. } => {
-                let existing = match project_id {
-                    Some(pid) => self
-                        .project_store()
-                        .find_branch_for_issue(pid, *issue_iid as i64)
-                        .await
-                        .context("looking up issue branch")?
-                        .map(|b| b.branch_name),
-                    None => None,
-                };
-                existing.unwrap_or_else(|| issue_branch_name(*issue_iid, ""))
-            }
+            TriggerReason::IssueComment { issue_iid, .. } => self
+                .project_store()
+                .find_branch_for_issue(project_id, *issue_iid as i64)
+                .await
+                .context("looking up issue branch")?
+                .map(|b| b.branch_name)
+                .unwrap_or_else(|| issue_branch_name(*issue_iid, "")),
         });
         let task = tasks::ActiveModel {
             id: Set(id),
@@ -58,16 +45,11 @@ impl TaskStore {
             task_state: Set(TASK_PENDING.to_string()),
             trigger_type: Set(trigger.trigger_type().to_string()),
             trigger_data: Set(trigger_data),
-            project_path: Set(project_path),
-            git_url: Set(git_url),
-            default_branch: Set(default_branch),
             created_at: Set(Utc::now().into()),
             started_at: Set(None),
             finished_at: Set(None),
-            provider: Set(provider.as_str().to_string()),
             branch: Set(branch),
             project_id: Set(project_id),
-            service_id: Set(Some(service_id)),
             session_id: Set(None),
             pid: Set(None),
             pending_message: Set(None),
@@ -93,22 +75,8 @@ impl TaskStore {
 
         let trigger: TriggerReason = serde_json::from_value(task.trigger_data.clone())
             .context("failed to deserialize trigger")?;
-        let provider: ProviderKind = task.provider.parse()?;
-        let service_id = task
-            .service_id
-            .ok_or_else(|| anyhow::anyhow!("task has no service_id; cannot retry"))?;
 
-        let new_id = self
-            .create_task(
-                trigger,
-                service_id,
-                provider,
-                task.project_id,
-                task.project_path.clone(),
-                task.git_url.clone(),
-                task.default_branch.clone(),
-            )
-            .await?;
+        let new_id = self.create_task(trigger, task.project_id).await?;
 
         self.confirm_task(new_id).await?;
         Ok(new_id)

@@ -5,7 +5,7 @@ use serde::Serialize;
 /// the ordered read index; `seq` matches the live-stream envelope `seq`. `kind`
 /// distinguishes agent events from auth_request / status side-channel frames.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize)]
-#[sea_orm(table_name = "task_events")]
+#[sea_orm(table_name = "events")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub task_id: Uuid,

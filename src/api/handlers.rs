@@ -32,23 +32,55 @@ pub struct TaskView {
     /// entity's durable `agent_state` column is `skip_serializing`, so this is the
     /// only `agent_state` key in the output.
     pub agent_state: &'static str,
+    /// Fields resolved from the task's project (no longer columns on `tasks`):
+    /// the API keeps emitting them so the SPA can render provider/project/remote
+    /// without a second fetch. `None` if the project was deleted.
+    pub project_path: Option<String>,
+    pub provider: Option<String>,
+    pub service_id: Option<Uuid>,
+    pub default_branch: Option<String>,
+    pub git_url: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct TaskDetail {
     #[serde(flatten)]
     pub task: TaskView,
-    pub result: Option<crate::entity::task_results::Model>,
+    pub result: Option<crate::entity::task_sessions::Model>,
     /// Absolute path to this task's git worktree on the agent host.
     /// `None` if the task's service can no longer be resolved.
     pub work_dir: Option<String>,
 }
 
 /// Build the read-time task view: overlay the derived `agent_state` onto the
-/// persisted entity.
-fn task_view(task: crate::entity::tasks::Model, state: &AppState) -> TaskView {
+/// persisted entity and resolve the project-derived fields the SPA renders.
+async fn task_view(task: crate::entity::tasks::Model, state: &AppState) -> TaskView {
     let agent_state = derive_agent_state(&task.agent_state, task.id, state.task_store.hub());
-    TaskView { task, agent_state }
+    let project = state
+        .project_store
+        .get_project_by_id(task.project_id)
+        .await
+        .ok()
+        .flatten();
+    let (project_path, provider, service_id, default_branch, git_url) = match project {
+        Some(p) => (
+            Some(p.full_name),
+            Some(p.provider.as_str().to_string()),
+            p.service_id,
+            Some(p.default_branch),
+            Some(p.remote_url),
+        ),
+        None => (None, None, None, None, None),
+    };
+    TaskView {
+        task,
+        agent_state,
+        project_path,
+        provider,
+        service_id,
+        default_branch,
+        git_url,
+    }
 }
 
 pub async fn list_tasks(
@@ -64,16 +96,14 @@ pub async fn list_tasks(
     // task_state filters in SQL; agent_state is derived (not a column) so it's
     // filtered in-memory here. Acceptable at single-operator scale where the task
     // list is small.
-    let views: Vec<TaskView> = tasks
-        .into_iter()
-        .map(|t| task_view(t, &state))
-        .filter(|v| {
-            query
-                .agent_state
-                .as_deref()
-                .is_none_or(|want| v.agent_state == want)
-        })
-        .collect();
+    let want = query.agent_state.as_deref();
+    let mut views = Vec::with_capacity(tasks.len());
+    for t in tasks {
+        let v = task_view(t, &state).await;
+        if want.is_none_or(|w| v.agent_state == w) {
+            views.push(v);
+        }
+    }
 
     Ok(Json(views))
 }
@@ -91,25 +121,35 @@ pub async fn get_task(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let work_dir = match task.service_id {
-        Some(sid) => state.task_store.providers().service(sid).await.map(|svc| {
-            let project_slug = slugify(&task.project_path);
-            let branch = task
-                .branch
-                .clone()
-                .unwrap_or_else(|| task.default_branch.clone());
-            let branch_slug = slugify(&branch);
-            state
-                .task_store
-                .workspace()
-                .branch_dir(&svc.slug, &project_slug, &branch_slug)
-                .to_string_lossy()
-                .into_owned()
-        }),
+    // Resolve the worktree path via the task's project → service.
+    let project = state
+        .project_store
+        .get_project_by_id(task.project_id)
+        .await
+        .ok()
+        .flatten();
+    let work_dir = match project {
+        Some(ref p) => match p.service_id {
+            Some(sid) => state.task_store.providers().service(sid).await.map(|svc| {
+                let project_slug = slugify(&p.full_name);
+                let branch = task
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| p.default_branch.clone());
+                let branch_slug = slugify(&branch);
+                state
+                    .task_store
+                    .workspace()
+                    .branch_dir(&svc.slug, &project_slug, &branch_slug)
+                    .to_string_lossy()
+                    .into_owned()
+            }),
+            None => None,
+        },
         None => None,
     };
 
-    let task = task_view(task, &state);
+    let task = task_view(task, &state).await;
     Ok(Json(TaskDetail {
         task,
         result,
@@ -155,22 +195,9 @@ pub async fn create_task(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "project not found".to_string()))?;
 
-    let service_id = project.service_id.ok_or((
-        StatusCode::BAD_REQUEST,
-        "project has no service_id".to_string(),
-    ))?;
-
     let id = state
         .task_store
-        .create_task(
-            payload.trigger,
-            service_id,
-            project.provider,
-            Some(project.id),
-            project.full_name,
-            project.remote_url,
-            project.default_branch,
-        )
+        .create_task(payload.trigger, project.id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -219,7 +246,7 @@ pub struct EventsResponse {
     pub events: Vec<PersistedEvent>,
 }
 
-/// Durable frame history from `task_events`. Live frames for an active task
+/// Durable frame history from `events`. Live frames for an active task
 /// arrive over the WebSocket; this seeds the timeline (and is the only source
 /// once a task has finished and its in-memory session is gone).
 pub async fn task_events(
@@ -333,16 +360,11 @@ mod tests {
             task_state: "working_on".to_string(),
             trigger_type: "issue".to_string(),
             trigger_data: serde_json::json!({}),
-            project_path: "p".to_string(),
-            git_url: "u".to_string(),
-            default_branch: "main".to_string(),
             created_at: Utc::now().into(),
             started_at: None,
             finished_at: None,
-            provider: "github".to_string(),
             branch: Some("b".to_string()),
-            project_id: None,
-            service_id: None,
+            project_id: Uuid::new_v4(),
             session_id: None,
             pid: None,
             pending_message: None,
@@ -351,6 +373,11 @@ mod tests {
         let view = TaskView {
             task: model,
             agent_state: "running",
+            project_path: Some("acme/widgets".to_string()),
+            provider: Some("github".to_string()),
+            service_id: None,
+            default_branch: Some("main".to_string()),
+            git_url: None,
         };
         let v = serde_json::to_value(&view).unwrap();
 
