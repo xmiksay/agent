@@ -147,11 +147,9 @@ pub async fn run_job(
             cmd.env(key, value);
         }
     }
-    // Provider API key (API-mode) after project env so a project can't clobber it;
-    // absent, the CLI runs on its subscription login.
-    if let Some(key) = model.as_ref().and_then(|m| m.api_key.as_deref()) {
-        cmd.env(backend.api_key_env(), key);
-    }
+    // Provider API key + base URL (API mode) after project env so a project can't
+    // clobber them; absent, the CLI runs on its subscription login + default host.
+    crate::agent::apply_model_env(&mut cmd, backend.as_ref(), model.as_ref());
     let mut child = cmd
         .env(provider_token_var, &provider_token_value)
         .stdin(Stdio::piped())

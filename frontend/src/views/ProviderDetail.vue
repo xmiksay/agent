@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { useModelProvidersStore } from "../stores/model_providers";
-import type { UpdateModelProvider } from "../types/api";
+import { useProvidersStore } from "../stores/providers";
+import type { UpdateProvider } from "../types/api";
 
 const props = defineProps<{ id: string }>();
-const store = useModelProvidersStore();
+const store = useProvidersStore();
 const router = useRouter();
 
-const draft = ref<{ kind: string; name: string }>({ kind: "", name: "" });
+// api_url is not secret, so it is prefilled and edited directly; "" round-trips
+// as a clear (null) on save.
+const draft = ref<{ kind: string; name: string; api_url: string }>({
+  kind: "",
+  name: "",
+  api_url: "",
+});
 // New API key to set. Blank leaves the stored key untouched unless `clearKey`
 // is checked, which sends null to clear it.
 const apiKey = ref("");
@@ -22,7 +28,11 @@ async function reload() {
   await store.refresh();
   await store.load(props.id);
   if (store.detail) {
-    draft.value = { kind: store.detail.kind, name: store.detail.name };
+    draft.value = {
+      kind: store.detail.kind,
+      name: store.detail.name,
+      api_url: store.detail.api_url ?? "",
+    };
     apiKey.value = "";
     clearKey.value = false;
   }
@@ -35,7 +45,12 @@ async function save() {
   saving.value = true;
   error.value = null;
   try {
-    const body: UpdateModelProvider = { kind: draft.value.kind, name: draft.value.name };
+    const body: UpdateProvider = {
+      kind: draft.value.kind,
+      name: draft.value.name,
+      // "" clears the override; a string sets it.
+      api_url: draft.value.api_url || null,
+    };
     if (clearKey.value) body.api_key = null;
     else if (apiKey.value) body.api_key = apiKey.value;
     await store.update(props.id, body);
@@ -53,7 +68,7 @@ async function remove() {
   if (!confirm(`Delete provider "${detail.value.name}"?`)) return;
   try {
     await store.remove(props.id);
-    router.push({ name: "model-providers" });
+    router.push({ name: "providers" });
   } catch (e: unknown) {
     alert(extractMessage(e));
   }
@@ -71,7 +86,7 @@ function extractMessage(e: unknown): string {
 
 <template>
   <section v-if="detail" class="space-y-6">
-    <RouterLink to="/model_providers" class="inline-block text-sm text-muted hover:text-accent"
+    <RouterLink to="/providers" class="inline-block text-sm text-muted hover:text-accent"
       >← Providers</RouterLink
     >
 
@@ -113,6 +128,18 @@ function extractMessage(e: unknown): string {
             <span class="text-sm text-ink">Clear the stored API key</span>
           </label>
         </div>
+        <div class="col-span-2">
+          <label class="label">API base URL <span class="text-faint">(optional)</span></label>
+          <input
+            v-model="draft.api_url"
+            placeholder="http://localhost:11434"
+            class="input font-mono"
+          />
+          <span class="mt-1 block text-xs text-faint">
+            Override the provider endpoint — e.g. Ollama: http://localhost:11434. Leave blank for
+            the default.
+          </span>
+        </div>
       </div>
 
       <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>
@@ -121,7 +148,7 @@ function extractMessage(e: unknown): string {
         <button type="submit" :disabled="saving" class="btn btn-primary">
           {{ saving ? "Saving…" : "Save" }}
         </button>
-        <RouterLink :to="{ name: 'model-providers' }" class="btn btn-ghost">Back</RouterLink>
+        <RouterLink :to="{ name: 'providers' }" class="btn btn-ghost">Back</RouterLink>
       </div>
     </form>
 

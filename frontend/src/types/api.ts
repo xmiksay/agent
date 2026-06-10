@@ -323,31 +323,38 @@ export interface AuthRequest {
 
 // A model provider — a managed DB entity carrying an optional API key and a
 // `kind` drawn from the system-defined backend keys.
-export interface ModelProviderView {
+export interface ProviderView {
   id: string;
   kind: string;
   name: string;
   // Indicates an API key is stored; the key itself is write-only.
   has_api_key: boolean;
+  // Optional base-URL override for the provider endpoint (e.g. Ollama). null =
+  // use the default. Not secret — shown/prefilled.
+  api_url: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface NewModelProvider {
+export interface NewProvider {
   kind: string;
   name: string;
   api_key?: string;
+  // Override the provider endpoint; omit/blank for the default.
+  api_url?: string | null;
 }
 
-export interface UpdateModelProvider {
+export interface UpdateProvider {
   kind?: string;
   name?: string;
   // Nullable patch: null clears the key, a string sets it, omit to leave it.
   api_key?: string | null;
+  // Nullable patch: null clears the override, a string sets it, omit to leave it.
+  api_url?: string | null;
 }
 
-export interface ModelProvidersListResponse {
-  providers: ModelProviderView[];
+export interface ProvidersListResponse {
+  providers: ProviderView[];
   // System-defined backend keys a provider's `kind` may be.
   kinds: string[];
 }
@@ -365,7 +372,8 @@ export interface AiModel {
   output_price: number;
   cache_write_price: number;
   cache_read_price: number;
-  thinking: boolean;
+  // null = use the model's own default; true/false = force on/off.
+  thinking: boolean | null;
   effort: ModelEffort | null;
   is_default: boolean;
   // DANGEROUS: a task on this model runs every tool call — including arbitrary
@@ -384,7 +392,8 @@ export interface NewModel {
   output_price: number;
   cache_write_price: number;
   cache_read_price: number;
-  thinking: boolean;
+  // null = use the model's own default; true/false = force on/off.
+  thinking?: boolean | null;
   effort?: ModelEffort | null;
   is_default: boolean;
   // See AiModel.unbound. Defaults false server-side.
@@ -399,7 +408,9 @@ export interface UpdateModel {
   output_price?: number;
   cache_write_price?: number;
   cache_read_price?: number;
-  thinking?: boolean;
+  // Nullable patch: null = model default, true/false = force on/off, omit to
+  // leave unchanged.
+  thinking?: boolean | null;
   // null clears the effort; omit to leave unchanged.
   effort?: ModelEffort | null;
   is_default?: boolean;

@@ -12,13 +12,13 @@ use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::entity::{model_providers, models};
+use crate::entity::{models, providers};
 
 /// A catalog model as the app sees it. No secrets, so it doubles as the API view.
 #[derive(Clone, Debug, Serialize)]
 pub struct AiModel {
     pub id: Uuid,
-    /// The owning `model_providers` row (which backend runs this model).
+    /// The owning `providers` row (which backend runs this model).
     pub provider_id: Uuid,
     /// The id handed to the provider CLI (`--model`), e.g. `claude-opus-4-8`.
     pub model_id: String,
@@ -29,8 +29,9 @@ pub struct AiModel {
     pub output_price: f64,
     pub cache_write_price: f64,
     pub cache_read_price: f64,
-    /// Enable extended thinking for this model.
-    pub thinking: bool,
+    /// Extended thinking: `Some(true)`/`Some(false)` to force on/off, `None` to
+    /// leave it at the model's own default.
+    pub thinking: Option<bool>,
     /// Reasoning effort (`low` | `medium` | `high`), if the provider honors it.
     pub effort: Option<String>,
     /// The single global fallback model (used when neither task nor service picks one).
@@ -66,24 +67,27 @@ impl AiModel {
 
 /// A model joined to its provider, as the runner needs it: the CLI `model_id`,
 /// the backend `provider_kind` (resolves which CLI), and the provider's optional
-/// `api_key` (set → run in API mode; injected into the agent's environment).
+/// `api_key`/`api_url` (set → run in API mode against that endpoint; injected into
+/// the agent's environment).
 #[derive(Clone, Debug)]
 pub struct ResolvedModel {
     pub model_id: String,
     pub alias: String,
     pub provider_kind: String,
     pub api_key: Option<String>,
+    pub api_url: Option<String>,
     /// **Dangerous.** Drives `--dangerously-skip-permissions` in the runner.
     pub unbound: bool,
 }
 
 impl ResolvedModel {
-    fn join(m: models::Model, p: model_providers::Model) -> Self {
+    fn join(m: models::Model, p: providers::Model) -> Self {
         Self {
             model_id: m.model_id,
             alias: m.alias,
             provider_kind: p.kind,
             api_key: p.api_key,
+            api_url: p.api_url,
             unbound: m.unbound,
         }
     }
@@ -102,8 +106,9 @@ pub struct NewModel {
     pub cache_write_price: f64,
     #[serde(default)]
     pub cache_read_price: f64,
+    /// `None` = the model's own default; `Some(_)` forces extended thinking on/off.
     #[serde(default)]
-    pub thinking: bool,
+    pub thinking: Option<bool>,
     #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
@@ -122,7 +127,10 @@ pub struct UpdateModel {
     pub output_price: Option<f64>,
     pub cache_write_price: Option<f64>,
     pub cache_read_price: Option<f64>,
-    pub thinking: Option<bool>,
+    /// Outer `None` = leave unchanged; `Some(None)` = reset to the model default;
+    /// `Some(Some(v))` = force on/off.
+    #[serde(default, deserialize_with = "crate::service::store::double_option")]
+    pub thinking: Option<Option<bool>>,
     /// Outer `None` = leave unchanged; `Some(None)` = clear; `Some(Some(v))` = set.
     #[serde(default, deserialize_with = "crate::service::store::double_option")]
     pub effort: Option<Option<String>>,
@@ -159,7 +167,7 @@ impl ModelStore {
         let Some(m) = models::Entity::find_by_id(id).one(&self.db).await? else {
             return Ok(None);
         };
-        let p = model_providers::Entity::find_by_id(m.provider_id)
+        let p = providers::Entity::find_by_id(m.provider_id)
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("model provider {} missing", m.provider_id))?;
@@ -175,7 +183,7 @@ impl ModelStore {
         else {
             return Ok(None);
         };
-        let p = model_providers::Entity::find_by_id(m.provider_id)
+        let p = providers::Entity::find_by_id(m.provider_id)
             .one(&self.db)
             .await?
             .ok_or_else(|| anyhow!("model provider {} missing", m.provider_id))?;
@@ -338,7 +346,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(new.input_price, 0.0);
-        assert!(!new.thinking);
+        assert!(new.thinking.is_none());
         assert!(!new.is_default);
     }
 

@@ -1,16 +1,16 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { modelProvidersApi } from "../api/model_providers";
+import { providersApi } from "../api/providers";
 import type {
-  ModelProviderView,
-  NewModelProvider,
-  UpdateModelProvider,
+  ProviderView,
+  NewProvider,
+  UpdateProvider,
 } from "../types/api";
 
-export const useModelProvidersStore = defineStore("model_providers", () => {
-  const list = ref<ModelProviderView[]>([]);
+export const useProvidersStore = defineStore("providers", () => {
+  const list = ref<ProviderView[]>([]);
   const kinds = ref<string[]>([]);
-  const detail = ref<ModelProviderView | null>(null);
+  const detail = ref<ProviderView | null>(null);
   const loading = ref(false);
 
   // { value: id, label: name } pairs for binding into the model form's
@@ -22,7 +22,7 @@ export const useModelProvidersStore = defineStore("model_providers", () => {
   async function refresh() {
     loading.value = true;
     try {
-      const res = await modelProvidersApi.list();
+      const res = await providersApi.list();
       list.value = res.providers;
       kinds.value = res.kinds;
     } finally {
@@ -31,24 +31,24 @@ export const useModelProvidersStore = defineStore("model_providers", () => {
   }
 
   async function load(id: string) {
-    detail.value = await modelProvidersApi.get(id);
+    detail.value = await providersApi.get(id);
   }
 
-  async function create(body: NewModelProvider) {
-    const created = await modelProvidersApi.create(body);
+  async function create(body: NewProvider) {
+    const created = await providersApi.create(body);
     list.value = [...list.value, created];
     return created;
   }
 
-  async function update(id: string, body: UpdateModelProvider) {
-    const updated = await modelProvidersApi.update(id, body);
+  async function update(id: string, body: UpdateProvider) {
+    const updated = await providersApi.update(id, body);
     list.value = list.value.map((p) => (p.id === id ? updated : p));
     if (detail.value?.id === id) detail.value = updated;
     return updated;
   }
 
   async function remove(id: string) {
-    await modelProvidersApi.remove(id);
+    await providersApi.remove(id);
     list.value = list.value.filter((p) => p.id !== id);
     if (detail.value?.id === id) detail.value = null;
   }

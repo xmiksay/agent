@@ -23,7 +23,7 @@ use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::jobs::store::TaskStore;
-use crate::models::{ModelProviderStore, ModelStore};
+use crate::models::{ModelStore, ProviderStore};
 use crate::project::ProjectStore;
 use crate::provider::ProviderRegistry;
 use crate::service::ServiceStore;
@@ -36,7 +36,7 @@ pub struct AppState {
     pub project_store: Arc<ProjectStore>,
     pub service_store: ServiceStore,
     pub model_store: ModelStore,
-    pub model_provider_store: ModelProviderStore,
+    pub provider_store: ProviderStore,
     pub workspace: Arc<Workspace>,
     pub providers: ProviderRegistry,
     pub auth_store: Arc<AuthStore>,
