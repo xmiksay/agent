@@ -36,6 +36,23 @@ pub fn resolve_backend(
     Ok((backend_for(kind)?, model.map(|m| m.model_id.clone())))
 }
 
+/// Apply a resolved model's provider environment (API key + base-URL override, in
+/// the backend-specific var names) to the agent spawn command. A `None` model or
+/// unset fields leave the CLI on its subscription login + default host.
+pub fn apply_model_env(
+    cmd: &mut tokio::process::Command,
+    backend: &dyn AgentBackend,
+    model: Option<&ResolvedModel>,
+) {
+    let Some(m) = model else { return };
+    if let Some(key) = m.api_key.as_deref() {
+        cmd.env(backend.api_key_env(), key);
+    }
+    if let Some(url) = m.api_url.as_deref() {
+        cmd.env(backend.base_url_env(), url);
+    }
+}
+
 /// A `can_use_tool` permission prompt parsed off the agent's stdout control
 /// protocol. `input` is the tool's verbatim input object (e.g. `{"command": …}`
 /// for Bash) — echoed back unchanged on an Allow decision.
@@ -74,6 +91,10 @@ pub trait AgentBackend: Send + Sync {
     /// Environment variable that carries the provider's API key when the provider
     /// is configured to run in API mode (rather than on a subscription login).
     fn api_key_env(&self) -> &str;
+
+    /// Environment variable that overrides the provider's API base URL (e.g. a
+    /// self-hosted / Ollama-style endpoint), when the provider sets one.
+    fn base_url_env(&self) -> &str;
 
     /// Args for an interactive session: bidirectional stream-json plus an
     /// optional resume session id and an optional `model` (the catalog model's

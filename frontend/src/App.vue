@@ -19,7 +19,7 @@ const nav = [
   { to: "/projects", label: "Projects", icon: "◇" },
   { to: "/services", label: "Services", icon: "⬡" },
   { to: "/models", label: "Models", icon: "✦" },
-  { to: "/model_providers", label: "Providers", icon: "⌬" },
+  { to: "/providers", label: "Providers", icon: "⌬" },
   { to: "/auth_requests", label: "Auth queue", icon: "⚿" },
   { to: "/stats", label: "Stats", icon: "▤" },
 ];

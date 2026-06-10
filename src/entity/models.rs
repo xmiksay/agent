@@ -2,7 +2,7 @@ use sea_orm::entity::prelude::*;
 use serde::Serialize;
 
 /// A runnable AI model in the catalog. `provider_id` points at the
-/// `model_providers` row whose `kind` resolves the agent backend/CLI; `model_id`
+/// `providers` row whose `kind` resolves the agent backend/CLI; `model_id`
 /// is the id passed to that CLI (`--model`); `alias` is the human name shown in
 /// the UI. The price columns are USD per **1M** tokens. `thinking`/`effort` are
 /// optional run settings. At most one row carries `is_default = true` (the global
@@ -21,7 +21,7 @@ pub struct Model {
     pub output_price: f64,
     pub cache_write_price: f64,
     pub cache_read_price: f64,
-    pub thinking: bool,
+    pub thinking: Option<bool>,
     #[sea_orm(column_type = "Text", nullable)]
     pub effort: Option<String>,
     pub is_default: bool,

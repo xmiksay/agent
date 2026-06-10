@@ -1,26 +1,27 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { useModelProvidersStore } from "../stores/model_providers";
-import type { NewModelProvider } from "../types/api";
+import { useProvidersStore } from "../stores/providers";
+import type { NewProvider } from "../types/api";
 
-const store = useModelProvidersStore();
+const store = useProvidersStore();
 const router = useRouter();
 
 function open(id: string) {
-  router.push(`/model_providers/${id}`);
+  router.push(`/providers/${id}`);
 }
 
 const showForm = ref(false);
-const form = ref<NewModelProvider>(blank());
+const form = ref<NewProvider>(blank());
 const saving = ref(false);
 const error = ref<string | null>(null);
 
-function blank(): NewModelProvider {
+function blank(): NewProvider {
   return {
     kind: store.kinds[0] ?? "claude_code",
     name: "",
     api_key: "",
+    api_url: "",
   };
 }
 
@@ -28,8 +29,9 @@ async function submit() {
   saving.value = true;
   error.value = null;
   try {
-    const body: NewModelProvider = { kind: form.value.kind, name: form.value.name };
+    const body: NewProvider = { kind: form.value.kind, name: form.value.name };
     if (form.value.api_key) body.api_key = form.value.api_key;
+    if (form.value.api_url) body.api_url = form.value.api_url;
     await store.create(body);
     form.value = blank();
     showForm.value = false;
@@ -92,6 +94,18 @@ onMounted(async () => {
           <span class="label">API key <span class="text-faint">(optional, write-only)</span></span>
           <input v-model="form.api_key" type="password" autocomplete="off" class="input font-mono" />
         </label>
+        <label class="col-span-2 flex flex-col">
+          <span class="label">API base URL <span class="text-faint">(optional)</span></span>
+          <input
+            v-model="form.api_url"
+            placeholder="http://localhost:11434"
+            class="input font-mono"
+          />
+          <span class="mt-1 text-xs text-faint">
+            Override the provider endpoint — e.g. Ollama: http://localhost:11434. Leave blank for
+            the default.
+          </span>
+        </label>
       </div>
 
       <p v-if="error" class="text-sm text-signal-danger">{{ error }}</p>
@@ -122,7 +136,7 @@ onMounted(async () => {
           <tr v-for="p in store.list" :key="p.id" class="cursor-pointer" @click="open(p.id)">
             <td>
               <RouterLink
-                :to="`/model_providers/${p.id}`"
+                :to="`/providers/${p.id}`"
                 class="font-medium text-ink hover:text-accent"
                 @click.stop
               >

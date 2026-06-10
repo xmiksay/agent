@@ -20,6 +20,10 @@ impl AgentBackend for ClaudeCode {
         "ANTHROPIC_API_KEY"
     }
 
+    fn base_url_env(&self) -> &str {
+        "ANTHROPIC_BASE_URL"
+    }
+
     fn build_args(
         &self,
         resume_session_id: Option<&str>,

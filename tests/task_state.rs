@@ -323,7 +323,7 @@ async fn list_filters_by_task_state() {
 /// default model.
 #[tokio::test]
 async fn task_inherits_service_trigger_model_then_global_default() {
-    use agent::models::{ModelProviderStore, ModelStore, NewModel};
+    use agent::models::{ModelStore, NewModel, ProviderStore};
     use std::collections::BTreeMap;
 
     let Some((db, name, admin)) = fresh_db().await else {
@@ -348,7 +348,7 @@ async fn task_inherits_service_trigger_model_then_global_default() {
         .id;
 
     // The migration seeds exactly one provider (claude_code).
-    let provider_id = ModelProviderStore::new(db.clone()).list().await.unwrap()[0].id;
+    let provider_id = ProviderStore::new(db.clone()).list().await.unwrap()[0].id;
     let models = ModelStore::new(db.clone());
     let new_model = |model_id: &str, alias: &str, is_default: bool| NewModel {
         provider_id,
@@ -358,7 +358,7 @@ async fn task_inherits_service_trigger_model_then_global_default() {
         output_price: 0.0,
         cache_write_price: 0.0,
         cache_read_price: 0.0,
-        thinking: false,
+        thinking: None,
         effort: None,
         is_default,
         unbound: false,

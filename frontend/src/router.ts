@@ -41,13 +41,13 @@ export const router = createRouter({
       props: true,
     },
     {
-      path: "/model_providers",
-      name: "model-providers",
+      path: "/providers",
+      name: "providers",
       component: () => import("./views/ProvidersList.vue"),
     },
     {
-      path: "/model_providers/:id",
-      name: "model-provider-detail",
+      path: "/providers/:id",
+      name: "provider-detail",
       component: () => import("./views/ProviderDetail.vue"),
       props: true,
     },

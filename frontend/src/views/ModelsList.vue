@@ -2,11 +2,11 @@
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useModelsStore } from "../stores/models";
-import { useModelProvidersStore } from "../stores/model_providers";
+import { useProvidersStore } from "../stores/providers";
 import type { ModelEffort, NewModel } from "../types/api";
 
 const store = useModelsStore();
-const providers = useModelProvidersStore();
+const providers = useProvidersStore();
 const router = useRouter();
 
 // Resolve a provider id to its display name for the table.
@@ -35,7 +35,7 @@ function blank(): NewModel {
     output_price: 0,
     cache_write_price: 0,
     cache_read_price: 0,
-    thinking: false,
+    thinking: null,
     is_default: false,
     unbound: false,
   };
@@ -137,11 +137,15 @@ onMounted(async () => {
             <option value="high">high</option>
           </select>
         </label>
+        <label class="flex flex-col">
+          <span class="label">Extended thinking</span>
+          <select v-model="form.thinking" class="select">
+            <option :value="null">Default</option>
+            <option :value="true">On</option>
+            <option :value="false">Off</option>
+          </select>
+        </label>
         <div class="flex flex-col justify-end gap-2">
-          <label class="flex items-center gap-2">
-            <input v-model="form.thinking" type="checkbox" class="h-4 w-4" />
-            <span class="text-sm text-ink">Extended thinking</span>
-          </label>
           <label class="flex items-center gap-2">
             <input v-model="form.is_default" type="checkbox" class="h-4 w-4" />
             <span class="text-sm text-ink">Global default model</span>

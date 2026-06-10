@@ -2,12 +2,12 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useModelsStore } from "../stores/models";
-import { useModelProvidersStore } from "../stores/model_providers";
+import { useProvidersStore } from "../stores/providers";
 import type { ModelEffort, UpdateModel } from "../types/api";
 
 const props = defineProps<{ id: string }>();
 const store = useModelsStore();
-const providers = useModelProvidersStore();
+const providers = useProvidersStore();
 const router = useRouter();
 
 const draft = ref<UpdateModel>({});
@@ -137,11 +137,15 @@ function extractMessage(e: unknown): string {
             <option value="high">high</option>
           </select>
         </div>
+        <div>
+          <label class="label">Extended thinking</label>
+          <select v-model="draft.thinking" class="select">
+            <option :value="null">Default</option>
+            <option :value="true">On</option>
+            <option :value="false">Off</option>
+          </select>
+        </div>
         <div class="flex flex-col justify-end gap-2">
-          <label class="flex items-center gap-2">
-            <input v-model="draft.thinking" type="checkbox" class="h-4 w-4" />
-            <span class="text-sm text-ink">Extended thinking</span>
-          </label>
           <label class="flex items-center gap-2">
             <input v-model="draft.is_default" type="checkbox" class="h-4 w-4" />
             <span class="text-sm text-ink">Global default model</span>

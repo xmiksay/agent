@@ -16,7 +16,7 @@ use agent::config::Config;
 use agent::jobs::hub::LiveSessions;
 use agent::jobs::registry::RunningTasks;
 use agent::jobs::store::TaskStore;
-use agent::models::{ModelProviderStore, ModelStore};
+use agent::models::{ModelStore, ProviderStore};
 use agent::project::ProjectStore;
 use agent::provider::ProviderRegistry;
 use agent::service::ServiceStore;
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
     let service_store = ServiceStore::new(db.clone());
     let model_store = ModelStore::new(db.clone());
-    let model_provider_store = ModelProviderStore::new(db.clone());
+    let provider_store = ProviderStore::new(db.clone());
     let providers = ProviderRegistry::new(service_store.clone());
     providers.reload().await?;
 
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         project_store,
         service_store,
         model_store,
-        model_provider_store,
+        provider_store,
         workspace,
         providers,
         auth_store,
@@ -126,14 +126,14 @@ async fn main() -> anyhow::Result<()> {
             post(api::projects::register_webhook),
         )
         .route(
-            "/api/model_providers",
-            get(api::model_providers::list).post(api::model_providers::create),
+            "/api/providers",
+            get(api::providers::list).post(api::providers::create),
         )
         .route(
-            "/api/model_providers/{id}",
-            get(api::model_providers::get)
-                .put(api::model_providers::update)
-                .delete(api::model_providers::delete),
+            "/api/providers/{id}",
+            get(api::providers::get)
+                .put(api::providers::update)
+                .delete(api::providers::delete),
         )
         .route(
             "/api/models",

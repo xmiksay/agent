@@ -2,10 +2,11 @@ use sea_orm_migration::prelude::*;
 
 /// The **model catalog**. Three tables plus per-task selection:
 ///
-/// * `model_providers` — the agent backends that can run a model. `kind` is the
+/// * `providers` — the agent backends that can run a model. `kind` is the
 ///   system-defined key the code resolves to a CLI (`claude_code` today, seeded
 ///   here); `api_key` is optional and only set when the provider should run in
-///   API mode rather than on a subscription login.
+///   API mode rather than on a subscription login; `api_url` is an optional base
+///   URL override (e.g. a self-hosted/Ollama-style endpoint).
 /// * `models` — a runnable model: its owning `provider_id`, the `model_id`
 ///   handed to that provider's CLI, a human `alias`, a price table (per **1M**
 ///   tokens), and optional `thinking`/`effort` settings. One row may be the
@@ -31,28 +32,25 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(ModelProviders::Table)
+                    .table(Providers::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(ModelProviders::Id)
+                        ColumnDef::new(Providers::Id)
                             .uuid()
                             .not_null()
                             .primary_key(),
                     )
+                    .col(ColumnDef::new(Providers::Kind).string_len(32).not_null())
+                    .col(ColumnDef::new(Providers::Name).text().not_null())
+                    .col(ColumnDef::new(Providers::ApiKey).text().null())
+                    .col(ColumnDef::new(Providers::ApiUrl).text().null())
                     .col(
-                        ColumnDef::new(ModelProviders::Kind)
-                            .string_len(32)
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(ModelProviders::Name).text().not_null())
-                    .col(ColumnDef::new(ModelProviders::ApiKey).text().null())
-                    .col(
-                        ColumnDef::new(ModelProviders::CreatedAt)
+                        ColumnDef::new(Providers::CreatedAt)
                             .timestamp_with_time_zone()
                             .not_null(),
                     )
                     .col(
-                        ColumnDef::new(ModelProviders::UpdatedAt)
+                        ColumnDef::new(Providers::UpdatedAt)
                             .timestamp_with_time_zone()
                             .not_null(),
                     )
@@ -64,7 +62,7 @@ impl MigrationTrait for Migration {
         let seed = sea_orm_migration::sea_orm::Statement::from_string(
             sea_orm_migration::sea_orm::DatabaseBackend::Postgres,
             format!(
-                "INSERT INTO model_providers (id, kind, name, created_at, updated_at) \
+                "INSERT INTO providers (id, kind, name, created_at, updated_at) \
                  VALUES ('{CLAUDE_CODE_PROVIDER_ID}', 'claude_code', 'Claude Code', now(), now())"
             ),
         );
@@ -103,12 +101,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0.0),
                     )
-                    .col(
-                        ColumnDef::new(Models::Thinking)
-                            .boolean()
-                            .not_null()
-                            .default(false),
-                    )
+                    .col(ColumnDef::new(Models::Thinking).boolean().null())
                     .col(ColumnDef::new(Models::Effort).text().null())
                     .col(
                         ColumnDef::new(Models::IsDefault)
@@ -130,7 +123,7 @@ impl MigrationTrait for Migration {
                         ForeignKey::create()
                             .name("fk_models_provider_id")
                             .from(Models::Table, Models::ProviderId)
-                            .to(ModelProviders::Table, ModelProviders::Id)
+                            .to(Providers::Table, Providers::Id)
                             .on_delete(ForeignKeyAction::Restrict),
                     )
                     .to_owned(),
@@ -242,18 +235,19 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(Models::Table).to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(ModelProviders::Table).to_owned())
+            .drop_table(Table::drop().table(Providers::Table).to_owned())
             .await
     }
 }
 
 #[derive(DeriveIden)]
-enum ModelProviders {
+enum Providers {
     Table,
     Id,
     Kind,
     Name,
     ApiKey,
+    ApiUrl,
     CreatedAt,
     UpdatedAt,
 }
