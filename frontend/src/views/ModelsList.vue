@@ -105,12 +105,18 @@ onMounted(async () => {
           </select>
         </label>
         <label class="flex flex-col">
-          <span class="label">Alias (display name)</span>
+          <span class="label">Alias (unique display name)</span>
           <input v-model="form.alias" required placeholder="Opus 4.8" class="input" />
+          <span class="mt-1 text-xs text-faint">
+            Must be unique across all models — it's the label you pick on services and tasks.
+          </span>
         </label>
         <label class="col-span-2 flex flex-col">
           <span class="label">Model id (passed to the CLI)</span>
           <input v-model="form.model_id" required placeholder="claude-opus-4-8" class="input font-mono" />
+          <span class="mt-1 text-xs text-faint">
+            May repeat — register one model_id under several aliases for different settings.
+          </span>
         </label>
         <label class="flex flex-col">
           <span class="label">Input price <span class="text-faint">(USD / 1M)</span></span>

@@ -24,6 +24,7 @@ mod m20260609_000021_rename_git_services_to_service;
 mod m20260609_000022_normalize_tasks_and_runs;
 mod m20260609_000023_create_models;
 mod m20260610_000024_add_model_unbound;
+mod m20260615_000025_model_unique_by_alias;
 
 pub struct Migrator;
 
@@ -55,6 +56,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260609_000022_normalize_tasks_and_runs::Migration),
             Box::new(m20260609_000023_create_models::Migration),
             Box::new(m20260610_000024_add_model_unbound::Migration),
+            Box::new(m20260615_000025_model_unique_by_alias::Migration),
         ]
     }
 }

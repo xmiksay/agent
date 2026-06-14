@@ -105,12 +105,14 @@ function extractMessage(e: unknown): string {
           </select>
         </div>
         <div>
-          <label class="label">Alias</label>
+          <label class="label">Alias (unique display name)</label>
           <input v-model="draft.alias" class="input" />
+          <p class="mt-1 text-xs text-faint">Must be unique across all models.</p>
         </div>
         <div class="col-span-2">
           <label class="label">Model id (passed to the CLI)</label>
           <input v-model="draft.model_id" class="input font-mono" />
+          <p class="mt-1 text-xs text-faint">May repeat across aliases.</p>
         </div>
         <div>
           <label class="label">Input price <span class="text-faint">(USD / 1M)</span></label>

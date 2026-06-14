@@ -227,7 +227,7 @@ impl ModelStore {
         models::Entity::insert(active)
             .exec(&self.db)
             .await
-            .context("failed to insert model")?;
+            .map_err(|e| map_alias_conflict(e, new.alias.trim(), "insert"))?;
 
         self.get(id)
             .await?
@@ -255,11 +255,16 @@ impl ModelStore {
             }
             active.model_id = Set(v.trim().to_string());
         }
+        // Only a changed alias can trip the unique index; remember it so a
+        // violation surfaces a friendly message instead of the raw DB error.
+        let mut changed_alias: Option<String> = None;
         if let Some(v) = upd.alias {
             if v.trim().is_empty() {
                 bail!("alias must not be empty");
             }
-            active.alias = Set(v.trim().to_string());
+            let a = v.trim().to_string();
+            changed_alias = Some(a.clone());
+            active.alias = Set(a);
         }
         if let Some(v) = upd.input_price {
             active.input_price = Set(v);
@@ -286,7 +291,13 @@ impl ModelStore {
             active.unbound = Set(v);
         }
         active.updated_at = Set(Utc::now().into());
-        active.update(&self.db).await?;
+        active
+            .update(&self.db)
+            .await
+            .map_err(|e| match &changed_alias {
+                Some(a) => map_alias_conflict(e, a, "update"),
+                None => anyhow::Error::new(e).context("failed to update model"),
+            })?;
 
         self.get(id)
             .await?
@@ -314,6 +325,17 @@ impl ModelStore {
             .await
             .context("clearing previous default model")?;
         Ok(())
+    }
+}
+
+/// Translate a unique-violation on the alias index (`idx_models_alias`) into a
+/// user-facing message — the raw Postgres constraint error would otherwise leak
+/// to the API client. Any other DB error keeps its `<verb> model` context.
+fn map_alias_conflict(err: DbErr, alias: &str, verb: &str) -> anyhow::Error {
+    if err.to_string().contains("idx_models_alias") {
+        anyhow!("a model with alias \"{alias}\" already exists")
+    } else {
+        anyhow::Error::new(err).context(format!("failed to {verb} model"))
     }
 }
 
@@ -355,6 +377,21 @@ mod tests {
         assert_eq!(normalize_effort(Some("  ".into())), None);
         assert_eq!(normalize_effort(Some("high".into())), Some("high".into()));
         assert_eq!(normalize_effort(None), None);
+    }
+
+    #[test]
+    fn alias_conflict_maps_to_friendly_message() {
+        // A unique violation naming the alias index becomes operator-readable.
+        let dup = DbErr::Custom(
+            "duplicate key value violates unique constraint \"idx_models_alias\"".into(),
+        );
+        let msg = map_alias_conflict(dup, "Opus 4.8", "insert").to_string();
+        assert_eq!(msg, "a model with alias \"Opus 4.8\" already exists");
+
+        // Any other DB error keeps a generic context, not the alias message.
+        let other = DbErr::Custom("connection reset".into());
+        let msg = map_alias_conflict(other, "Opus 4.8", "update").to_string();
+        assert_eq!(msg, "failed to update model");
     }
 
     #[test]
