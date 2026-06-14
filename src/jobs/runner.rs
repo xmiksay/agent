@@ -73,9 +73,14 @@ pub async fn run_job(
         .await
         .context("locking branch workspace")?;
 
-    // Resolve the per-service token once (PAT today; app flows arrive with
-    // #9/#10) and reuse it for git transport, the agent's `gh`/`glab`, and notes.
-    let provider_token_value = resolve_token(&service.credentials()?).await?;
+    // Resolve the per-service token for the session-start clone/fetch and the
+    // agent's spawn env. We keep the credential *source* (`provider_creds`) too,
+    // so the runner can re-resolve just-in-time before every turn's push: a long
+    // session outlives a GitHub App installation token (~1h TTL), and
+    // `resolve_token` consults the refreshing cache (provider::github::app), so a
+    // captured-once string would push with a dead token (#44).
+    let provider_creds = service.credentials()?;
+    let provider_token_value = resolve_token(&provider_creds).await?;
     let provider_token_var = match service.kind {
         ProviderKind::Github => "GH_TOKEN",
         ProviderKind::Gitlab => "GITLAB_TOKEN",
@@ -349,7 +354,7 @@ pub async fn run_job(
                 task_id,
                 code_trigger,
                 provider_token_var,
-                &provider_token_value,
+                &provider_creds,
             )
             .await;
         }

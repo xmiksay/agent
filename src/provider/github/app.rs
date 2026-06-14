@@ -247,4 +247,20 @@ mod tests {
             .to_string();
         assert!(err.contains("not installed"), "got: {err}");
     }
+
+    #[test]
+    fn cache_serves_until_refresh_margin_then_forces_remint() {
+        // Unique key so this doesn't collide with the process-wide cache.
+        let key = format!("https://test#{}", uuid::Uuid::new_v4());
+
+        // Comfortably-future expiry → the cached token is served verbatim.
+        cache_store(key.clone(), "fresh", Utc::now() + Duration::hours(1));
+        assert_eq!(cache_lookup(&key).as_deref(), Some("fresh"));
+
+        // Within REFRESH_MARGIN of expiry → treated as a miss, so the caller
+        // re-mints rather than pushing with a token about to die. This is what
+        // lets a long agent session pick up a fresh token mid-flight (#44).
+        cache_store(key.clone(), "stale", Utc::now() + Duration::minutes(2));
+        assert_eq!(cache_lookup(&key), None);
+    }
 }
