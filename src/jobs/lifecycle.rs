@@ -346,6 +346,7 @@ mod tests {
             listen_addr: String::new(),
             public_base_url: None,
             task_token_budget: 1_000_000,
+            operator_approval_timeout_secs: 0,
         };
         Arc::new(TaskStore::new(
             db.clone(),

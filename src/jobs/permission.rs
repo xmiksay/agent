@@ -18,14 +18,13 @@ use uuid::Uuid;
 
 use crate::agent::{PermissionDecision, PermissionRequest};
 use crate::auth::operations::{build_matcher, is_allowed};
+use crate::auth::resolve::resolve_and_publish;
 use crate::auth::store::{AuthStatus, AuthStore};
 use crate::auth::waiter::AuthWaiter;
 use crate::jobs::hub::{EnvelopeKind, LiveSessions};
 use crate::project::ProjectStore;
 
-/// How long the operator has to resolve an approval before we deny by default.
-const OPERATOR_TIMEOUT_SECS: u64 = 600;
-
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_permission(
     req: PermissionRequest,
     task_id: Uuid,
@@ -34,6 +33,8 @@ pub async fn handle_permission(
     auth_store: Arc<AuthStore>,
     auth_waiter: AuthWaiter,
     project_store: Arc<ProjectStore>,
+    // Seconds the operator has to resolve before we auto-deny; 0 = wait forever.
+    approval_timeout_secs: u64,
 ) {
     let is_question = req.tool_name == "AskUserQuestion";
 
@@ -128,28 +129,52 @@ pub async fn handle_permission(
         hub.publish_aux(task_id, EnvelopeKind::AuthRequest, payload)
             .await;
     }
-    info!(auth_id = %auth.id, %task_id, "awaiting operator approval");
+    info!(auth_id = %auth.id, %task_id, timeout_secs = approval_timeout_secs, "awaiting operator approval");
 
-    let wait = tokio::time::timeout(
-        Duration::from_secs(OPERATOR_TIMEOUT_SECS),
-        notifier.notified(),
-    );
-    let decision = match wait.await {
-        Err(_) => {
-            warn!(auth_id = %auth.id, "operator approval timed out");
-            PermissionDecision::Deny {
-                message: "Operator approval timed out.".to_string(),
-            }
+    // Arm the notified future before any await so a resolution landing in the
+    // window between register() above and the wait below can't be missed — which
+    // for an indefinite wait would otherwise hang the agent forever.
+    let notified = notifier.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+
+    let timed_out = if approval_timeout_secs == 0 {
+        notified.await; // wait indefinitely — never auto-deny
+        false
+    } else {
+        tokio::time::timeout(Duration::from_secs(approval_timeout_secs), notified)
+            .await
+            .is_err()
+    };
+
+    let decision = if timed_out {
+        warn!(auth_id = %auth.id, "operator approval timed out; auto-denying");
+        // Persist + publish the denial (and wake/drop the waiter) so the row
+        // leaves `pending` and the UI clears it — otherwise the agent re-requests
+        // the tool and the queue fills with stale duplicates (#45).
+        if let Err(e) = resolve_and_publish(
+            &auth_store,
+            &auth_waiter,
+            &hub,
+            auth.id,
+            AuthStatus::Denied,
+            Some("Operator approval timed out".to_string()),
+        )
+        .await
+        {
+            warn!(auth_id = %auth.id, error = %e, "failed to record approval timeout");
         }
-        Ok(()) => {
-            let resolved = auth_store.get(auth.id).await.ok().flatten();
-            let approved = resolved
-                .as_ref()
-                .map(|r| matches!(r.status, AuthStatus::Approved))
-                .unwrap_or(false);
-            let reply = resolved.and_then(|r| r.operator_reply);
-            map_decision(is_question, approved, reply, &req.input)
+        PermissionDecision::Deny {
+            message: "Operator approval timed out.".to_string(),
         }
+    } else {
+        let resolved = auth_store.get(auth.id).await.ok().flatten();
+        let approved = resolved
+            .as_ref()
+            .map(|r| matches!(r.status, AuthStatus::Approved))
+            .unwrap_or(false);
+        let reply = resolved.and_then(|r| r.operator_reply);
+        map_decision(is_question, approved, reply, &req.input)
     };
     respond(&hub, task_id, &req.request_id, decision).await;
 }

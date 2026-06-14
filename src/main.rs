@@ -176,6 +176,10 @@ async fn main() -> anyhow::Result<()> {
             get(api::auth_requests::list_auth_requests),
         )
         .route(
+            "/api/auth_requests/bulk_resolve",
+            post(api::auth_requests::bulk_resolve_auth_requests),
+        )
+        .route(
             "/api/auth_requests/{id}",
             get(api::auth_requests::get_auth_request),
         )

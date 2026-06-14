@@ -10,7 +10,8 @@
 
 use std::sync::Arc;
 
-use agent::auth::store::AuthStore;
+use agent::auth::resolve::resolve_and_publish;
+use agent::auth::store::{AuthStatus, AuthStore};
 use agent::auth::waiter::AuthWaiter;
 use agent::config::Config;
 use agent::jobs::hub::LiveSessions;
@@ -72,6 +73,7 @@ fn build_store(db: &DatabaseConnection) -> Arc<TaskStore> {
         listen_addr: String::new(),
         public_base_url: None,
         task_token_budget: 1_000_000,
+        operator_approval_timeout_secs: 0,
     };
     Arc::new(TaskStore::new(
         db.clone(),
@@ -408,6 +410,112 @@ async fn task_inherits_service_trigger_model_then_global_default() {
         Some(default_model.id),
         "unmapped trigger type inherits the global default model"
     );
+
+    drop(store);
+    drop(db);
+    drop_db(&admin, &name).await;
+}
+
+/// Bulk-deny resolves every targeted pending row to `denied` and is idempotent:
+/// once resolved, a second pass finds nothing pending. Mirrors the store work
+/// the `/api/auth_requests/bulk_resolve` handler does (list-pending → resolve
+/// loop via the shared `resolve_and_publish`).
+#[tokio::test]
+async fn bulk_resolve_denies_all_pending_then_is_idempotent() {
+    let Some((db, name, admin)) = fresh_db().await else {
+        return;
+    };
+    let store = build_store(&db);
+    let project_id = seed_project(&db).await;
+    let task_id = new_task(&store, project_id, 1).await;
+
+    let auth_store = AuthStore::new(db.clone());
+    let waiter = AuthWaiter::new();
+
+    for i in 0..3 {
+        auth_store
+            .create_pending(task_id, format!("op-{i}"), "prompt".into(), None)
+            .await
+            .expect("create pending");
+    }
+
+    let targets: Vec<Uuid> = auth_store
+        .list_filtered(Some(AuthStatus::Pending), None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(targets.len(), 3);
+
+    for id in &targets {
+        resolve_and_publish(
+            &auth_store,
+            &waiter,
+            store.hub(),
+            *id,
+            AuthStatus::Denied,
+            Some("bulk".into()),
+        )
+        .await
+        .expect("resolve");
+    }
+
+    for id in &targets {
+        let r = auth_store.get(*id).await.unwrap().unwrap();
+        assert_eq!(r.status, AuthStatus::Denied);
+        assert!(r.resolved_at.is_some(), "resolved_at stamped");
+    }
+    assert!(
+        auth_store
+            .list_filtered(Some(AuthStatus::Pending), None)
+            .await
+            .unwrap()
+            .is_empty(),
+        "no pending rows remain after bulk deny (idempotent on re-run)"
+    );
+
+    drop(store);
+    drop(db);
+    drop_db(&admin, &name).await;
+}
+
+/// The finite-timeout auto-deny path: the same `resolve_and_publish` the runner
+/// calls on timeout flips a pending row to denied with the timeout message, so
+/// the row leaves `pending` and stops being re-surfaced (#45).
+#[tokio::test]
+async fn timeout_path_resolves_row_to_denied() {
+    let Some((db, name, admin)) = fresh_db().await else {
+        return;
+    };
+    let store = build_store(&db);
+    let project_id = seed_project(&db).await;
+    let task_id = new_task(&store, project_id, 1).await;
+
+    let auth_store = AuthStore::new(db.clone());
+    let waiter = AuthWaiter::new();
+    let auth = auth_store
+        .create_pending(task_id, "rm -rf".into(), "prompt".into(), None)
+        .await
+        .expect("create pending");
+
+    let resolved = resolve_and_publish(
+        &auth_store,
+        &waiter,
+        store.hub(),
+        auth.id,
+        AuthStatus::Denied,
+        Some("Operator approval timed out".into()),
+    )
+    .await
+    .expect("timeout resolve");
+
+    assert_eq!(resolved.status, AuthStatus::Denied);
+    assert_eq!(
+        resolved.operator_reply.as_deref(),
+        Some("Operator approval timed out")
+    );
+    assert!(resolved.resolved_at.is_some());
 
     drop(store);
     drop(db);

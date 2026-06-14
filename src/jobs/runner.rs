@@ -223,13 +223,14 @@ pub async fn run_job(
     // Permission prompts (`can_use_tool`) sniffed off stdout. The sender is owned
     // ONLY by the stdout reader so it drops at stdout EOF and ends the consumer.
     let (perm_tx, mut perm_rx) = tokio::sync::mpsc::channel::<crate::agent::PermissionRequest>(32);
+    let approval_timeout_secs = config.operator_approval_timeout_secs;
     let perm_consumer = {
         let hub = hub.clone();
         let auth_store = auth_store.clone();
         let auth_waiter = auth_waiter.clone();
         let project_store = project_store.clone();
         tokio::spawn(async move {
-            // One task per request so a 600s operator wait never blocks the next.
+            // One task per request so a long operator wait never blocks the next.
             while let Some(req) = perm_rx.recv().await {
                 tokio::spawn(handle_permission(
                     req,
@@ -239,6 +240,7 @@ pub async fn run_job(
                     auth_store.clone(),
                     auth_waiter.clone(),
                     project_store.clone(),
+                    approval_timeout_secs,
                 ));
             }
         })

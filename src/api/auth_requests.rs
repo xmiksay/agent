@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::auth::resolve::resolve_and_publish;
 use crate::auth::store::{AuthRequest, AuthStatus};
 
 #[derive(Deserialize)]
@@ -24,6 +25,37 @@ pub struct ResolveRequest {
 pub struct ResolveResponse {
     #[serde(flatten)]
     pub request: AuthRequest,
+}
+
+#[derive(Deserialize)]
+pub struct BulkResolveRequest {
+    /// Explicit ids to resolve. Ignored when `all_pending` is set.
+    #[serde(default)]
+    pub ids: Vec<Uuid>,
+    /// Target every currently-pending request instead of `ids`.
+    #[serde(default)]
+    pub all_pending: bool,
+    pub decision: String, // "approve" | "deny"
+    #[serde(default)]
+    pub reply: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BulkResolveResponse {
+    pub resolved: usize,
+}
+
+/// Map the wire decision string to a terminal status. `pending` is not a valid
+/// resolution target.
+fn parse_decision(s: &str) -> Result<AuthStatus, (StatusCode, String)> {
+    match s {
+        "approve" => Ok(AuthStatus::Approved),
+        "deny" => Ok(AuthStatus::Denied),
+        other => Err((
+            StatusCode::BAD_REQUEST,
+            format!("invalid decision '{other}'"),
+        )),
+    }
 }
 
 pub async fn list_auth_requests(
@@ -60,34 +92,70 @@ pub async fn resolve_auth_request(
     Path(id): Path<Uuid>,
     Json(req): Json<ResolveRequest>,
 ) -> Result<Json<ResolveResponse>, (StatusCode, String)> {
-    let decision = match req.decision.as_str() {
-        "approve" => AuthStatus::Approved,
-        "deny" => AuthStatus::Denied,
-        other => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("invalid decision '{other}'"),
-            ));
-        }
-    };
-    let resolved = state
-        .auth_store
-        .resolve(id, decision, req.reply)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    state.auth_waiter.notify(id);
-    // Push the resolution to the task's live stream so the inline approval card
-    // clears without waiting for the next poll.
-    if let Ok(payload) = serde_json::to_value(&resolved) {
-        state
-            .task_store
-            .hub()
-            .publish_aux(
-                resolved.task_id,
-                crate::jobs::hub::EnvelopeKind::AuthRequest,
-                payload,
-            )
-            .await;
-    }
+    let decision = parse_decision(&req.decision)?;
+    let resolved = resolve_and_publish(
+        &state.auth_store,
+        &state.auth_waiter,
+        state.task_store.hub(),
+        id,
+        decision,
+        req.reply,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(ResolveResponse { request: resolved }))
+}
+
+/// Resolve many pending approvals at once (the operator's "deny all" escape from
+/// a clogged queue). Targets `all_pending` rows or the explicit `ids`, but only
+/// rows still `pending` — already-resolved ones are skipped, so a retry is
+/// idempotent. Returns how many rows this call resolved.
+pub async fn bulk_resolve_auth_requests(
+    State(state): State<AppState>,
+    Json(req): Json<BulkResolveRequest>,
+) -> Result<Json<BulkResolveResponse>, (StatusCode, String)> {
+    let decision = parse_decision(&req.decision)?;
+
+    let internal = |e: anyhow::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+
+    let targets: Vec<Uuid> = if req.all_pending {
+        state
+            .auth_store
+            .list_filtered(Some(AuthStatus::Pending), None)
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+    } else {
+        // Keep only ids that are still pending, so resolving twice can't clobber
+        // an already-recorded decision (idempotence).
+        let mut pending = Vec::new();
+        for id in req.ids {
+            if let Some(r) = state.auth_store.get(id).await.map_err(internal)?
+                && matches!(r.status, AuthStatus::Pending)
+            {
+                pending.push(id);
+            }
+        }
+        pending
+    };
+
+    let mut resolved = 0usize;
+    for id in targets {
+        match resolve_and_publish(
+            &state.auth_store,
+            &state.auth_waiter,
+            state.task_store.hub(),
+            id,
+            decision,
+            req.reply.clone(),
+        )
+        .await
+        {
+            Ok(_) => resolved += 1,
+            Err(e) => tracing::warn!(%id, error = %e, "bulk resolve: skipping row"),
+        }
+    }
+    Ok(Json(BulkResolveResponse { resolved }))
 }

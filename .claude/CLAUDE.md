@@ -42,6 +42,7 @@ Read by `src/config.rs::from_env`. Defaults in parentheses.
 | `PUBLIC_BASE_URL` | unset | externally reachable base URL; builds the `/webhook/{kind}/{slug}` callback for hook auto-registration. Unset → auto-registration skipped |
 | `MAX_CONCURRENT_JOBS` | `3` | Tokio semaphore size — gates **actively-processing turns**, acquired/released per turn so idle warm agents hold no slot |
 | `TASK_TOKEN_BUDGET` | `1_000_000` | soft cap; runner kills `claude` when cumulative `output_tokens ≥ budget/2` and the operator can Resume |
+| `OPERATOR_APPROVAL_TIMEOUT_SECS` | `0` | seconds before an unanswered tool-approval auto-denies. **`0` = wait indefinitely** (never auto-deny — the default). `>0` auto-denies on timeout, resolving the row + clearing the UI. Tradeoff: a turn parked on approval holds its `MAX_CONCURRENT_JOBS` permit, so indefinite waits can starve other turns |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*`; SPA prompts and stores in `localStorage` |
 | `RUST_LOG` | `agent=info` | `tracing-subscriber` filter |
 

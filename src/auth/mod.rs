@@ -1,5 +1,6 @@
 pub mod middleware;
 pub mod operations;
+pub mod resolve;
 pub mod store;
 pub mod waiter;
 

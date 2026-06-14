@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useStreamStore } from "../stores/stream";
 import { useTasksStore } from "../stores/tasks";
 import { authApi } from "../api/auth";
@@ -48,6 +48,28 @@ const pending = computed<AuthRequest[]>(() =>
 function onResolved(r: AuthRequest) {
   stream.dropApproval(r.id);
 }
+
+const denyingAll = ref(false);
+const bulkError = ref<string | null>(null);
+
+// Deny every pending request in one call — the escape hatch when the queue has
+// filled with stale asks. The backend publishes a resolution per row, so the
+// socket clears them; we also drop them locally so the list empties instantly.
+async function denyAll() {
+  if (!pending.value.length || denyingAll.value) return;
+  if (!window.confirm(`Deny all ${pending.value.length} pending requests?`)) return;
+  denyingAll.value = true;
+  bulkError.value = null;
+  const ids = pending.value.map((r) => r.id);
+  try {
+    await authApi.bulkResolve({ all_pending: true, decision: "deny" });
+    for (const id of ids) stream.dropApproval(id);
+  } catch (e) {
+    bulkError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    denyingAll.value = false;
+  }
+}
 </script>
 
 <template>
@@ -57,7 +79,16 @@ function onResolved(r: AuthRequest) {
       <span v-if="pending.length" class="pill text-accent">
         <span class="led text-accent" /> {{ pending.length }} pending
       </span>
+      <button
+        v-if="pending.length"
+        :disabled="denyingAll"
+        class="btn btn-danger btn-sm ml-auto"
+        @click="denyAll"
+      >
+        {{ denyingAll ? "Denying…" : "Deny all" }}
+      </button>
     </div>
+    <p v-if="bulkError" class="mb-3 text-xs text-signal-danger">{{ bulkError }}</p>
 
     <div v-if="!pending.length" class="card p-10 text-center text-faint">
       <span class="led mx-auto mb-2 block w-fit text-signal-ok" />
