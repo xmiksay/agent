@@ -1,11 +1,15 @@
+# Runs as the dedicated `agent` user (home /mnt/nvme/agent, with its own
+# .cargo/.rustup/.nvm). /etc/agent.env holds the app config and also sets
+# NVM_DIR + BASH_ENV so the non-login shells the agent spawns can `nvm use`.
+# A postgres role `agent` (LOGIN, CREATEDB) backs peer-auth + throwaway test DBs.
 [Unit]
-Description=Claude Agent
+Description=Git Agent
 After=network.target
 
 [Service]
 Type=simple
-User=claude-agent
-EnvironmentFile=/etc/agent/env
+User=agent
+EnvironmentFile=/etc/agent.env
 ExecStart=/usr/local/bin/agent
 Restart=on-failure
 RestartSec=5s
