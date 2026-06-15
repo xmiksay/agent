@@ -19,6 +19,12 @@ pub struct ResolveRequest {
     pub decision: String, // "approve" | "deny"
     #[serde(default)]
     pub reply: Option<String>,
+    /// Structured AskUserQuestion answers (`{ "<question>": "<label|custom>" | ["<label>", …] }`).
+    /// When present we stringify it into `operator_reply`, which the parked
+    /// question handler parses back out — operator_reply doubles as the answers
+    /// carrier so a question approval rides the normal resolve path.
+    #[serde(default)]
+    pub answers: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -58,6 +64,16 @@ fn parse_decision(s: &str) -> Result<AuthStatus, (StatusCode, String)> {
     }
 }
 
+/// Pick the `operator_reply` to persist. Structured AskUserQuestion `answers`
+/// win and are stringified into the reply column (the question handler parses
+/// them back); otherwise the freeform `reply` text is used as-is.
+fn resolve_reply(answers: Option<serde_json::Value>, reply: Option<String>) -> Option<String> {
+    match answers {
+        Some(answers) => Some(answers.to_string()),
+        None => reply,
+    }
+}
+
 pub async fn list_auth_requests(
     State(state): State<AppState>,
     Query(q): Query<ListQuery>,
@@ -93,13 +109,14 @@ pub async fn resolve_auth_request(
     Json(req): Json<ResolveRequest>,
 ) -> Result<Json<ResolveResponse>, (StatusCode, String)> {
     let decision = parse_decision(&req.decision)?;
+    let reply = resolve_reply(req.answers, req.reply);
     let resolved = resolve_and_publish(
         &state.auth_store,
         &state.auth_waiter,
         state.task_store.hub(),
         id,
         decision,
-        req.reply,
+        reply,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -158,4 +175,34 @@ pub async fn bulk_resolve_auth_requests(
         }
     }
     Ok(Json(BulkResolveResponse { resolved }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answers_are_stringified_into_reply() {
+        let answers = serde_json::json!({
+            "Which DB?": "Postgres",
+            "Which caches?": ["Redis", "Memcached"],
+        });
+        let stored = resolve_reply(Some(answers.clone()), Some("ignored".into()))
+            .expect("answers produce a reply");
+        // The stored string round-trips back to the original answers object —
+        // this is exactly what the parked question handler parses out.
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&stored).unwrap(),
+            answers
+        );
+    }
+
+    #[test]
+    fn freeform_reply_used_when_no_answers() {
+        assert_eq!(
+            resolve_reply(None, Some("looks fine".into())),
+            Some("looks fine".to_string())
+        );
+        assert_eq!(resolve_reply(None, None), None);
+    }
 }

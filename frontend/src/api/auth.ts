@@ -13,10 +13,19 @@ export const authApi = {
   get(id: string): Promise<AuthRequest> {
     return api(`/api/auth_requests/${id}`);
   },
-  resolve(id: string, decision: "approve" | "deny", reply?: string): Promise<AuthRequest> {
+  // `answers` carries structured AskUserQuestion replies — a map of question
+  // text to the chosen label(s) or a custom string. The backend stringifies it
+  // into operator_reply for the parked question handler; `reply` stays the
+  // freeform path for non-question (Bash) approvals.
+  resolve(
+    id: string,
+    decision: "approve" | "deny",
+    reply?: string,
+    answers?: Record<string, string | string[]>,
+  ): Promise<AuthRequest> {
     return api(`/api/auth_requests/${id}/resolve`, {
       method: "POST",
-      body: { decision, reply: reply ?? null },
+      body: { decision, reply: reply ?? null, answers: answers ?? null },
     });
   },
   // Resolve many at once. Pass `all_pending` to target every pending request, or

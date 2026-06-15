@@ -179,9 +179,16 @@ pub async fn handle_permission(
     respond(&hub, task_id, &req.request_id, decision).await;
 }
 
-/// Turn a resolved approval into a control response. AskUserQuestion has no
-/// "allow" path — answering it is always a deny whose message the model reads as
-/// the answer.
+/// Turn a resolved approval into a control response.
+///
+/// An approved AskUserQuestion takes the headless *allow* path: we echo the
+/// original `questions` plus the operator's `answers` as `updatedInput`, so the
+/// CLI records a normal (non-error) tool result and an arbitrary custom string
+/// is honored as an answer (the built-in "Other" path). The answers ride in
+/// `reply` as a JSON-encoded object — `operator_reply` doubles as the answers
+/// carrier for question approvals (see `resolve_auth_request`). If that payload
+/// can't be parsed into an answers object we fall back to the legacy
+/// deny-with-message behavior rather than emitting an empty/invalid allow.
 fn map_decision(
     is_question: bool,
     approved: bool,
@@ -189,14 +196,22 @@ fn map_decision(
     input: &Value,
 ) -> PermissionDecision {
     if is_question {
-        let message = reply.unwrap_or_else(|| {
-            if approved {
-                "Approved.".to_string()
-            } else {
-                "Operator declined to answer.".to_string()
+        if approved {
+            if let Some(answers) = parse_answers(reply.as_deref()) {
+                return PermissionDecision::Allow {
+                    updated_input: serde_json::json!({
+                        "questions": input.get("questions").cloned().unwrap_or(Value::Null),
+                        "answers": answers,
+                    }),
+                };
             }
-        });
-        return PermissionDecision::Deny { message };
+            return PermissionDecision::Deny {
+                message: reply.unwrap_or_else(|| "Approved.".to_string()),
+            };
+        }
+        return PermissionDecision::Deny {
+            message: reply.unwrap_or_else(|| "Operator declined to answer.".to_string()),
+        };
     }
     if approved {
         PermissionDecision::Allow {
@@ -207,6 +222,15 @@ fn map_decision(
             message: reply.unwrap_or_else(|| "Operator denied this command.".to_string()),
         }
     }
+}
+
+/// Parse the operator's answer carrier (a JSON string) into an answers object.
+/// `None` when absent or not a JSON object, which sends the caller down the
+/// legacy deny-with-message fallback.
+fn parse_answers(reply: Option<&str>) -> Option<Value> {
+    reply
+        .and_then(|r| serde_json::from_str::<Value>(r).ok())
+        .filter(Value::is_object)
 }
 
 async fn command_allowed(
@@ -319,19 +343,51 @@ mod tests {
     }
 
     #[test]
-    fn question_approve_delivers_reply_as_answer() {
+    fn question_approve_with_answers_allows_with_questions_and_answers() {
+        let questions = serde_json::json!([
+            {"question": "Which DB?", "options": [{"label": "Postgres"}]},
+            {"question": "Which caches?", "multiSelect": true, "options": [{"label": "Redis"}]},
+        ]);
+        let input = serde_json::json!({ "questions": questions });
+        // The operator's structured answers ride back as a JSON string in `reply`.
+        let answers = serde_json::json!({
+            "Which DB?": "a custom answer",
+            "Which caches?": ["Redis"],
+        });
+        let d = map_decision(true, true, Some(answers.to_string()), &input);
+        assert_eq!(
+            d,
+            PermissionDecision::Allow {
+                updated_input: serde_json::json!({
+                    "questions": questions,
+                    "answers": answers,
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn question_approve_without_parseable_answers_falls_back_to_deny() {
         let input = serde_json::json!({"questions": []});
+        // A non-JSON reply can't be answers → legacy deny-with-message.
         assert_eq!(
             map_decision(true, true, Some("use option B".into()), &input),
             PermissionDecision::Deny {
                 message: "use option B".into()
             }
         );
-        // Approved with no reply text still denies-with-message (the answer).
+        // Approved with no reply at all → deny-with-message fallback.
         assert_eq!(
             map_decision(true, true, None, &input),
             PermissionDecision::Deny {
                 message: "Approved.".into()
+            }
+        );
+        // A JSON array (not an object) is not a valid answers payload → fallback.
+        assert_eq!(
+            map_decision(true, true, Some("[1,2]".into()), &input),
+            PermissionDecision::Deny {
+                message: "[1,2]".into()
             }
         );
     }

@@ -480,6 +480,66 @@ async fn bulk_resolve_denies_all_pending_then_is_idempotent() {
     drop_db(&admin, &name).await;
 }
 
+/// AskUserQuestion approval carrier (#48): the resolve route stringifies the
+/// operator's structured `answers` into `operator_reply`, and the parked
+/// question handler parses it straight back. This exercises that round-trip
+/// through the store the same way `resolve_auth_request` does — answers in as a
+/// JSON string, answers out unchanged.
+#[tokio::test]
+async fn question_answers_round_trip_through_operator_reply() {
+    let Some((db, name, admin)) = fresh_db().await else {
+        return;
+    };
+    let store = build_store(&db);
+    let project_id = seed_project(&db).await;
+    let task_id = new_task(&store, project_id, 1).await;
+
+    let auth_store = AuthStore::new(db.clone());
+    let waiter = AuthWaiter::new();
+    let questions = serde_json::json!([
+        { "question": "Which DB?", "options": [{ "label": "Postgres" }] },
+        { "question": "Which caches?", "multiSelect": true, "options": [{ "label": "Redis" }] },
+    ]);
+    let auth = auth_store
+        .create_pending(
+            task_id,
+            "AskUserQuestion".into(),
+            "prompt".into(),
+            Some(serde_json::json!({ "questions": questions })),
+        )
+        .await
+        .expect("create pending");
+
+    // The operator answers — a custom string for one question, a label list for
+    // the other. The route persists this as a stringified JSON object.
+    let answers = serde_json::json!({
+        "Which DB?": "a bespoke answer",
+        "Which caches?": ["Redis"],
+    });
+    let resolved = resolve_and_publish(
+        &auth_store,
+        &waiter,
+        store.hub(),
+        auth.id,
+        AuthStatus::Approved,
+        Some(answers.to_string()),
+    )
+    .await
+    .expect("resolve question");
+
+    assert_eq!(resolved.status, AuthStatus::Approved);
+    let stored = resolved.operator_reply.expect("answers stored in reply");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored).unwrap(),
+        answers,
+        "operator_reply round-trips the structured answers object"
+    );
+
+    drop(store);
+    drop(db);
+    drop_db(&admin, &name).await;
+}
+
 /// The finite-timeout auto-deny path: the same `resolve_and_publish` the runner
 /// calls on timeout flips a pending row to denied with the timeout message, so
 /// the row leaves `pending` and stops being re-surfaced (#45).
