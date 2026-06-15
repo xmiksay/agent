@@ -23,6 +23,11 @@ pub struct Config {
     /// runner auto-denies it. `0` (the default) means **wait indefinitely** — the
     /// agent blocks until the operator resolves, never auto-denying.
     pub operator_approval_timeout_secs: u64,
+    /// Seconds a single turn may run before the runner SIGKILLs the agent **and
+    /// its whole process group** (so orphaned grandchildren like a backgrounded
+    /// `cargo test` die too), then finalizes the task resumable (session_id
+    /// kept). `0` (the default) disables the watchdog: turns run unbounded.
+    pub job_timeout_secs: u64,
 }
 
 impl Config {
@@ -52,6 +57,11 @@ impl Config {
                 0,
                 "OPERATOR_APPROVAL_TIMEOUT_SECS",
             )?,
+            job_timeout_secs: parse_u64_or(
+                env::var("JOB_TIMEOUT_SECS").ok(),
+                0,
+                "JOB_TIMEOUT_SECS",
+            )?,
         })
     }
 
@@ -69,6 +79,7 @@ impl Config {
             max_concurrent_jobs = self.max_concurrent_jobs,
             task_token_budget = self.task_token_budget,
             operator_approval_timeout_secs = self.operator_approval_timeout_secs,
+            job_timeout_secs = self.job_timeout_secs,
             api_bearer_token = if self.api_bearer_token.is_some() {
                 "set"
             } else {
@@ -141,6 +152,29 @@ mod tests {
     #[test]
     fn approval_timeout_rejects_non_numeric() {
         assert!(parse_u64_or(Some("soon".into()), 0, "OPERATOR_APPROVAL_TIMEOUT_SECS").is_err());
+    }
+
+    #[test]
+    fn job_timeout_defaults_to_zero_when_unset_or_empty() {
+        // 0 disables the per-turn watchdog (turns run unbounded) — the default.
+        assert_eq!(parse_u64_or(None, 0, "JOB_TIMEOUT_SECS").unwrap(), 0);
+        assert_eq!(
+            parse_u64_or(Some("  ".into()), 0, "JOB_TIMEOUT_SECS").unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn job_timeout_parses_explicit_value() {
+        assert_eq!(
+            parse_u64_or(Some("1800".into()), 0, "JOB_TIMEOUT_SECS").unwrap(),
+            1800
+        );
+    }
+
+    #[test]
+    fn job_timeout_rejects_non_numeric() {
+        assert!(parse_u64_or(Some("later".into()), 0, "JOB_TIMEOUT_SECS").is_err());
     }
 
     #[test]

@@ -18,6 +18,7 @@ dependencies = [
  "hex",
  "hmac",
  "jsonwebtoken",
+ "libc",
  "migration",
  "minijinja",
  "reqwest",

@@ -16,6 +16,7 @@ use crate::jobs::permission::handle_permission;
 use crate::jobs::prompt::build_prompt;
 use crate::jobs::store::TaskStore;
 use crate::jobs::stream::{Stream, pump_stream};
+use crate::jobs::turn_kill::{final_disposition, kill_process_group};
 use crate::jobs::types::TriggerReason;
 use crate::models::ResolvedModel;
 use crate::project::{BranchStatus, EnvContext, NewBranchEntry, ProjectStore, ProviderKind};
@@ -161,6 +162,10 @@ pub async fn run_job(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
+        // Own process group so the per-turn timeout can SIGKILL the whole subtree
+        // (`kill -pgid`), not just the CLI — backgrounded test processes the agent
+        // spawned must die with it. `kill_on_drop` alone would leak them.
+        .process_group(0)
         .spawn()
         .context("failed to spawn agent")?;
 
@@ -282,10 +287,13 @@ pub async fn run_job(
     // operator message from the hub. A turn = acquire permit → forward message to
     // the writer → wait for its `result` → release permit → finalize (push +
     // reply on demand) → go idle (warm, holding no slot) until the next message
-    // or a graceful close. No per-turn timeout — Stop/Pause from the UI handle a
-    // stuck turn.
+    // or a graceful close. A turn that outruns `JOB_TIMEOUT_SECS` (when set) is
+    // killed subtree-and-all and finalized resumable; Stop/Pause from the UI also
+    // handle a stuck turn interactively.
+    let job_timeout_secs = config.job_timeout_secs;
     let mut pending = Some(backend.encode_user_message(&prompt));
     let mut killed_for_budget = false;
+    let mut killed_for_timeout = false;
     let mut last_result: Option<serde_json::Value> = None;
     loop {
         let msg = match pending.take() {
@@ -339,6 +347,17 @@ pub async fn run_job(
                 turn_exited = true;
                 killed_for_budget = true;
             }
+            // Per-turn watchdog. Disabled when `job_timeout_secs == 0`; otherwise a
+            // turn that runs past the limit (e.g. wedged in a shell poll loop) gets
+            // the whole agent process group SIGKILLed and the task left resumable.
+            _ = tokio::time::sleep(std::time::Duration::from_secs(job_timeout_secs)),
+                if job_timeout_secs > 0 =>
+            {
+                warn!(%task_id, limit_secs = job_timeout_secs, "per-turn timeout exceeded, killing agent subtree");
+                kill_process_group(&mut child).await;
+                turn_exited = true;
+                killed_for_timeout = true;
+            }
         }
         drop(permit); // released between turns — an idle agent holds no slot
 
@@ -381,20 +400,16 @@ pub async fn run_job(
 
     // Final disposition from the child exit code. Operator Pause aborts this
     // runner task before reaching here (kill_task records "paused"), so the
-    // exit-code path covers only natural exits / crashes / budget kill; a
-    // graceful Stop makes claude exit 0 → completed. `unwrap_or(true)`: an
+    // exit-code path covers natural exits / crashes / budget or per-turn-timeout
+    // kill; a graceful Stop makes claude exit 0 → completed. `unwrap_or(true)`: an
     // unreadable status must not falsely mark the task failed.
     //
     // `killed` is no longer a state — the reason is recorded as a result note,
     // and the durable axes carry the verdict (cold/completed on success,
     // failed/failed otherwise).
-    let (agent_state, task_state, note): (&str, &str, Option<&str>) = if killed_for_budget {
-        ("failed", "failed", Some("killed: token budget"))
-    } else if exit_status.map(|s| s.success()).unwrap_or(true) {
-        ("cold", "completed", None)
-    } else {
-        ("failed", "failed", Some("agent exited non-zero"))
-    };
+    let exit_ok = exit_status.map(|s| s.success()).unwrap_or(true);
+    let (agent_state, task_state, note) =
+        final_disposition(killed_for_timeout, killed_for_budget, exit_ok);
     hub.mark_idle(task_id);
     let _ = store
         .finish_task(task_id, agent_state, task_state, note)

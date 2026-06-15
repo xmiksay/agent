@@ -18,6 +18,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 reqwest = { version = "0.12", features = ["json"] }
 dotenvy = "0.15"
 anyhow = "1"
+libc = "0.2"
 urlencoding = "2"
 sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 chrono = { version = "0.4", features = ["serde"] }

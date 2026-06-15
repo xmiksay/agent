@@ -28,6 +28,7 @@ Copy `.env.example` to `.env` and set:
 | `PUBLIC_BASE_URL` | unset | externally reachable base URL (e.g. `https://agent.example.com`); used to auto-register provider webhooks. Unset → auto-registration skipped, wire hooks by hand |
 | `MAX_CONCURRENT_JOBS` | `3` | parallel `claude` processes |
 | `TASK_TOKEN_BUDGET` | `1000000` | per-task soft output-token budget; runner pauses claude at 50 % so the operator can Resume after the 5 h rate-limit window |
+| `JOB_TIMEOUT_SECS` | `0` | per-turn wall-clock cap; past it the runner SIGKILLs the agent and its whole process group (orphaned test processes included) and leaves the task resumable. `0` = disabled |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*` and the SPA; paste it into the SPA on first load |
 | `RUST_LOG` | `agent=info` | tracing filter |
 
