@@ -3,7 +3,7 @@
 # NVM_DIR + BASH_ENV so the non-login shells the agent spawns can `nvm use`.
 # A postgres role `agent` (LOGIN, CREATEDB) backs peer-auth + throwaway test DBs.
 [Unit]
-Description=Git Agent
+Description=Agent
 After=network.target
 
 [Service]
