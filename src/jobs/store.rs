@@ -112,16 +112,16 @@ impl TaskStore {
             );
         }
 
-        // Run-input fields (branch, title, description, model) drive the run and
-        // are only editable before it starts — once running the worktree is
-        // checked out, the prompt is built, and the model is locked in.
-        let edits_input = edits.branch.is_some()
-            || edits.title.is_some()
-            || edits.description.is_some()
-            || edits.model_id.is_some();
+        // Branch/title/description drive the prompt and are only editable before
+        // the run starts — once running the worktree is checked out and the
+        // prompt is built. The model override is exempt: it's read fresh at each
+        // spawn, so changing it on a non-pending task takes effect on the next
+        // run/resume (#51).
+        let edits_input =
+            edits.branch.is_some() || edits.title.is_some() || edits.description.is_some();
         if edits_input && task.task_state != "pending" {
             bail!(
-                "can only edit the branch, title, description or model while the task is pending \
+                "can only edit the branch, title or description while the task is pending \
                  (task_state: {})",
                 task.task_state
             );
@@ -479,9 +479,11 @@ pub struct TaskEdits {
     /// The trigger's description — pending-only, same reason. Only triggers that
     /// carry a description (issue triggers) accept this.
     pub description: Option<String>,
-    /// Operator override of the task's model, editable only while pending (like
-    /// `branch`). Outer `None` = leave unchanged; `Some(None)` = clear (revert to
-    /// the service/global default at run time); `Some(Some(id))` = set it.
+    /// Operator override of the task's model. Editable in any state (unlike
+    /// `branch`/title/description) — it's read fresh at each spawn, so a change
+    /// takes effect on the next run/resume (#51). Outer `None` = leave unchanged;
+    /// `Some(None)` = clear (revert to the service/global default at run time);
+    /// `Some(Some(id))` = set it.
     #[serde(default, deserialize_with = "crate::service::store::double_option")]
     pub model_id: Option<Option<Uuid>>,
 }

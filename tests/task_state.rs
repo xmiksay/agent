@@ -224,6 +224,19 @@ async fn patch_validation_and_branch_gate() {
         "branch edit on non-pending task must be rejected: {err}"
     );
 
+    // ...but the model override IS editable on a non-pending task — it's read
+    // fresh at each spawn, so it applies on the next run/resume (#51).
+    store
+        .update_task(
+            id,
+            TaskEdits {
+                model_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("model edit must be allowed on a non-pending task (#51)");
+
     drop(store);
     drop(db);
     drop_db(&admin, &name).await;

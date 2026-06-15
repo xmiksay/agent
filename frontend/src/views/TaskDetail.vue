@@ -210,19 +210,20 @@ watch(pendingApprovals, (p) => {
             <label class="label">Description</label>
             <textarea v-model="editDescription" rows="6" :disabled="savingEdit" class="textarea font-mono"></textarea>
           </div>
-          <div>
-            <label class="label">Model</label>
-            <select v-model="editModelId" :disabled="savingEdit" class="select">
-              <option :value="null">— use default —</option>
-              <option v-for="m in models.options" :key="m.value" :value="m.value">
-                {{ m.label }}
-              </option>
-            </select>
-          </div>
         </template>
         <p v-else class="text-xs text-muted">
-          Branch, title, description and model can only be edited while the task is pending.
+          Branch, title and description can only be edited while the task is pending.
         </p>
+        <div>
+          <label class="label">Model</label>
+          <select v-model="editModelId" :disabled="savingEdit" class="select">
+            <option :value="null">— use default —</option>
+            <option v-for="m in models.options" :key="m.value" :value="m.value">
+              {{ m.label }}
+            </option>
+          </select>
+          <p class="mt-1 text-xs text-muted">Applies on the next run/resume.</p>
+        </div>
         <div class="flex justify-end gap-2">
           <button class="btn btn-ghost btn-sm" :disabled="savingEdit" @click="editing = false">Cancel</button>
           <button class="btn btn-primary btn-sm" :disabled="savingEdit" @click="saveEdit">

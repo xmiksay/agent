@@ -215,9 +215,10 @@ export function useTaskDetail(idRef: Ref<string>) {
         edits.branch = editBranch.value.trim() || undefined;
         if (triggerHasTitle.value) edits.title = editTitle.value.trim() || undefined;
         if (triggerHasDescription.value) edits.description = editDescription.value;
-        // null clears the override, a string pins the model (pending-only).
-        edits.model_id = editModelId.value;
       }
+      // Model is editable in any state — null clears the override, a string pins
+      // it; takes effect on the next run/resume (#51).
+      edits.model_id = editModelId.value;
       await store.update(idRef.value, edits);
       editing.value = false;
     } catch (e) {
