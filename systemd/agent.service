@@ -16,5 +16,13 @@ RestartSec=5s
 StandardOutput=journal
 StandardError=journal
 
+# Sandbox: managed sessions run arbitrary commands (unbound models skip
+# approval), so confine writes — the whole filesystem is read-only except the
+# agent's home (which is also REPO_BASE_PATH, holding every worktree) and a
+# private, auto-cleaned tmp.
+ProtectSystem=strict
+ReadWritePaths=/mnt/nvme/agent
+PrivateTmp=true
+
 [Install]
 WantedBy=multi-user.target
