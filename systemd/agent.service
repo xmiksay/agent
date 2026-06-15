@@ -23,6 +23,9 @@ StandardError=journal
 ProtectSystem=strict
 ReadWritePaths=/mnt/nvme/agent
 PrivateTmp=true
+# Block privilege escalation (no setuid/sudo) and hide other users' homes.
+NoNewPrivileges=true
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
