@@ -63,13 +63,20 @@ export const useStreamStore = defineStore("stream", () => {
   }
 
   /**
-   * Seed a task's persisted history from GET /events. Each row is a full frame
-   * ({seq, kind, payload}) — the same kinds the live socket delivers — so route
-   * it through the identical logic. Event frames key by their real `seq`, so a
-   * later live frame with the same seq merges cleanly (dedupe across seed+live).
+   * Seed a task's persisted history from GET /events. Only timeline `event`
+   * frames are replayed — they key by their real `seq`, so a later live frame
+   * with the same seq merges cleanly (dedupe across seed+live). Control frames
+   * (`status`, `auth_request`) are point-in-time and are deliberately NOT
+   * seeded: replaying them would clobber the authoritative current state loaded
+   * over REST (store.detail / pending approvals) with a stale snapshot — e.g.
+   * showing a completed task as "running", or re-adding an already-resolved
+   * approval as a live deny/allow. Only live frames (via `apply`) move control
+   * state forward.
    */
   function seedEvents(taskId: string, items: PersistedEvent[]) {
-    for (const it of items) applyFrame(taskId, it.kind, it.seq, it.payload);
+    for (const it of items) {
+      if (it.kind === "event") applyFrame(taskId, it.kind, it.seq, it.payload);
+    }
   }
 
   /** Seed pending approvals fetched over REST (so they show before any frame). */
