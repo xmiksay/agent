@@ -2,7 +2,7 @@
 import { computed, ref, toRef, watch } from "vue";
 import StatusPill from "../components/StatusPill.vue";
 import ProviderBadge from "../components/ProviderBadge.vue";
-import ClaudeStream from "../components/ClaudeStream.vue";
+import TurnTimeline from "../components/TurnTimeline.vue";
 import TriggerView from "../components/TriggerView.vue";
 import MarkdownView from "../components/MarkdownView.vue";
 import DiffView from "../components/DiffView.vue";
@@ -14,7 +14,7 @@ import { useTaskDetail } from "../composables/useTaskDetail";
 const props = defineProps<{ id: string }>();
 
 const {
-  store, models, queues, queueLabel, modelLabel, modelUnbound, busy, pendingApprovals, eventText, eventCount, hasEvents, taskNotifications, wsConnected, tokensSpent,
+  store, models, queues, queueLabel, modelLabel, modelUnbound, busy, pendingApprovals, eventText, hasEvents, turns, taskNotifications, wsConnected, tokensSpent,
   isLive, isRunning, isPending, canRetry, canContinue, canKill, canChat,
   onApprovalResolved, diffText, diffError, diffLoading, loadDiff,
   editing, editBranch, editTitle, editDescription, editTaskState,
@@ -435,24 +435,25 @@ watch(pendingApprovals, (p) => {
       </ul>
     </Accordion>
 
-    <!-- Output — live agent events, newest first. -->
+    <!-- Output — agent turns (input + output), newest first. Each turn expands
+         to its raw events; the "raw json" toggle drops to the flat stream. -->
     <Accordion
       v-model:open="showOutput"
       title="Output"
-      :subtitle="`${eventCount} event${eventCount === 1 ? '' : 's'}`"
+      :subtitle="`${turns.length} turn${turns.length === 1 ? '' : 's'}`"
     >
       <template #actions>
         <button v-if="hasEvents" class="text-[11px] text-muted hover:text-ink" @click="showRaw = !showRaw">
-          {{ showRaw ? "formatted" : "raw json" }}
+          {{ showRaw ? "turns" : "raw json" }}
         </button>
       </template>
       <div class="pt-3">
         <p v-if="!hasEvents" class="text-sm text-muted">
           No events yet{{ isLive ? " — waiting for the agent…" : "." }}
         </p>
-        <ClaudeStream
+        <TurnTimeline
           v-else-if="!showRaw"
-          :text="eventText"
+          :turns="turns"
           :pending="pendingApprovals"
           @resolved="onApprovalResolved"
         />
