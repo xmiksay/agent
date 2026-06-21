@@ -674,4 +674,293 @@ mod tests {
         );
         assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "", &cfgs).is_some());
     }
+
+    // --- Full ingestion path: raw provider payload → TriggerReason ---------
+    //
+    // These exercise the real normalizers (github::parse / gitlab::normalize)
+    // feeding build_trigger, so a regression in payload field mapping is caught
+    // end-to-end rather than only against hand-built NormalizedEvents.
+
+    use crate::webhook::types::GitLabEvent;
+
+    /// GitHub: raw webhook body of `event_type` → TriggerReason for `bot`.
+    fn gh(
+        event_type: &str,
+        payload: serde_json::Value,
+        mode: TriggerMode,
+    ) -> Option<TriggerReason> {
+        let ev = crate::webhook::github::parse(event_type, payload.to_string().as_bytes())
+            .unwrap()
+            .unwrap();
+        build_trigger(&ev, "bot", mode, "agent", &no_cfgs())
+    }
+
+    /// GitLab: raw webhook body → TriggerReason for `bot`.
+    fn gl(payload: serde_json::Value, mode: TriggerMode) -> Option<TriggerReason> {
+        let event: GitLabEvent = serde_json::from_value(payload).unwrap();
+        let ev = crate::webhook::gitlab::normalize(&event).unwrap();
+        build_trigger(&ev, "bot", mode, "agent", &no_cfgs())
+    }
+
+    fn gh_repo() -> serde_json::Value {
+        serde_json::json!({
+            "full_name": "acme/repo",
+            "ssh_url": "git@github.com:acme/repo.git",
+            "default_branch": "main"
+        })
+    }
+
+    fn gl_project() -> serde_json::Value {
+        serde_json::json!({
+            "path_with_namespace": "acme/repo",
+            "git_ssh_url": "git@gitlab.com:acme/repo.git",
+            "default_branch": "main"
+        })
+    }
+
+    #[test]
+    fn github_issue_opened_normalizes_to_issue_trigger() {
+        let payload = serde_json::json!({
+            "action": "opened",
+            "issue": {
+                "number": 42,
+                "title": "Fix the bug",
+                "body": "It is broken",
+                "html_url": "https://github.com/acme/repo/issues/42",
+                "assignees": [{ "login": "bot" }],
+                "labels": []
+            },
+            "repository": gh_repo(),
+            "sender": { "login": "operator" }
+        });
+        match gh("issues", payload, TriggerMode::Assignee) {
+            Some(TriggerReason::Issue {
+                iid,
+                title,
+                description,
+                url,
+            }) => {
+                assert_eq!(iid, 42);
+                assert_eq!(title, "Fix the bug");
+                assert_eq!(description, "It is broken");
+                assert_eq!(url, "https://github.com/acme/repo/issues/42");
+            }
+            other => panic!("expected Issue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn github_review_requested_normalizes_to_review_mr() {
+        let payload = serde_json::json!({
+            "action": "review_requested",
+            "pull_request": {
+                "number": 7,
+                "title": "Add feature",
+                "html_url": "https://github.com/acme/repo/pull/7",
+                "head": { "ref": "feature-x" },
+                "base": { "ref": "main" },
+                "user": { "login": "operator" },
+                "requested_reviewers": [{ "login": "bot" }]
+            },
+            "repository": gh_repo(),
+            "sender": { "login": "operator" }
+        });
+        match gh("pull_request", payload, TriggerMode::Assignee) {
+            Some(TriggerReason::ReviewMR {
+                iid,
+                source_branch,
+                target_branch,
+                ..
+            }) => {
+                assert_eq!(iid, 7);
+                assert_eq!(source_branch, "feature-x");
+                assert_eq!(target_branch, "main");
+            }
+            other => panic!("expected ReviewMR, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn github_pr_comment_normalizes_to_mr_comment() {
+        let payload = serde_json::json!({
+            "action": "created",
+            "issue": {
+                "number": 7,
+                "title": "Add feature",
+                "html_url": "https://github.com/acme/repo/pull/7",
+                "assignees": [],
+                "labels": []
+            },
+            "comment": {
+                "body": "hey @bot please rebase",
+                "html_url": "https://github.com/acme/repo/pull/7#issuecomment-1"
+            },
+            "repository": gh_repo(),
+            "sender": { "login": "operator" },
+            "pull_request": { "url": "https://api.github.com/.../pulls/7" }
+        });
+        match gh("issue_comment", payload, TriggerMode::Assignee) {
+            Some(TriggerReason::MRComment {
+                mr_iid, comment, ..
+            }) => {
+                assert_eq!(mr_iid, 7);
+                assert_eq!(comment, "hey @bot please rebase");
+            }
+            other => panic!("expected MRComment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn github_issue_comment_normalizes_to_issue_comment() {
+        let payload = serde_json::json!({
+            "action": "created",
+            "issue": {
+                "number": 13,
+                "title": "Question",
+                "html_url": "https://github.com/acme/repo/issues/13",
+                "assignees": [],
+                "labels": []
+            },
+            "comment": {
+                "body": "@bot can you take a look?",
+                "html_url": "https://github.com/acme/repo/issues/13#issuecomment-2"
+            },
+            "repository": gh_repo(),
+            "sender": { "login": "operator" }
+        });
+        match gh("issue_comment", payload, TriggerMode::Assignee) {
+            Some(TriggerReason::IssueComment {
+                issue_iid, comment, ..
+            }) => {
+                assert_eq!(issue_iid, 13);
+                assert_eq!(comment, "@bot can you take a look?");
+            }
+            other => panic!("expected IssueComment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gitlab_issue_opened_normalizes_to_issue_trigger() {
+        let payload = serde_json::json!({
+            "object_kind": "issue",
+            "user": { "username": "operator" },
+            "project": gl_project(),
+            "object_attributes": {
+                "iid": 5,
+                "title": "Fix the bug",
+                "description": "It is broken",
+                "action": "open",
+                "url": "https://gitlab.com/acme/repo/-/issues/5"
+            },
+            "assignees": [{ "username": "bot" }],
+            "labels": []
+        });
+        match gl(payload, TriggerMode::Assignee) {
+            Some(TriggerReason::Issue {
+                iid,
+                title,
+                description,
+                url,
+            }) => {
+                assert_eq!(iid, 5);
+                assert_eq!(title, "Fix the bug");
+                assert_eq!(description, "It is broken");
+                assert_eq!(url, "https://gitlab.com/acme/repo/-/issues/5");
+            }
+            other => panic!("expected Issue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gitlab_merge_request_opened_normalizes_to_review_mr() {
+        let payload = serde_json::json!({
+            "object_kind": "merge_request",
+            "user": { "username": "operator" },
+            "project": gl_project(),
+            "object_attributes": {
+                "iid": 9,
+                "title": "Add feature",
+                "action": "open",
+                "source_branch": "feature-x",
+                "target_branch": "main",
+                "url": "https://gitlab.com/acme/repo/-/merge_requests/9"
+            },
+            "reviewers": [{ "username": "bot" }]
+        });
+        match gl(payload, TriggerMode::Assignee) {
+            Some(TriggerReason::ReviewMR {
+                iid,
+                source_branch,
+                target_branch,
+                ..
+            }) => {
+                assert_eq!(iid, 9);
+                assert_eq!(source_branch, "feature-x");
+                assert_eq!(target_branch, "main");
+            }
+            other => panic!("expected ReviewMR, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gitlab_mr_note_normalizes_to_mr_comment() {
+        let payload = serde_json::json!({
+            "object_kind": "note",
+            "user": { "username": "operator" },
+            "project": gl_project(),
+            "object_attributes": {
+                "note": "please rebase",
+                "noteable_type": "MergeRequest"
+            },
+            "merge_request": {
+                "iid": 9,
+                "title": "Add feature",
+                "source_branch": "feature-x",
+                "target_branch": "main",
+                "url": "https://gitlab.com/acme/repo/-/merge_requests/9"
+            }
+        });
+        match gl(payload, TriggerMode::Assignee) {
+            Some(TriggerReason::MRComment {
+                mr_iid,
+                comment,
+                source_branch,
+                ..
+            }) => {
+                assert_eq!(mr_iid, 9);
+                assert_eq!(comment, "please rebase");
+                assert_eq!(source_branch, "feature-x");
+            }
+            other => panic!("expected MRComment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gitlab_issue_note_normalizes_to_issue_comment() {
+        // GitLab issue notes carry no assignee usernames, so an @-mention is
+        // what gates the trigger.
+        let payload = serde_json::json!({
+            "object_kind": "note",
+            "user": { "username": "operator" },
+            "project": gl_project(),
+            "object_attributes": {
+                "note": "@bot can you take a look?",
+                "noteable_type": "Issue"
+            },
+            "issue": {
+                "iid": 5,
+                "title": "Question",
+                "url": "https://gitlab.com/acme/repo/-/issues/5"
+            }
+        });
+        match gl(payload, TriggerMode::Assignee) {
+            Some(TriggerReason::IssueComment {
+                issue_iid, comment, ..
+            }) => {
+                assert_eq!(issue_iid, 5);
+                assert_eq!(comment, "@bot can you take a look?");
+            }
+            other => panic!("expected IssueComment, got {other:?}"),
+        }
+    }
 }

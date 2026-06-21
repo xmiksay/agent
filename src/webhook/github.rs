@@ -282,6 +282,64 @@ pub fn parse(event_type: &str, body: &[u8]) -> anyhow::Result<Option<NormalizedE
 mod tests {
     use super::*;
 
+    /// Produce the `X-Hub-Signature-256` value GitHub would send for `body`
+    /// under `secret`, using the same HMAC primitive as the verifier.
+    fn sign(secret: &str, body: &[u8]) -> String {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    fn headers_with_sig(sig: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("X-Hub-Signature-256", sig.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn verify_signature_accepts_a_valid_signature() {
+        let secret = "topsecret";
+        let body = br#"{"action":"opened"}"#;
+        let headers = headers_with_sig(&sign(secret, body));
+        assert!(verify_signature(secret, &headers, body).is_ok());
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_wrong_secret() {
+        let body = br#"{"action":"opened"}"#;
+        // Signature computed under a different secret than the service holds.
+        let headers = headers_with_sig(&sign("attacker", body));
+        assert!(verify_signature("topsecret", &headers, body).is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_tampered_body() {
+        let secret = "topsecret";
+        let headers = headers_with_sig(&sign(secret, br#"{"action":"opened"}"#));
+        // Same signature, body changed after signing.
+        assert!(verify_signature(secret, &headers, br#"{"action":"closed"}"#).is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_missing_header() {
+        assert!(verify_signature("topsecret", &HeaderMap::new(), b"{}").is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_header_without_the_sha256_prefix() {
+        // Correct digest bytes but missing the `sha256=` scheme prefix.
+        let raw = sign("topsecret", b"{}");
+        let unprefixed = raw.strip_prefix("sha256=").unwrap().to_string();
+        let headers = headers_with_sig(&unprefixed);
+        assert!(verify_signature("topsecret", &headers, b"{}").is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_non_hex_digest() {
+        let headers = headers_with_sig("sha256=not-hexadecimal-zzzz");
+        assert!(verify_signature("topsecret", &headers, b"{}").is_err());
+    }
+
     #[test]
     fn issue_labels_land_in_normalized_event() {
         let payload = serde_json::json!({
