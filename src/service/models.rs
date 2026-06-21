@@ -39,9 +39,12 @@ impl ServiceStore {
                 bail!("unknown trigger_type '{trigger_type}'");
             }
         }
+        // Atomic delete-then-insert: a failure mid-swap must not leave the
+        // service with a half-cleared mapping (issue #65).
+        let txn = self.db().begin().await.context("begin tx")?;
         service_models::Entity::delete_many()
             .filter(service_models::Column::ServiceId.eq(service_id))
-            .exec(self.db())
+            .exec(&txn)
             .await
             .context("clearing service model mapping")?;
         for (trigger_type, model_id) in models {
@@ -51,10 +54,11 @@ impl ServiceStore {
                 trigger_type: Set(trigger_type.clone()),
                 model_id: Set(*model_id),
             })
-            .exec(self.db())
+            .exec(&txn)
             .await
             .context("inserting service model mapping")?;
         }
+        txn.commit().await.context("commit tx")?;
         Ok(())
     }
 }
