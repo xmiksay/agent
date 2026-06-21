@@ -150,7 +150,7 @@ pub async fn run_job(
 
     let prompt = match prompt_override {
         Some(p) if !p.trim().is_empty() => p,
-        _ => build_prompt(&trigger, &branch, service.kind, db_note),
+        _ => build_prompt(&trigger, &branch, &default_branch, service.kind, db_note),
     };
     info!(%prompt, program = backend.program(), model = ?model_arg, "running agent");
 
