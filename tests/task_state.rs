@@ -118,6 +118,7 @@ async fn seed_service(db: &DatabaseConnection) -> Uuid {
             trigger_mode: Default::default(),
             trigger_label: String::new(),
             models: None,
+            triggers: None,
         })
         .await
         .expect("seed service")

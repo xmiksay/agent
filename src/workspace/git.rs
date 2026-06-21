@@ -103,7 +103,7 @@ fn parse_ssh_url(url: &str) -> Result<(String, String)> {
 ///   commits and uncommitted work are preserved across runs (this is what makes
 ///   resume-on-message safe),
 /// - otherwise check it out from `origin/<branch>` if it exists remotely, else
-///   create it fresh from `origin/<default_branch>`.
+///   create it fresh from `origin/<base_branch>`.
 ///
 /// We deliberately do **not** force-reset a reused worktree: a per-branch
 /// worktree is owned by its task line, so a hard reset would silently discard
@@ -116,7 +116,7 @@ pub async fn clone_or_fetch(
     path: &Path,
     auth: &HttpsAuth,
     branch: &str,
-    default_branch: &str,
+    base_branch: &str,
 ) -> Result<()> {
     let git_dir = path.join(".git");
     let fresh = tokio::fs::metadata(&git_dir).await.is_err();
@@ -126,13 +126,13 @@ pub async fn clone_or_fetch(
                 .await
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        info!(path = %path.display(), default_branch, "cloning fresh checkout");
+        info!(path = %path.display(), base_branch, "cloning fresh checkout");
         let output = Command::new("git")
             .arg("-c")
             .arg(format!("credential.helper={}", auth.credential_helper))
             .arg("clone")
             .arg("--branch")
-            .arg(default_branch)
+            .arg(base_branch)
             .arg(&auth.remote_url)
             .arg(path)
             .env(&auth.token_env, &auth.token)
@@ -179,7 +179,7 @@ pub async fn clone_or_fetch(
     let start_ref = if git_ref_exists(path, &remote_branch).await? {
         remote_branch
     } else {
-        format!("origin/{default_branch}")
+        format!("origin/{base_branch}")
     };
 
     run_git(path, auth, &["checkout", "-B", branch, &start_ref]).await?;

@@ -7,5 +7,6 @@ pub mod providers;
 pub mod queues;
 pub mod service;
 pub mod service_models;
+pub mod service_triggers;
 pub mod task_sessions;
 pub mod tasks;

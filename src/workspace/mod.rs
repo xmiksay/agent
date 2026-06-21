@@ -85,9 +85,9 @@ impl Workspace {
         path: &Path,
         auth: &git::HttpsAuth,
         branch: &str,
-        default_branch: &str,
+        base_branch: &str,
     ) -> Result<()> {
-        git::clone_or_fetch(path, auth, branch, default_branch).await
+        git::clone_or_fetch(path, auth, branch, base_branch).await
     }
 
     /// Remove only this branch's working tree (NOT any sibling branches).

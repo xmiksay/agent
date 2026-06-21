@@ -5,8 +5,9 @@ import { useRouter } from "vue-router";
 import { useServicesStore } from "../stores/services";
 import { useModelsStore } from "../stores/models";
 import ProviderBadge from "../components/ProviderBadge.vue";
-import { TRIGGER_TYPES } from "../util/triggerTypes";
-import type { NewService, ProviderKind } from "../types/api";
+import TriggerGatingGrid from "../components/TriggerGatingGrid.vue";
+import { TRIGGER_TYPES, seedTriggers } from "../util/triggerTypes";
+import type { NewService, ProviderKind, TriggerConfig } from "../types/api";
 
 const store = useServicesStore();
 const models = useModelsStore();
@@ -20,6 +21,8 @@ const showForm = ref(false);
 const form = ref<NewService>(blank());
 // trigger_type -> model id; "" means unmapped and is dropped on submit.
 const triggerModels = ref<Record<string, string>>({});
+// Full 5-entry gating map; submitted wholesale to seed the service's rows.
+const triggerGating = ref<Record<string, TriggerConfig>>(seedTriggers());
 const appId = ref("");
 const privateKey = ref("");
 const saving = ref(false);
@@ -70,7 +73,11 @@ async function submit() {
   saving.value = true;
   error.value = null;
   try {
-    const body: NewService = { ...form.value, models: collectModels() };
+    const body: NewService = {
+      ...form.value,
+      models: collectModels(),
+      triggers: triggerGating.value,
+    };
     if (isApp.value) {
       // App services authenticate via app_credentials; installation_id is
       // captured later by the install flow, so it's omitted here.
@@ -83,6 +90,7 @@ async function submit() {
     generatedSecret.value = created.generated_webhook_secret ?? null;
     form.value = blank();
     triggerModels.value = {};
+    triggerGating.value = seedTriggers();
     appId.value = "";
     privateKey.value = "";
     showForm.value = false;
@@ -245,6 +253,9 @@ onMounted(() => {
               </select>
             </label>
           </div>
+        </div>
+        <div class="col-span-2">
+          <TriggerGatingGrid v-model="triggerGating" />
         </div>
         <label class="col-span-2 flex items-center gap-2">
           <input v-model="form.autofire" type="checkbox" class="h-4 w-4" />

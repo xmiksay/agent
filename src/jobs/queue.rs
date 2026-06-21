@@ -209,6 +209,7 @@ mod tests {
                 trigger_mode: Default::default(),
                 trigger_label: String::new(),
                 models: None,
+                triggers: None,
             })
             .await
             .expect("seed service")
