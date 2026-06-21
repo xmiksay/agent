@@ -5,5 +5,6 @@ pub mod handlers;
 pub mod models;
 pub mod projects;
 pub mod providers;
+pub mod queues;
 pub mod services;
 pub mod stats;

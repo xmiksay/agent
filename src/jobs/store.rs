@@ -34,6 +34,15 @@ pub struct TaskStore {
     hub: LiveSessions,
     auth_store: Arc<AuthStore>,
     auth_waiter: AuthWaiter,
+    /// Serializes queue admission: held across the free-slot count read and the
+    /// `confirm_task` that fills it, so two concurrent completions can't both
+    /// grab the last slot. See `jobs::queue::try_admit_next`.
+    admit_lock: Arc<Mutex<()>>,
+    /// Wakes the admission loop (`run_admission_loop`) when a slot may have
+    /// freed. A `Notify`, not a direct `try_admit_next()` call, so the run
+    /// future's spawned closure can signal admission without closing the
+    /// `confirm_task` → `try_admit_next` async-recursion cycle.
+    admit_notify: Arc<tokio::sync::Notify>,
 }
 
 impl TaskStore {
@@ -62,6 +71,36 @@ impl TaskStore {
             hub,
             auth_store,
             auth_waiter,
+            admit_lock: Arc::new(Mutex::new(())),
+            admit_notify: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    /// Tokio semaphore size — the queue's free-slot ceiling. See
+    /// `jobs::queue::try_admit_next`.
+    pub(crate) fn max_concurrent_jobs(&self) -> usize {
+        self.config.max_concurrent_jobs
+    }
+
+    pub(crate) fn admit_lock(&self) -> &Arc<Mutex<()>> {
+        &self.admit_lock
+    }
+
+    /// Signal that a task-admission slot may have freed, waking the admission
+    /// loop. Cheap and non-async — safe to call from the run future's spawned
+    /// closure (where awaiting `try_admit_next` directly would not compile).
+    pub fn request_admit(&self) {
+        self.admit_notify.notify_one();
+    }
+
+    /// Long-lived loop that pulls queued tasks into free slots whenever signalled
+    /// (via `request_admit`). Spawned once at startup. Owning the recursion here —
+    /// rather than in the run future's closure — keeps `confirm_task`'s spawned
+    /// future free of the `try_admit_next` cycle.
+    pub async fn run_admission_loop(self: Arc<Self>) {
+        loop {
+            self.admit_notify.notified().await;
+            self.try_admit_next().await;
         }
     }
 
@@ -97,7 +136,7 @@ impl TaskStore {
     /// other run-managed fields (timestamps, session_id, pid, pending_message)
     /// are never editable. The resulting branch may never equal the default
     /// branch, so the "never run on default" rule holds.
-    pub async fn update_task(&self, task_id: Uuid, edits: TaskEdits) -> Result<()> {
+    pub async fn update_task(self: &Arc<Self>, task_id: Uuid, edits: TaskEdits) -> Result<()> {
         let task = tasks::Entity::find_by_id(task_id)
             .one(&self.db)
             .await?
@@ -117,11 +156,14 @@ impl TaskStore {
         // prompt is built. The model override is exempt: it's read fresh at each
         // spawn, so changing it on a non-pending task takes effect on the next
         // run/resume (#51).
-        let edits_input =
-            edits.branch.is_some() || edits.title.is_some() || edits.description.is_some();
+        let edits_input = edits.branch.is_some()
+            || edits.title.is_some()
+            || edits.description.is_some()
+            || edits.queue_id.is_some()
+            || edits.priority.is_some();
         if edits_input && task.task_state != "pending" {
             bail!(
-                "can only edit the branch, title or description while the task is pending \
+                "can only edit the branch, title, description or queue while the task is pending \
                  (task_state: {})",
                 task.task_state
             );
@@ -185,7 +227,18 @@ impl TaskStore {
         if let Some(model_id) = edits.model_id {
             active.model_id = Set(model_id);
         }
+        if let Some(queue_id) = edits.queue_id {
+            active.queue_id = Set(queue_id);
+        }
+        if let Some(priority) = edits.priority {
+            active.priority = Set(priority);
+        }
         active.update(&self.db).await?;
+        // Enqueuing (or re-prioritizing) a pending task may make it the next
+        // admittable one — pull it in if a slot is free.
+        if edits.queue_id.is_some() || edits.priority.is_some() {
+            self.try_admit_next().await;
+        }
         Ok(())
     }
 
@@ -247,26 +300,15 @@ impl TaskStore {
         // both would share one worktree. Different branches each have their own
         // clone and run concurrently. At single-operator scale the live set is
         // small, so check hub liveness over the un-finished tasks on this branch.
-        if let Some(branch) = task.branch.clone() {
-            let pid = task.project_id;
-            let siblings = tasks::Entity::find()
-                .filter(tasks::Column::ProjectId.eq(pid))
-                .filter(tasks::Column::Branch.eq(branch.clone()))
-                .filter(tasks::Column::FinishedAt.is_null())
-                .filter(tasks::Column::Id.ne(task_id))
-                .all(&self.db)
-                .await
-                .context("checking concurrent branch tasks")?;
-            if let Some(other) = siblings
-                .into_iter()
-                .find(|t| self.hub.is_running(t.id) || self.hub.is_warm_sync(t.id))
-            {
-                bail!(
-                    "another task ({}) is already live on branch '{branch}'; \
-                     wait for it to finish or kill it first",
-                    other.id
-                );
-            }
+        if let Some(branch) = task.branch.clone()
+            && let Some(other) = self
+                .branch_is_live(task.project_id, &branch, task_id)
+                .await?
+        {
+            bail!(
+                "another task ({other}) is already live on branch '{branch}'; \
+                 wait for it to finish or kill it first"
+            );
         }
 
         // Queue the task for spawn: durable agent_state → pending (so a derived
@@ -372,6 +414,12 @@ impl TaskStore {
             .await;
 
             store.running.unregister(task_id).await;
+            // The run future ending is the authoritative moment a task-admission
+            // slot frees. Signal the admission loop rather than calling
+            // try_admit_next() here: that would close a confirm_task →
+            // try_admit_next → confirm_task async cycle the spawn's Send bound
+            // can't satisfy. The loop owns the actual pull.
+            store.request_admit();
 
             if let Err(e) = result {
                 // {e:?} prints the full anyhow chain incl. Context layers.
@@ -486,4 +534,12 @@ pub struct TaskEdits {
     /// `Some(Some(id))` = set it.
     #[serde(default, deserialize_with = "crate::service::store::double_option")]
     pub model_id: Option<Option<Uuid>>,
+    /// Enqueue/dequeue the task — pending-only (only a not-yet-started task is a
+    /// scheduling candidate). Outer `None` = leave unchanged; `Some(None)` =
+    /// remove from its queue; `Some(Some(id))` = put it in that queue.
+    #[serde(default, deserialize_with = "crate::service::store::double_option")]
+    pub queue_id: Option<Option<Uuid>>,
+    /// In-queue sort priority (higher = sooner) — pending-only. Only meaningful
+    /// alongside a `queue_id`.
+    pub priority: Option<i16>,
 }

@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod models;
 pub mod project;
 pub mod provider;
+pub mod queues;
 pub mod service;
 pub mod spa;
 pub mod webhook;
@@ -26,6 +27,7 @@ use crate::jobs::store::TaskStore;
 use crate::models::{ModelStore, ProviderStore};
 use crate::project::ProjectStore;
 use crate::provider::ProviderRegistry;
+use crate::queues::QueueStore;
 use crate::service::ServiceStore;
 use crate::workspace::Workspace;
 
@@ -37,6 +39,7 @@ pub struct AppState {
     pub service_store: ServiceStore,
     pub model_store: ModelStore,
     pub provider_store: ProviderStore,
+    pub queue_store: QueueStore,
     pub workspace: Arc<Workspace>,
     pub providers: ProviderRegistry,
     pub auth_store: Arc<AuthStore>,

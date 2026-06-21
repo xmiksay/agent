@@ -19,6 +19,7 @@ use agent::jobs::store::TaskStore;
 use agent::models::{ModelStore, ProviderStore};
 use agent::project::ProjectStore;
 use agent::provider::ProviderRegistry;
+use agent::queues::QueueStore;
 use agent::service::ServiceStore;
 use agent::workspace::Workspace;
 use agent::{api, spa, webhook, ws};
@@ -41,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let service_store = ServiceStore::new(db.clone());
     let model_store = ModelStore::new(db.clone());
     let provider_store = ProviderStore::new(db.clone());
+    let queue_store = QueueStore::new(db.clone());
     let providers = ProviderRegistry::new(service_store.clone());
     providers.reload().await?;
 
@@ -71,6 +73,16 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "failed to recover orphan tasks"),
     }
 
+    // The admission loop pulls queued tasks into free slots whenever a slot
+    // frees (signalled via request_admit). It owns the recursive confirm path
+    // that the run future's closure can't call directly.
+    tokio::spawn(task_store.clone().run_admission_loop());
+
+    // Drain the queue up to capacity on boot: confirmed work isn't spawned
+    // eagerly, so a restart must pull queued tasks into the free slots itself.
+    // (try_admit_next loops internally until full or dry.)
+    task_store.try_admit_next().await;
+
     let state = AppState {
         config: config.clone(),
         task_store,
@@ -78,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         service_store,
         model_store,
         provider_store,
+        queue_store,
         workspace,
         providers,
         auth_store,
@@ -145,6 +158,16 @@ async fn main() -> anyhow::Result<()> {
             get(api::models::get)
                 .put(api::models::update)
                 .delete(api::models::delete),
+        )
+        .route(
+            "/api/queues",
+            get(api::queues::list).post(api::queues::create),
+        )
+        .route(
+            "/api/queues/{id}",
+            get(api::queues::get)
+                .patch(api::queues::update)
+                .delete(api::queues::delete),
         )
         .route(
             "/api/services",

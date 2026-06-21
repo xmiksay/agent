@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
 import { useServicesStore } from "../stores/services";
+import { useQueuesStore } from "../stores/queues";
 import TaskRow from "../components/TaskRow.vue";
 import NewTaskModal from "../components/NewTaskModal.vue";
 import { taskSpentSecs } from "../util/duration";
@@ -11,6 +12,7 @@ import type { BulkAction, Task } from "../types/api";
 
 const store = useTasksStore();
 const services = useServicesStore();
+const queues = useQueuesStore();
 const router = useRouter();
 // Two orthogonal server-side filters (taskState/agentState) and two client-side
 // ones (serviceId/projectId). All four persist to localStorage so the operator
@@ -86,16 +88,27 @@ const filteredTasks = computed(() =>
   ),
 );
 
-const sortedTasks = computed(() => {
+function compareByColumn(a: Task, b: Task): number {
   const dir = sortAsc.value ? 1 : -1;
-  return [...filteredTasks.value].sort((a, b) => {
-    const av = sortValue(a, sortKey.value);
-    const bv = sortValue(b, sortKey.value);
-    if (av < bv) return -1 * dir;
-    if (av > bv) return 1 * dir;
-    return 0;
-  });
-});
+  const av = sortValue(a, sortKey.value);
+  const bv = sortValue(b, sortKey.value);
+  if (av < bv) return -1 * dir;
+  if (av > bv) return 1 * dir;
+  return 0;
+}
+
+// Pending tasks float to the top ordered by in-queue priority (higher first),
+// since that's the order the queue scheduler will admit them; the active column
+// sort is the tiebreak within equal priority and orders all non-pending rows.
+const sortedTasks = computed(() =>
+  [...filteredTasks.value].sort((a, b) => {
+    const aPending = a.task_state === "pending";
+    const bPending = b.task_state === "pending";
+    if (aPending !== bPending) return aPending ? -1 : 1;
+    if (aPending && a.priority !== b.priority) return b.priority - a.priority;
+    return compareByColumn(a, b);
+  }),
+);
 
 // --- Fast filters ------------------------------------------------------------
 // One-click presets over the server-side state filters; "clear" also drops the
@@ -202,6 +215,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   reload();
   services.refresh();
+  queues.refresh();
   nowTimer = setInterval(() => (now.value = new Date()), 1000);
   pollTimer = setInterval(() => store.refresh(activeFilters(), true), 10_000);
 });

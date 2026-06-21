@@ -27,6 +27,19 @@ impl RunningTasks {
         self.inner.lock().await.remove(&task_id);
     }
 
+    /// Count of tasks whose `run_job` future is currently alive (warm-idle or
+    /// actively running, plus any spawn still in flight). This is the queue's
+    /// **task-admission** gauge — distinct from the per-turn `Semaphore`, which a
+    /// warm idle agent releases between turns. Free slots = `MAX_CONCURRENT_JOBS −
+    /// len()`.
+    pub async fn len(&self) -> usize {
+        self.inner.lock().await.len()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.inner.lock().await.is_empty()
+    }
+
     /// Returns true if a running task was found and aborted.
     pub async fn abort(&self, task_id: Uuid) -> bool {
         let mut guard = self.inner.lock().await;

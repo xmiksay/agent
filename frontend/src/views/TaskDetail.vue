@@ -14,11 +14,11 @@ import { useTaskDetail } from "../composables/useTaskDetail";
 const props = defineProps<{ id: string }>();
 
 const {
-  store, models, modelLabel, modelUnbound, busy, pendingApprovals, eventText, eventCount, hasEvents, taskNotifications, wsConnected, tokensSpent,
+  store, models, queues, queueLabel, modelLabel, modelUnbound, busy, pendingApprovals, eventText, eventCount, hasEvents, taskNotifications, wsConnected, tokensSpent,
   isLive, isRunning, isPending, canRetry, canContinue, canKill, canChat,
   onApprovalResolved, diffText, diffError, diffLoading, loadDiff,
   editing, editBranch, editTitle, editDescription, editTaskState,
-  triggerHasTitle, triggerHasDescription, editModelId, savingEdit, startEdit, saveEdit,
+  triggerHasTitle, triggerHasDescription, editModelId, editQueueId, editPriority, savingEdit, startEdit, saveEdit,
   confirmRun, retry, resume, pause, refreshToken, remove,
   message, sending, sendMessage, redefineGoal, stopAgent,
 } = useTaskDetail(toRef(props, "id"));
@@ -163,6 +163,18 @@ watch(pendingApprovals, (p) => {
           <dd class="truncate text-xs text-muted">{{ modelLabel }}</dd>
         </div>
         <div>
+          <dt class="label mb-0.5">Queue</dt>
+          <dd class="flex items-center gap-1.5 text-xs text-muted">
+            <span class="truncate">{{ queueLabel ?? "—" }}</span>
+            <span
+              class="shrink-0 rounded bg-panel px-1.5 py-0.5 font-mono text-[10px] text-faint"
+              title="In-queue priority (higher = sooner)"
+            >
+              p{{ store.detail.priority }}
+            </span>
+          </dd>
+        </div>
+        <div>
           <dt class="label mb-0.5">Created</dt>
           <dd class="text-xs text-muted">{{ new Date(store.detail.created_at).toLocaleString() }}</dd>
         </div>
@@ -218,6 +230,27 @@ watch(pendingApprovals, (p) => {
           <div v-if="triggerHasDescription">
             <label class="label">Description</label>
             <textarea v-model="editDescription" rows="6" :disabled="savingEdit" class="textarea font-mono"></textarea>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="label">Queue</label>
+              <select v-model="editQueueId" :disabled="savingEdit" class="select">
+                <option :value="null">— not queued —</option>
+                <option v-for="q in queues.options" :key="q.value" :value="q.value">
+                  {{ q.label }}
+                </option>
+              </select>
+            </div>
+            <div>
+              <label class="label">Priority</label>
+              <input
+                v-model.number="editPriority"
+                type="number"
+                :disabled="savingEdit"
+                class="input font-mono"
+              />
+              <p class="mt-1 text-xs text-muted">Higher runs sooner.</p>
+            </div>
           </div>
         </template>
         <p v-else class="text-xs text-muted">

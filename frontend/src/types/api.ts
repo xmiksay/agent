@@ -27,6 +27,10 @@ export interface Task {
   pid: number | null;
   // The chosen catalog model for this task; null = use the global default.
   model_id: string | null;
+  // The queue this task is enqueued in; null = not queued.
+  queue_id: string | null;
+  // In-queue sort priority (higher = sooner). Default 0.
+  priority: number;
 }
 
 /** A lifecycle action applicable to many tasks at once. `run` confirms a
@@ -283,6 +287,11 @@ export interface TaskEdits {
   description?: string;
   // null clears the per-task model override (back to the global default).
   model_id?: string | null;
+  // Pending-only. Omit to leave unchanged; a queue id enqueues, null dequeues
+  // (double-option semantics — only send the key when changing it).
+  queue_id?: string | null;
+  // Pending-only in-queue sort priority (higher = sooner).
+  priority?: number;
 }
 
 export type StatsGroupBy = "project" | "service" | "branch" | "trigger_type";
@@ -419,4 +428,23 @@ export interface UpdateModel {
   is_default?: boolean;
   // See AiModel.unbound.
   unbound?: boolean;
+}
+
+// An operator-orderable backlog bucket. `priority` orders queue-vs-queue (higher
+// = sooner); a task's in-queue order is its own `priority`.
+export interface Queue {
+  id: string;
+  name: string;
+  priority: number;
+  created_at: string;
+}
+
+export interface NewQueue {
+  name: string;
+  priority?: number;
+}
+
+export interface UpdateQueue {
+  name?: string;
+  priority?: number;
 }

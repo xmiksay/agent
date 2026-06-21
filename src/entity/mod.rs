@@ -4,6 +4,7 @@ pub mod models;
 pub mod project_branches;
 pub mod projects;
 pub mod providers;
+pub mod queues;
 pub mod service;
 pub mod service_models;
 pub mod task_sessions;

@@ -436,6 +436,8 @@ mod tests {
             pid: None,
             pending_message: None,
             model_id: None,
+            queue_id: None,
+            priority: 0,
         };
         // ...but the derived overlay says "running".
         let view = TaskView {

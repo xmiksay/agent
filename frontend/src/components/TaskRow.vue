@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
+import { useQueuesStore } from "../stores/queues";
 import StatusPill from "./StatusPill.vue";
 import ProviderBadge from "./ProviderBadge.vue";
 import { formatSecs, taskSpentSecs } from "../util/duration";
@@ -14,8 +15,13 @@ const props = defineProps<{ task: Task; now: Date; selected: boolean }>();
 const emit = defineEmits<{ (e: "changed"): void; (e: "toggle"): void }>();
 
 const store = useTasksStore();
+const queues = useQueuesStore();
 const router = useRouter();
 const busy = ref<string | null>(null);
+
+// The enqueued queue's name, or null when the task isn't queued. The store is
+// loaded once at the list level; this just maps the id.
+const queueName = computed(() => queues.nameFor(props.task.queue_id));
 
 // Liveness is "an agent is attached" — running or warm (idle between turns).
 const isLive = (t: Task) => t.agent_state === "running" || t.agent_state === "warm";
@@ -156,6 +162,18 @@ async function saveEdit() {
         <span class="truncate font-mono text-xs text-muted" :title="task.branch ?? ''">{{
           task.branch ?? "—"
         }}</span>
+        <span
+          v-if="queueName"
+          class="shrink-0 truncate rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent"
+          :title="`Queued in ${queueName}`"
+          >{{ queueName }}</span
+        >
+        <span
+          v-if="task.priority !== 0"
+          class="shrink-0 rounded bg-panel px-1.5 py-0.5 font-mono text-[10px] text-faint"
+          title="In-queue priority (higher = sooner)"
+          >p{{ task.priority }}</span
+        >
         <button
           v-if="task.task_state === 'pending'"
           class="btn btn-subtle btn-sm shrink-0 text-accent"
