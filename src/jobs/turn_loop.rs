@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::agent::AgentBackend;
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::store::TaskStore;
-use crate::jobs::turn::finalize_turn;
+use crate::jobs::turn::{FinalizeTurnCtx, finalize_turn};
 use crate::jobs::turn_kill::kill_process_group;
 use crate::jobs::types::TriggerReason;
 use crate::provider::{GitProvider, resolve_token};
@@ -162,16 +162,18 @@ pub(crate) async fn run_turn_loop(
         if let Some(rv) = last_result.take() {
             finalize_turn(
                 rv,
-                backend.as_ref(),
-                store,
-                trigger,
-                project_path,
-                provider,
-                work_dir_str,
-                task_id,
-                code_trigger,
-                provider_token_var,
-                provider_creds,
+                FinalizeTurnCtx {
+                    backend: backend.as_ref(),
+                    store,
+                    trigger,
+                    project_path,
+                    provider,
+                    work_dir: work_dir_str,
+                    task_id,
+                    code_trigger,
+                    token_env: provider_token_var,
+                    creds: provider_creds,
+                },
             )
             .await;
         }

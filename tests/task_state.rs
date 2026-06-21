@@ -18,7 +18,7 @@ use agent::jobs::edits::TaskEdits;
 use agent::jobs::hub::LiveSessions;
 use agent::jobs::lifecycle::derive_agent_state;
 use agent::jobs::registry::RunningTasks;
-use agent::jobs::store::TaskStore;
+use agent::jobs::store::{TaskStore, TaskStoreDeps};
 use agent::jobs::types::TriggerReason;
 use agent::project::{NewProjectConfig, ProjectStore, ProviderKind};
 use agent::provider::ProviderRegistry;
@@ -80,17 +80,17 @@ fn build_store(db: &DatabaseConnection) -> Arc<TaskStore> {
         project_db_admin_url: None,
         project_db_host_for_agent: None,
     };
-    Arc::new(TaskStore::new(
-        db.clone(),
+    Arc::new(TaskStore::new(TaskStoreDeps {
+        db: db.clone(),
         config,
-        ProviderRegistry::new(ServiceStore::new(db.clone())),
-        Arc::new(ProjectStore::new(db.clone())),
-        Arc::new(Workspace::new("/tmp/agent-test")),
-        RunningTasks::new(),
-        LiveSessions::new(db.clone()),
-        Arc::new(AuthStore::new(db.clone())),
-        AuthWaiter::new(),
-    ))
+        providers: ProviderRegistry::new(ServiceStore::new(db.clone())),
+        project_store: Arc::new(ProjectStore::new(db.clone())),
+        workspace: Arc::new(Workspace::new("/tmp/agent-test")),
+        running: RunningTasks::new(),
+        hub: LiveSessions::new(db.clone()),
+        auth_store: Arc::new(AuthStore::new(db.clone())),
+        auth_waiter: AuthWaiter::new(),
+    }))
 }
 
 fn issue_trigger(iid: u64) -> TriggerReason {

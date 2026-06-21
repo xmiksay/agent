@@ -14,24 +14,40 @@ use crate::jobs::types::{ClaudeOutput, TriggerReason};
 use crate::provider::{GitProvider, resolve_token};
 use crate::service::ServiceCredentials;
 
+/// Borrowed dependencies for [`finalize_turn`]. Grouped so the call carries one
+/// context value alongside the turn's `result` event instead of an eleven-deep
+/// argument list.
+pub(crate) struct FinalizeTurnCtx<'a> {
+    pub backend: &'a dyn AgentBackend,
+    pub store: &'a Arc<TaskStore>,
+    pub trigger: &'a TriggerReason,
+    pub project_path: &'a str,
+    pub provider: &'a dyn GitProvider,
+    pub work_dir: &'a str,
+    pub task_id: Uuid,
+    pub code_trigger: bool,
+    pub token_env: &'a str,
+    pub creds: &'a ServiceCredentials,
+}
+
 /// After a turn: snapshot the agent's last `result`, persist it, push any
 /// commits (for code-producing triggers), and post a reply note only when there
 /// is something worth reporting — commits landed or the turn errored. All
 /// best-effort: a turn's bookkeeping failure must not tear down the session.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn finalize_turn(
-    result_event: serde_json::Value,
-    backend: &dyn AgentBackend,
-    store: &Arc<TaskStore>,
-    trigger: &TriggerReason,
-    project_path: &str,
-    provider: &dyn GitProvider,
-    work_dir: &str,
-    task_id: Uuid,
-    code_trigger: bool,
-    token_env: &str,
-    creds: &ServiceCredentials,
-) {
+pub(crate) async fn finalize_turn(result_event: serde_json::Value, ctx: FinalizeTurnCtx<'_>) {
+    let FinalizeTurnCtx {
+        backend,
+        store,
+        trigger,
+        project_path,
+        provider,
+        work_dir,
+        task_id,
+        code_trigger,
+        token_env,
+        creds,
+    } = ctx;
+
     let result = match backend.parse_result(&result_event.to_string()) {
         Ok(r) => r,
         Err(e) => {

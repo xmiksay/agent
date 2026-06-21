@@ -24,23 +24,36 @@ pub enum Stream {
 /// `perm_tx` (stdout only) receives any `can_use_tool` control request parsed
 /// off the stream; those lines are internal plumbing and are NOT published as
 /// timeline events (the operator sees them via the auth_request side-channel).
-#[allow(clippy::too_many_arguments)]
-pub async fn pump_stream<R>(
-    reader: R,
-    which: Stream,
-    backend: Arc<dyn AgentBackend>,
-    hub: LiveSessions,
-    task_id: Uuid,
-    mut session_tx: Option<tokio::sync::oneshot::Sender<String>>,
-    mut budget: Option<(u64, tokio::sync::oneshot::Sender<u64>)>,
-    // Carries the `result` event the moment it's seen, so the runner's turn loop
-    // knows the current turn finished (and the agent is now idle) and can
-    // finalize from it.
-    result_tx: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
-    perm_tx: Option<tokio::sync::mpsc::Sender<PermissionRequest>>,
-) where
+///
+/// The signal channels are bundled in [`PumpStreamCtx`]; the stderr pump leaves
+/// them all `None`.
+pub struct PumpStreamCtx {
+    pub backend: Arc<dyn AgentBackend>,
+    pub hub: LiveSessions,
+    pub task_id: Uuid,
+    pub session_tx: Option<tokio::sync::oneshot::Sender<String>>,
+    pub budget: Option<(u64, tokio::sync::oneshot::Sender<u64>)>,
+    /// Carries the `result` event the moment it's seen, so the runner's turn loop
+    /// knows the current turn finished (and the agent is now idle) and can
+    /// finalize from it.
+    pub result_tx: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    pub perm_tx: Option<tokio::sync::mpsc::Sender<PermissionRequest>>,
+}
+
+pub async fn pump_stream<R>(reader: R, which: Stream, ctx: PumpStreamCtx)
+where
     R: tokio::io::AsyncRead + Unpin,
 {
+    let PumpStreamCtx {
+        backend,
+        hub,
+        task_id,
+        mut session_tx,
+        mut budget,
+        result_tx,
+        perm_tx,
+    } = ctx;
+
     let mut reader = BufReader::new(reader);
     let mut buf = Vec::new();
     let mut output_tokens: u64 = 0;

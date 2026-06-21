@@ -14,7 +14,7 @@ use crate::entity::tasks;
 use crate::jobs::hub::LiveSessions;
 use crate::jobs::lifecycle::{AGENT_FAILED, AGENT_PENDING, TASK_FAILED};
 use crate::jobs::registry::RunningTasks;
-use crate::jobs::runner::run_job;
+use crate::jobs::runner::{RunJobContext, run_job};
 use crate::jobs::types::TriggerReason;
 use crate::models::ModelStore;
 use crate::project::ProjectStore;
@@ -45,19 +45,33 @@ pub struct TaskStore {
     admit_notify: Arc<tokio::sync::Notify>,
 }
 
+/// Dependencies wired into a `TaskStore` at construction. Grouped so the
+/// constructor takes one value instead of a nine-deep positional argument list.
+pub struct TaskStoreDeps {
+    pub db: DatabaseConnection,
+    pub config: Config,
+    pub providers: ProviderRegistry,
+    pub project_store: Arc<ProjectStore>,
+    pub workspace: Arc<Workspace>,
+    pub running: RunningTasks,
+    pub hub: LiveSessions,
+    pub auth_store: Arc<AuthStore>,
+    pub auth_waiter: AuthWaiter,
+}
+
 impl TaskStore {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        db: DatabaseConnection,
-        config: Config,
-        providers: ProviderRegistry,
-        project_store: Arc<ProjectStore>,
-        workspace: Arc<Workspace>,
-        running: RunningTasks,
-        hub: LiveSessions,
-        auth_store: Arc<AuthStore>,
-        auth_waiter: AuthWaiter,
-    ) -> Self {
+    pub fn new(deps: TaskStoreDeps) -> Self {
+        let TaskStoreDeps {
+            db,
+            config,
+            providers,
+            project_store,
+            workspace,
+            running,
+            hub,
+            auth_store,
+            auth_waiter,
+        } = deps;
         Self {
             semaphore: Arc::new(Semaphore::new(config.max_concurrent_jobs)),
             seen_events: Arc::new(Mutex::new(HashSet::new())),
@@ -274,28 +288,28 @@ impl TaskStore {
                 error!(%task_id, error = %e, "failed to clear pending_message");
             }
 
-            let result = run_job(
+            let result = run_job(RunJobContext {
                 task_id,
                 trigger,
-                service.clone(),
-                Some(task.project_id),
-                project.remote_url.clone(),
-                project.full_name.clone(),
-                project.default_branch.clone(),
-                task.branch.clone(),
-                store.config.clone(),
+                service: service.clone(),
+                project_id: Some(task.project_id),
+                git_url: project.remote_url.clone(),
+                project_path: project.full_name.clone(),
+                default_branch: project.default_branch.clone(),
+                branch_override: task.branch.clone(),
+                config: store.config.clone(),
                 provider,
-                store.workspace.clone(),
-                store.project_store.clone(),
-                store.hub.clone(),
-                store.clone(),
-                store.auth_store.clone(),
-                store.auth_waiter.clone(),
+                workspace: store.workspace.clone(),
+                project_store: store.project_store.clone(),
+                hub: store.hub.clone(),
+                store: store.clone(),
+                auth_store: store.auth_store.clone(),
+                auth_waiter: store.auth_waiter.clone(),
                 semaphore,
                 resume_session_id,
                 prompt_override,
                 model,
-            )
+            })
             .await;
 
             store.running.unregister(task_id).await;
