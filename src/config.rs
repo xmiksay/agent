@@ -28,6 +28,19 @@ pub struct Config {
     /// `cargo test` die too), then finalizes the task resumable (session_id
     /// kept). `0` (the default) disables the watchdog: turns run unbounded.
     pub job_timeout_secs: u64,
+    /// NVM install dir (e.g. `/home/agent/.nvm`). When set, the runner resolves
+    /// the node toolchain NVM would activate (honouring the worktree's `.nvmrc`)
+    /// and prepends its `bin` to the agent's `PATH`. Unset → feature disabled.
+    pub nvm_dir: Option<String>,
+    /// Admin Postgres DSN with `CREATE ROLE` + `CREATE DATABASE` privileges
+    /// (e.g. `postgres://admin:pw@localhost:5432/postgres`). When set, the runner
+    /// provisions a throwaway user+database per task and injects its DSN into the
+    /// agent's env + initial prompt. Unset → feature disabled.
+    pub project_db_admin_url: Option<String>,
+    /// The `host:port` the *agent* uses to reach the provisioned DB; may differ
+    /// from the admin connection in containerized setups. Defaults to the host
+    /// parsed from `project_db_admin_url`.
+    pub project_db_host_for_agent: Option<String>,
 }
 
 impl Config {
@@ -62,6 +75,13 @@ impl Config {
                 0,
                 "JOB_TIMEOUT_SECS",
             )?,
+            nvm_dir: env::var("NVM_DIR").ok().filter(|v| !v.trim().is_empty()),
+            project_db_admin_url: env::var("PROJECT_DB_ADMIN_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            project_db_host_for_agent: env::var("PROJECT_DB_HOST_FOR_AGENT")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         })
     }
 
@@ -86,6 +106,16 @@ impl Config {
                 "unset (/api is OPEN)"
             },
             database_url = %redact_db_url(&self.database_url),
+            nvm_dir = self.nvm_dir.as_deref().unwrap_or("(unset — disabled)"),
+            project_db_admin_url = self
+                .project_db_admin_url
+                .as_deref()
+                .map(redact_db_url)
+                .unwrap_or_else(|| "(unset — disabled)".to_string()),
+            project_db_host_for_agent = self
+                .project_db_host_for_agent
+                .as_deref()
+                .unwrap_or("(from admin URL)"),
             "resolved config",
         );
     }

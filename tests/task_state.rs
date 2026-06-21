@@ -75,6 +75,9 @@ fn build_store(db: &DatabaseConnection) -> Arc<TaskStore> {
         task_token_budget: 1_000_000,
         operator_approval_timeout_secs: 0,
         job_timeout_secs: 0,
+        nvm_dir: None,
+        project_db_admin_url: None,
+        project_db_host_for_agent: None,
     };
     Arc::new(TaskStore::new(
         db.clone(),
