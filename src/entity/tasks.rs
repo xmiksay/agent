@@ -39,6 +39,13 @@ pub struct Model {
     /// override it while the task is pending. `None` resolves to the service
     /// default, then the global default, at run time.
     pub model_id: Option<Uuid>,
+    /// The queue this task is enqueued in (FK → `queues`, `SET NULL` on delete),
+    /// or `None` if it isn't queued. The scheduler only pulls tasks with a
+    /// `queue_id` set; an unqueued task is started solely by manual Run/autofire.
+    pub queue_id: Option<Uuid>,
+    /// In-queue sort key (higher = sooner), within the task's `queue_id`. Ordered
+    /// after the owning queue's own `priority`.
+    pub priority: i16,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -54,6 +61,13 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Project,
+    #[sea_orm(
+        belongs_to = "super::queues::Entity",
+        from = "Column::QueueId",
+        to = "super::queues::Column::Id",
+        on_delete = "SetNull"
+    )]
+    Queue,
 }
 
 impl Related<super::task_sessions::Entity> for Entity {
@@ -71,6 +85,12 @@ impl Related<super::auth_requests::Entity> for Entity {
 impl Related<super::projects::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Project.def()
+    }
+}
+
+impl Related<super::queues::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Queue.def()
     }
 }
 

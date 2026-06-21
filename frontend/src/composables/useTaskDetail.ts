@@ -3,6 +3,7 @@ import { useRouter } from "vue-router";
 import { useTasksStore } from "../stores/tasks";
 import { useStreamStore } from "../stores/stream";
 import { useModelsStore } from "../stores/models";
+import { useQueuesStore } from "../stores/queues";
 import { authApi } from "../api/auth";
 import { tasksApi } from "../api/tasks";
 import { extractTaskNotifications } from "./useClaudeStream";
@@ -18,6 +19,7 @@ export function useTaskDetail(idRef: Ref<string>) {
   const store = useTasksStore();
   const stream = useStreamStore();
   const models = useModelsStore();
+  const queues = useQueuesStore();
   const router = useRouter();
   const busy = ref<string | null>(null);
 
@@ -109,7 +111,7 @@ export function useTaskDetail(idRef: Ref<string>) {
   async function setup() {
     stream.start();
     await store.load(idRef.value);
-    await Promise.all([loadHistory(), reloadPending(), models.refresh()]);
+    await Promise.all([loadHistory(), reloadPending(), models.refresh(), queues.refresh()]);
   }
 
   // Resolve the task's model to a display label: its alias, else the raw id,
@@ -127,6 +129,9 @@ export function useTaskDetail(idRef: Ref<string>) {
     if (!id) return false;
     return models.list.find((m) => m.id === id)?.unbound ?? false;
   });
+
+  // The enqueued queue's name, or null when the task isn't queued.
+  const queueLabel = computed(() => queues.nameFor(store.detail?.queue_id));
 
   onMounted(setup);
   watch(idRef, setup);
@@ -185,6 +190,9 @@ export function useTaskDetail(idRef: Ref<string>) {
   const editTaskState = ref<TaskState>("pending");
   // null = use the global/service default; a model id pins this task to it.
   const editModelId = ref<string | null>(null);
+  // null = not queued; a queue id enqueues. Both queue + priority are pending-only.
+  const editQueueId = ref<string | null>(null);
+  const editPriority = ref(0);
   const savingEdit = ref(false);
 
   // trigger_data is a serialized TriggerReason; only some variants carry a
@@ -204,6 +212,8 @@ export function useTaskDetail(idRef: Ref<string>) {
     editDescription.value = (triggerData.value?.description as string) ?? "";
     editTaskState.value = store.detail?.task_state ?? "pending";
     editModelId.value = store.detail?.model_id ?? null;
+    editQueueId.value = store.detail?.queue_id ?? null;
+    editPriority.value = store.detail?.priority ?? 0;
     editing.value = true;
   }
 
@@ -215,6 +225,14 @@ export function useTaskDetail(idRef: Ref<string>) {
         edits.branch = editBranch.value.trim() || undefined;
         if (triggerHasTitle.value) edits.title = editTitle.value.trim() || undefined;
         if (triggerHasDescription.value) edits.description = editDescription.value;
+        // Queue + priority are pending-only. Send queue_id (null dequeues) and
+        // priority only when changed so the PATCH stays minimal.
+        if (editQueueId.value !== (store.detail?.queue_id ?? null)) {
+          edits.queue_id = editQueueId.value;
+        }
+        if (editPriority.value !== (store.detail?.priority ?? 0)) {
+          edits.priority = editPriority.value;
+        }
       }
       // Model is editable in any state — null clears the override, a string pins
       // it; takes effect on the next run/resume (#51).
@@ -324,6 +342,8 @@ export function useTaskDetail(idRef: Ref<string>) {
   return {
     store,
     models,
+    queues,
+    queueLabel,
     modelLabel,
     modelUnbound,
     busy,
@@ -354,6 +374,8 @@ export function useTaskDetail(idRef: Ref<string>) {
     triggerHasTitle,
     triggerHasDescription,
     editModelId,
+    editQueueId,
+    editPriority,
     savingEdit,
     startEdit,
     saveEdit,

@@ -62,6 +62,8 @@ impl TaskStore {
             pid: Set(None),
             pending_message: Set(None),
             model_id: Set(model_id),
+            queue_id: Set(None),
+            priority: Set(0),
         };
 
         tasks::Entity::insert(task)

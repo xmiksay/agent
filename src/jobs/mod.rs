@@ -5,6 +5,7 @@ pub mod lifecycle;
 pub mod permission;
 pub mod prompt;
 pub mod queries;
+pub mod queue;
 pub mod registry;
 pub mod runner;
 pub mod store;

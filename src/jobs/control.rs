@@ -20,7 +20,7 @@ impl TaskStore {
     /// pause as a result note. The work isn't done — durable agent_state goes
     /// back to `cold` (no live agent) but task_state stays `working_on` so the
     /// operator sees it as resumable.
-    pub async fn kill_task(&self, task_id: Uuid) -> Result<()> {
+    pub async fn kill_task(self: &Arc<Self>, task_id: Uuid) -> Result<()> {
         if !self.running().abort(task_id).await {
             anyhow::bail!("task is not running");
         }
@@ -36,10 +36,13 @@ impl TaskStore {
             )
             .await;
         info!(%task_id, "aborted running task (paused)");
+        // The abort dropped the run future mid-await, so its own post-run
+        // admission hook never fires — pull the next queued task here instead.
+        self.try_admit_next().await;
         Ok(())
     }
 
-    pub async fn delete_task(&self, task_id: Uuid) -> Result<()> {
+    pub async fn delete_task(self: &Arc<Self>, task_id: Uuid) -> Result<()> {
         // Force-kill if running. Abort drops the spawn's future, which drops
         // the claude Child (kill_on_drop=true) → SIGKILL.
         let was_running = self.running().abort(task_id).await;
@@ -50,7 +53,11 @@ impl TaskStore {
 
         match tasks::Entity::delete_by_id(task_id).exec(self.db()).await {
             Ok(res) if res.rows_affected == 0 => anyhow::bail!("task not found"),
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Deleting a live or queued task may have freed a slot — backfill.
+                self.try_admit_next().await;
+                Ok(())
+            }
             Err(e) => {
                 // Row delete failed after we killed. Leave the row in place but
                 // flip it to failed so it doesn't show as live forever.
