@@ -18,26 +18,44 @@ use crate::jobs::project_db::ProjectDbGuard;
 use crate::models::ResolvedModel;
 use crate::project::{EnvContext, ProjectStore};
 
+/// Inputs for spawning the agent process. Grouped so `spawn_agent` takes one
+/// borrowed context instead of a twelve-deep argument list.
+pub(crate) struct SpawnAgentCtx<'a> {
+    pub backend: &'a Arc<dyn AgentBackend>,
+    pub agent_args: &'a [String],
+    pub work_dir: &'a Path,
+    pub project_id: Option<Uuid>,
+    pub project_store: &'a Arc<ProjectStore>,
+    pub env_ctx: EnvContext,
+    pub model: Option<&'a ResolvedModel>,
+    pub db_guard: &'a ProjectDbGuard,
+    pub config: &'a Config,
+    pub provider_token_var: &'a str,
+    pub provider_token_value: &'a str,
+    pub agent_env_path: &'a Path,
+}
+
 /// Construct the agent process command with its full environment and spawn it
 /// (stdin/stdout/stderr piped, own process group). Env precedence, lowest first:
 /// project-configured env, then model provider env, then the per-task DB vars,
 /// then the provider token + `BASH_ENV` — so reserved vars always win over a
 /// project's template.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn spawn_agent(
-    backend: &Arc<dyn AgentBackend>,
-    agent_args: &[String],
-    work_dir: &Path,
-    project_id: Option<Uuid>,
-    project_store: &Arc<ProjectStore>,
-    env_ctx: EnvContext,
-    model: Option<&ResolvedModel>,
-    db_guard: &ProjectDbGuard,
-    config: &Config,
-    provider_token_var: &str,
-    provider_token_value: &str,
-    agent_env_path: &Path,
-) -> Result<Child> {
+pub(crate) async fn spawn_agent(ctx: SpawnAgentCtx<'_>) -> Result<Child> {
+    let SpawnAgentCtx {
+        backend,
+        agent_args,
+        work_dir,
+        project_id,
+        project_store,
+        env_ctx,
+        model,
+        db_guard,
+        config,
+        provider_token_var,
+        provider_token_value,
+        agent_env_path,
+    } = ctx;
+
     let mut cmd = Command::new(backend.program());
     cmd.args(agent_args).current_dir(work_dir);
     // Project-configured env first, so reserved vars below always win. The stored

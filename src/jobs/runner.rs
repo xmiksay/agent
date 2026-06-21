@@ -10,10 +10,10 @@ use crate::auth::store::AuthStore;
 use crate::auth::waiter::AuthWaiter;
 use crate::config::Config;
 use crate::jobs::hub::LiveSessions;
-use crate::jobs::permission::handle_permission;
+use crate::jobs::permission::{PermissionCtx, handle_permission};
 use crate::jobs::prompt::build_prompt;
 use crate::jobs::store::TaskStore;
-use crate::jobs::stream::{Stream, pump_stream};
+use crate::jobs::stream::{PumpStreamCtx, Stream, pump_stream};
 use crate::jobs::turn_kill::final_disposition;
 use crate::jobs::types::TriggerReason;
 use crate::models::ResolvedModel;
@@ -24,29 +24,56 @@ use crate::workspace::Workspace;
 use crate::workspace::git::HttpsAuth;
 use crate::workspace::layout::slugify;
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_job(
-    task_id: uuid::Uuid,
-    trigger: TriggerReason,
-    service: Service,
-    project_id: Option<uuid::Uuid>,
-    git_url: String,
-    project_path: String,
-    default_branch: String,
-    branch_override: Option<String>,
-    config: Config,
-    provider: Arc<dyn GitProvider>,
-    workspace: Arc<Workspace>,
-    project_store: Arc<ProjectStore>,
-    hub: LiveSessions,
-    store: Arc<TaskStore>,
-    auth_store: Arc<AuthStore>,
-    auth_waiter: AuthWaiter,
-    semaphore: Arc<Semaphore>,
-    resume_session_id: Option<String>,
-    prompt_override: Option<String>,
-    model: Option<ResolvedModel>,
-) -> Result<()> {
+/// Everything `run_job` needs for one interactive agent session. Grouped so the
+/// runner is driven by a single owned value rather than a twenty-deep positional
+/// argument list assembled at the call site (`confirm_task`).
+pub struct RunJobContext {
+    pub task_id: uuid::Uuid,
+    pub trigger: TriggerReason,
+    pub service: Service,
+    pub project_id: Option<uuid::Uuid>,
+    pub git_url: String,
+    pub project_path: String,
+    pub default_branch: String,
+    pub branch_override: Option<String>,
+    pub config: Config,
+    pub provider: Arc<dyn GitProvider>,
+    pub workspace: Arc<Workspace>,
+    pub project_store: Arc<ProjectStore>,
+    pub hub: LiveSessions,
+    pub store: Arc<TaskStore>,
+    pub auth_store: Arc<AuthStore>,
+    pub auth_waiter: AuthWaiter,
+    pub semaphore: Arc<Semaphore>,
+    pub resume_session_id: Option<String>,
+    pub prompt_override: Option<String>,
+    pub model: Option<ResolvedModel>,
+}
+
+pub async fn run_job(ctx: RunJobContext) -> Result<()> {
+    let RunJobContext {
+        task_id,
+        trigger,
+        service,
+        project_id,
+        git_url,
+        project_path,
+        default_branch,
+        branch_override,
+        config,
+        provider,
+        workspace,
+        project_store,
+        hub,
+        store,
+        auth_store,
+        auth_waiter,
+        semaphore,
+        resume_session_id,
+        prompt_override,
+        model,
+    } = ctx;
+
     let project_slug = slugify(&project_path);
     // The branch is derived and persisted at task-creation time (TaskStore::
     // create_task), so it's always present here. Guard against ever operating
@@ -178,20 +205,20 @@ pub async fn run_job(
         service: service.slug.clone(),
         task_id: task_id.to_string(),
     };
-    let mut child = crate::jobs::spawn::spawn_agent(
-        &backend,
-        &agent_args,
-        &work_dir,
+    let mut child = crate::jobs::spawn::spawn_agent(crate::jobs::spawn::SpawnAgentCtx {
+        backend: &backend,
+        agent_args: &agent_args,
+        work_dir: &work_dir,
         project_id,
-        &project_store,
+        project_store: &project_store,
         env_ctx,
-        model.as_ref(),
-        &db_guard,
-        &config,
+        model: model.as_ref(),
+        db_guard: &db_guard,
+        config: &config,
         provider_token_var,
-        &provider_token_value,
-        &agent_env_path,
-    )
+        provider_token_value: &provider_token_value,
+        agent_env_path: &agent_env_path,
+    })
     .await?;
 
     if let Some(pid) = child.id() {
@@ -253,50 +280,47 @@ pub async fn run_job(
     // Permission prompts (`can_use_tool`) sniffed off stdout. The sender is owned
     // ONLY by the stdout reader so it drops at stdout EOF and ends the consumer.
     let (perm_tx, mut perm_rx) = tokio::sync::mpsc::channel::<crate::agent::PermissionRequest>(32);
-    let approval_timeout_secs = config.operator_approval_timeout_secs;
-    let perm_consumer = {
-        let hub = hub.clone();
-        let auth_store = auth_store.clone();
-        let auth_waiter = auth_waiter.clone();
-        let project_store = project_store.clone();
-        tokio::spawn(async move {
-            // One task per request so a long operator wait never blocks the next.
-            while let Some(req) = perm_rx.recv().await {
-                tokio::spawn(handle_permission(
-                    req,
-                    task_id,
-                    project_id,
-                    hub.clone(),
-                    auth_store.clone(),
-                    auth_waiter.clone(),
-                    project_store.clone(),
-                    approval_timeout_secs,
-                ));
-            }
-        })
+    let perm_ctx = PermissionCtx {
+        task_id,
+        project_id,
+        hub: hub.clone(),
+        auth_store: auth_store.clone(),
+        auth_waiter: auth_waiter.clone(),
+        project_store: project_store.clone(),
+        approval_timeout_secs: config.operator_approval_timeout_secs,
     };
+    let perm_consumer = tokio::spawn(async move {
+        // One task per request so a long operator wait never blocks the next.
+        while let Some(req) = perm_rx.recv().await {
+            tokio::spawn(handle_permission(req, perm_ctx.clone()));
+        }
+    });
 
     let stdout_reader = tokio::spawn(pump_stream(
         stdout_pipe,
         Stream::Stdout,
-        backend.clone(),
-        hub.clone(),
-        task_id,
-        Some(session_tx),
-        Some((token_limit, budget_tx)),
-        Some(result_tx),
-        Some(perm_tx),
+        PumpStreamCtx {
+            backend: backend.clone(),
+            hub: hub.clone(),
+            task_id,
+            session_tx: Some(session_tx),
+            budget: Some((token_limit, budget_tx)),
+            result_tx: Some(result_tx),
+            perm_tx: Some(perm_tx),
+        },
     ));
     let stderr_reader = tokio::spawn(pump_stream(
         stderr_pipe,
         Stream::Stderr,
-        backend.clone(),
-        hub.clone(),
-        task_id,
-        None,
-        None,
-        None,
-        None,
+        PumpStreamCtx {
+            backend: backend.clone(),
+            hub: hub.clone(),
+            task_id,
+            session_tx: None,
+            budget: None,
+            result_tx: None,
+            perm_tx: None,
+        },
     ));
 
     let code_trigger = matches!(

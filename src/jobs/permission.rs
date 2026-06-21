@@ -24,18 +24,32 @@ use crate::auth::waiter::AuthWaiter;
 use crate::jobs::hub::{EnvelopeKind, LiveSessions};
 use crate::project::ProjectStore;
 
-#[allow(clippy::too_many_arguments)]
-pub async fn handle_permission(
-    req: PermissionRequest,
-    task_id: Uuid,
-    project_id: Option<Uuid>,
-    hub: LiveSessions,
-    auth_store: Arc<AuthStore>,
-    auth_waiter: AuthWaiter,
-    project_store: Arc<ProjectStore>,
-    // Seconds the operator has to resolve before we auto-deny; 0 = wait forever.
-    approval_timeout_secs: u64,
-) {
+/// Long-lived dependencies for resolving a permission prompt. Built once per
+/// session and cloned per request, so `handle_permission` takes the request plus
+/// one context value instead of an eight-deep argument list.
+#[derive(Clone)]
+pub struct PermissionCtx {
+    pub task_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub hub: LiveSessions,
+    pub auth_store: Arc<AuthStore>,
+    pub auth_waiter: AuthWaiter,
+    pub project_store: Arc<ProjectStore>,
+    /// Seconds the operator has to resolve before we auto-deny; 0 = wait forever.
+    pub approval_timeout_secs: u64,
+}
+
+pub async fn handle_permission(req: PermissionRequest, ctx: PermissionCtx) {
+    let PermissionCtx {
+        task_id,
+        project_id,
+        hub,
+        auth_store,
+        auth_waiter,
+        project_store,
+        approval_timeout_secs,
+    } = ctx;
+
     let is_question = req.tool_name == "AskUserQuestion";
 
     // Any tool other than Bash / AskUserQuestion runs autonomously — the old

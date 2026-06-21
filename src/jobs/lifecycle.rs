@@ -300,7 +300,7 @@ mod tests {
     use crate::config::Config;
     use crate::jobs::hub::LiveSessions;
     use crate::jobs::registry::RunningTasks;
-    use crate::jobs::store::TaskStore;
+    use crate::jobs::store::{TaskStore, TaskStoreDeps};
     use crate::jobs::types::TriggerReason;
     use crate::project::{NewProjectConfig, ProjectStore, ProviderKind};
     use crate::provider::ProviderRegistry;
@@ -352,17 +352,17 @@ mod tests {
             project_db_admin_url: None,
             project_db_host_for_agent: None,
         };
-        Arc::new(TaskStore::new(
-            db.clone(),
+        Arc::new(TaskStore::new(TaskStoreDeps {
+            db: db.clone(),
             config,
-            ProviderRegistry::new(ServiceStore::new(db.clone())),
-            Arc::new(ProjectStore::new(db.clone())),
-            Arc::new(Workspace::new("/tmp/agent-test")),
-            RunningTasks::new(),
+            providers: ProviderRegistry::new(ServiceStore::new(db.clone())),
+            project_store: Arc::new(ProjectStore::new(db.clone())),
+            workspace: Arc::new(Workspace::new("/tmp/agent-test")),
+            running: RunningTasks::new(),
             hub,
-            Arc::new(AuthStore::new(db.clone())),
-            AuthWaiter::new(),
-        ))
+            auth_store: Arc::new(AuthStore::new(db.clone())),
+            auth_waiter: AuthWaiter::new(),
+        }))
     }
 
     /// Insert a service row so `tasks.service_id` satisfies its FK, and

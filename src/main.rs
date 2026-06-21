@@ -15,7 +15,7 @@ use agent::auth::waiter::AuthWaiter;
 use agent::config::Config;
 use agent::jobs::hub::LiveSessions;
 use agent::jobs::registry::RunningTasks;
-use agent::jobs::store::TaskStore;
+use agent::jobs::store::{TaskStore, TaskStoreDeps};
 use agent::models::{ModelStore, ProviderStore};
 use agent::project::ProjectStore;
 use agent::provider::ProviderRegistry;
@@ -52,17 +52,17 @@ async fn main() -> anyhow::Result<()> {
     let auth_waiter = AuthWaiter::new();
     let running = RunningTasks::new();
     let hub = LiveSessions::new(db.clone());
-    let task_store = Arc::new(TaskStore::new(
+    let task_store = Arc::new(TaskStore::new(TaskStoreDeps {
         db,
-        config.clone(),
-        providers.clone(),
-        project_store.clone(),
-        workspace.clone(),
+        config: config.clone(),
+        providers: providers.clone(),
+        project_store: project_store.clone(),
+        workspace: workspace.clone(),
         running,
         hub,
-        auth_store.clone(),
-        auth_waiter.clone(),
-    ));
+        auth_store: auth_store.clone(),
+        auth_waiter: auth_waiter.clone(),
+    }));
 
     // A task left mid-flight (task_state=working_on, no finished_at) was
     // orphaned by a previous process — reconcile those rows to failed so the UI
