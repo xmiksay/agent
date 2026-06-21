@@ -7,6 +7,7 @@ import { useQueuesStore } from "../stores/queues";
 import { authApi } from "../api/auth";
 import { tasksApi } from "../api/tasks";
 import { extractTaskNotifications } from "./useClaudeStream";
+import { groupIntoTurns } from "./useTurns";
 import type { AuthRequest, TaskEdits, TaskState } from "../types/api";
 
 /**
@@ -38,6 +39,15 @@ export function useTaskDetail(idRef: Ref<string>) {
   });
   const eventCount = computed(() => stream.eventsFor(idRef.value)?.size ?? 0);
   const hasEvents = computed(() => eventCount.value > 0);
+
+  // Turns folded from the seq-ordered stream — the default input/output view.
+  // Derived purely from the existing user/result markers; no schema change.
+  const turns = computed(() => {
+    const m = stream.eventsFor(idRef.value);
+    if (!m) return [];
+    const ordered = [...m.keys()].sort((a, b) => a - b).map((k) => m.get(k));
+    return groupIntoTurns(ordered);
+  });
 
   // Background-task completions, lifted out of the timeline into the Outline.
   const taskNotifications = computed(() => {
@@ -351,6 +361,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     eventText,
     eventCount,
     hasEvents,
+    turns,
     taskNotifications,
     tokensSpent,
     wsConnected,
