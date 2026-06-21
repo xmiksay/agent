@@ -82,7 +82,15 @@ impl Cli {
 /// Build the `claude -p` prompt for a trigger. The worktree is already checked
 /// out on `branch`, so issue prompts tell claude not to create or switch
 /// branches. `kind` selects provider terminology and CLI (`glab` vs `gh`).
-pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -> String {
+/// When `db_note` is set, a paragraph telling the agent about its throwaway
+/// PostgreSQL database is appended (issue #26); the DSN itself stays in env, not
+/// here, so the password never lands in persisted `task_events`.
+pub fn build_prompt(
+    trigger: &TriggerReason,
+    branch: &str,
+    kind: ProviderKind,
+    db_note: bool,
+) -> String {
     let c = Cli(kind);
     let service = match kind {
         ProviderKind::Gitlab => "GitLab",
@@ -212,10 +220,53 @@ pub fn build_prompt(trigger: &TriggerReason, branch: &str, kind: ProviderKind) -
     // CLI/transport note (once): the provider CLI is pre-authenticated and the
     // existing `origin` pushes over token-HTTPS, so the agent must not touch auth.
     let (cli, token_var) = c.cli_auth();
-    format!(
+    let mut prompt = format!(
         "{body}\n\n\
          Note: the `{cli}` CLI is already authenticated (its token is in \
          `${token_var}`) and `git push -u origin HEAD` over the existing `origin` \
          remote works. Do NOT add SSH keys, configure tokens, or rewrite the remote."
-    )
+    );
+
+    if db_note {
+        prompt.push_str(
+            "\n\n\
+             Note: a dedicated, throwaway PostgreSQL database is provisioned for this \
+             task — its DSN is in `$DATABASE_URL` and the standard `PGHOST`/`PGPORT`/\
+             `PGDATABASE`/`PGUSER`/`PGPASSWORD` vars are set, so `psql` with no arguments \
+             connects. Use it freely for migrations, fixtures, and tests; it is destroyed \
+             automatically when the task ends. Do NOT create or drop databases or roles \
+             yourself, and do NOT hard-code these credentials anywhere.",
+        );
+    }
+
+    prompt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn issue() -> TriggerReason {
+        TriggerReason::Issue {
+            iid: 7,
+            title: "demo".into(),
+            description: "body".into(),
+            url: "http://x/7".into(),
+        }
+    }
+
+    #[test]
+    fn db_paragraph_present_only_when_requested() {
+        let without = build_prompt(&issue(), "7-demo", ProviderKind::Github, false);
+        assert!(!without.contains("throwaway PostgreSQL"));
+        assert!(!without.contains("$DATABASE_URL"));
+
+        let with = build_prompt(&issue(), "7-demo", ProviderKind::Github, true);
+        assert!(with.contains("throwaway PostgreSQL"));
+        assert!(with.contains("$DATABASE_URL"));
+        // The DSN value itself is never embedded — only the env var name.
+        assert!(with.contains("PGPASSWORD"));
+        // The base prompt is unchanged otherwise (the DB note is appended).
+        assert!(with.starts_with(&without));
+    }
 }

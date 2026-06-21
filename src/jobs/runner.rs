@@ -129,9 +129,28 @@ pub async fn run_job(
 
     drop(_guard);
 
+    // Per-task throwaway PostgreSQL (issue #26). Provision now — before spawning
+    // the agent — so a provision failure aborts cleanly. The guard tears the
+    // role+DB down on every exit path (`?`, graceful end, abort); the startup
+    // sweep is the backstop if a hard SIGKILL skips Drop.
+    let db_guard = match config.project_db_admin_url.as_deref() {
+        Some(admin_url) => {
+            let host = crate::jobs::project_db::agent_host_from_admin(
+                admin_url,
+                config.project_db_host_for_agent.as_deref(),
+            );
+            let pdb = crate::jobs::project_db::ProjectDb::provision(admin_url, &host, task_id)
+                .await
+                .context("provisioning per-task project database")?;
+            crate::jobs::project_db::ProjectDbGuard(Some(pdb))
+        }
+        None => crate::jobs::project_db::ProjectDbGuard(None),
+    };
+    let db_note = db_guard.0.is_some();
+
     let prompt = match prompt_override {
         Some(p) if !p.trim().is_empty() => p,
-        _ => build_prompt(&trigger, &branch, service.kind),
+        _ => build_prompt(&trigger, &branch, service.kind, db_note),
     };
     info!(%prompt, program = backend.program(), model = ?model_arg, "running agent");
 
@@ -165,6 +184,32 @@ pub async fn run_job(
     // Provider API key + base URL (API mode) after project env so a project can't
     // clobber them; absent, the CLI runs on its subscription login + default host.
     crate::agent::apply_model_env(&mut cmd, backend.as_ref(), model.as_ref());
+
+    // Per-task DB connection (issue #26), after project env so it always wins.
+    // `DATABASE_URL` carries the password; the `PG*` vars let bare `psql` connect.
+    if let Some(pdb) = db_guard.0.as_ref() {
+        cmd.env("DATABASE_URL", &pdb.agent_url);
+        cmd.env("PGHOST", pdb.host());
+        if let Some(port) = pdb.port() {
+            cmd.env("PGPORT", port);
+        }
+        cmd.env("PGDATABASE", pdb.name());
+        cmd.env("PGUSER", pdb.name());
+        cmd.env("PGPASSWORD", pdb.password());
+    }
+
+    // NVM (issue #26): resolve the node toolchain NVM would activate (honouring
+    // the worktree's `.nvmrc`) and prepend its `bin` to the child's PATH. The
+    // child inherits this process's env by default, so we only prepend.
+    if let Some(nvm_dir) = config.nvm_dir.as_deref()
+        && let Some(bin) =
+            crate::jobs::nvm::resolve_node_bin(std::path::Path::new(nvm_dir), &work_dir).await
+    {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{}:{existing}", bin.display()));
+        info!(node_bin = %bin.display(), "running agent inside NVM environment");
+    }
+
     let mut child = cmd
         .env(provider_token_var, &provider_token_value)
         // Bash sources $BASH_ENV at the start of every non-interactive shell (how

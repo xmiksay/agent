@@ -73,6 +73,18 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "failed to recover orphan tasks"),
     }
 
+    // Per-task throwaway databases (issue #26) are dropped by the runner's Drop
+    // guard, but a hard SIGKILL skips it. No in-flight task survives a restart
+    // (recover_orphans already failed them), so any `agent_task_%` object left in
+    // the admin DB is an orphan — sweep them before serving.
+    if let Some(admin_url) = config.project_db_admin_url.as_deref() {
+        match agent::jobs::project_db::ProjectDb::sweep_orphans(admin_url).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(swept = n, "swept orphaned per-task databases"),
+            Err(e) => tracing::warn!(error = %e, "failed to sweep orphaned per-task databases"),
+        }
+    }
+
     // The admission loop pulls queued tasks into free slots whenever a slot
     // frees (signalled via request_admit). It owns the recursive confirm path
     // that the run future's closure can't call directly.

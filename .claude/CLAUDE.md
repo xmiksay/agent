@@ -45,6 +45,9 @@ Read by `src/config.rs::from_env`. Defaults in parentheses.
 | `OPERATOR_APPROVAL_TIMEOUT_SECS` | `0` | seconds before an unanswered tool-approval auto-denies. **`0` = wait indefinitely** (never auto-deny — the default). `>0` auto-denies on timeout, resolving the row + clearing the UI. Tradeoff: a turn parked on approval holds its `MAX_CONCURRENT_JOBS` permit, so indefinite waits can starve other turns |
 | `JOB_TIMEOUT_SECS` | `0` | seconds a single turn may run before the runner SIGKILLs the agent **and its whole process group** (`kill -pgid`, so orphaned test processes die too) and finalizes the task resumable (session_id kept → operator can Resume). **`0` = disabled** (turns run unbounded) |
 | `API_BEARER_TOKEN` | unset | when set, gates `/api/*`; SPA prompts and stores in `localStorage` |
+| `NVM_DIR` | unset | NVM install dir (e.g. `/home/agent/.nvm`). When set, the runner resolves the node toolchain NVM would activate — honouring the worktree's `.nvmrc`, else the `default` alias — and prepends its `bin` to the agent's `PATH`. Unset → disabled (spawn `PATH` unchanged) |
+| `PROJECT_DB_ADMIN_URL` | unset | admin Postgres DSN with `CREATE ROLE`+`CREATE DATABASE` privileges. When set, the runner provisions a throwaway `LOGIN`-only role + database per task (`agent_task_<id>`), injects its DSN into the agent's env (`DATABASE_URL` + `PG*`) and initial prompt, and drops both at session end (Drop guard + startup sweep). Unset → disabled |
+| `PROJECT_DB_HOST_FOR_AGENT` | host from admin URL | `host:port` the agent uses in the injected `DATABASE_URL`/`PGHOST` (may differ from the admin connection in containerized setups) |
 | `RUST_LOG` | `agent=info` | `tracing-subscriber` filter |
 
 The Vue SPA is baked into the binary by `rust-embed` (`src/spa.rs`) at compile time. There is no runtime path override — to swap the bundle, rebuild.
