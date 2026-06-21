@@ -92,8 +92,15 @@ pub async fn run_job(
     // way we derive a token-HTTPS remote from it so clone/push need no host SSH key
     // and no secret is written into .git/config.
     let https_auth = HttpsAuth::from_remote_url(&git_url, service.kind, &provider_token_value)?;
+    // A ReviewMR worktree is a scratch `<source>-review` branch that must carry the
+    // MR's source content, so it's created from the source branch; every other
+    // trigger bases its branch on the project default.
+    let base_branch = match &trigger {
+        TriggerReason::ReviewMR { source_branch, .. } => source_branch.clone(),
+        _ => default_branch.clone(),
+    };
     workspace
-        .clone_or_fetch(&work_dir, &https_auth, &branch, &default_branch)
+        .clone_or_fetch(&work_dir, &https_auth, &branch, &base_branch)
         .await?;
 
     // The agent's *own* git/gh/glab calls read the token from a mutable env file

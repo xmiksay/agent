@@ -27,8 +27,8 @@ impl TaskStore {
         // comment carries no title, so it reuses the branch the original issue
         // task recorded (falling back to a bare `<iid>` if none exists yet).
         let branch = Some(match &trigger {
-            TriggerReason::ReviewMR { source_branch, .. }
-            | TriggerReason::FixReview { source_branch, .. }
+            TriggerReason::ReviewMR { source_branch, .. } => review_branch_name(source_branch),
+            TriggerReason::FixReview { source_branch, .. }
             | TriggerReason::MRComment { source_branch, .. } => source_branch.clone(),
             TriggerReason::Issue { iid, title, .. } => issue_branch_name(*iid, title),
             TriggerReason::IssueComment { issue_iid, .. } => self
@@ -133,6 +133,12 @@ impl TaskStore {
     }
 }
 
+/// Review tasks run on a throwaway `<source>-review` branch so a read-only
+/// review never collides with the working agent on the MR's source branch.
+pub(crate) fn review_branch_name(source_branch: &str) -> String {
+    format!("{source_branch}-review")
+}
+
 /// `<iid>-<slug(title)>`, e.g. `42-fix-login-button`. Falls back to a bare
 /// `<iid>` when the title slug is empty. The slug is capped so branch names
 /// stay sane for long issue titles.
@@ -147,5 +153,53 @@ fn issue_branch_name(iid: u64, title: &str) -> String {
         iid.to_string()
     } else {
         format!("{iid}-{slug}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mirror of the branch arm in `create_task` for the MR-family triggers (the
+    /// only arms that don't touch the DB), so we can assert the routing without a
+    /// live store.
+    fn mr_branch(trigger: &TriggerReason) -> String {
+        match trigger {
+            TriggerReason::ReviewMR { source_branch, .. } => review_branch_name(source_branch),
+            TriggerReason::FixReview { source_branch, .. }
+            | TriggerReason::MRComment { source_branch, .. } => source_branch.clone(),
+            _ => unreachable!("test only covers MR-family triggers"),
+        }
+    }
+
+    #[test]
+    fn review_mr_runs_on_review_branch() {
+        let t = TriggerReason::ReviewMR {
+            iid: 1,
+            title: "T".into(),
+            source_branch: "feature".into(),
+            target_branch: "main".into(),
+            url: "u".into(),
+        };
+        assert_eq!(mr_branch(&t), "feature-review");
+    }
+
+    #[test]
+    fn fix_review_and_mr_comment_use_source_branch() {
+        let fix = TriggerReason::FixReview {
+            iid: 1,
+            title: "T".into(),
+            source_branch: "feature".into(),
+            url: "u".into(),
+            review_body: String::new(),
+        };
+        let comment = TriggerReason::MRComment {
+            mr_iid: 1,
+            comment: "c".into(),
+            source_branch: "feature".into(),
+            url: "u".into(),
+        };
+        assert_eq!(mr_branch(&fix), "feature");
+        assert_eq!(mr_branch(&comment), "feature");
     }
 }

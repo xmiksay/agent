@@ -11,7 +11,7 @@ use crate::project::ProviderKind;
 use crate::provider::github;
 use crate::provider::gitlab::token as gitlab_token;
 use crate::service::{
-    AuthKind, NewService, Service, ServiceCredentials, TriggerMode, UpdateService,
+    AuthKind, NewService, Service, ServiceCredentials, TriggerConfig, TriggerMode, UpdateService,
 };
 
 #[derive(Serialize)]
@@ -33,6 +33,10 @@ pub struct ServiceView {
     /// Per-trigger-type model mapping (`trigger_type → model_id`). Filled by the
     /// handlers (a separate query); empty when the service maps no types.
     pub models: std::collections::BTreeMap<String, uuid::Uuid>,
+    /// Per-trigger-type gating overrides (`trigger_type → {enabled, mode, label}`).
+    /// Filled by the handlers (a separate query); empty when the service uses the
+    /// defaults for every type.
+    pub triggers: std::collections::BTreeMap<String, TriggerConfig>,
     /// True once an App install has been recorded (non-empty `installation_id`).
     /// Lets the UI show install status without exposing the secret bundle.
     pub app_installed: bool,
@@ -86,6 +90,7 @@ impl ServiceView {
             trigger_mode: svc.trigger_mode,
             trigger_label: svc.trigger_label,
             models: std::collections::BTreeMap::new(),
+            triggers: std::collections::BTreeMap::new(),
             app_installed,
             gitlab_token,
             created_at: svc.created_at,
@@ -110,6 +115,11 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ServiceView>
             .trigger_models(id)
             .await
             .unwrap_or_default();
+        view.triggers = state
+            .service_store
+            .trigger_configs(id)
+            .await
+            .unwrap_or_default();
         views.push(view);
     }
     Ok(Json(views))
@@ -129,6 +139,11 @@ pub async fn get(
     view.models = state
         .service_store
         .trigger_models(id)
+        .await
+        .unwrap_or_default();
+    view.triggers = state
+        .service_store
+        .trigger_configs(id)
         .await
         .unwrap_or_default();
     Ok(Json(view))
@@ -159,6 +174,11 @@ pub async fn create(
     view.models = state
         .service_store
         .trigger_models(id)
+        .await
+        .unwrap_or_default();
+    view.triggers = state
+        .service_store
+        .trigger_configs(id)
         .await
         .unwrap_or_default();
     view.generated_webhook_secret = generated;
@@ -209,6 +229,11 @@ pub async fn update(
     view.models = state
         .service_store
         .trigger_models(id)
+        .await
+        .unwrap_or_default();
+    view.triggers = state
+        .service_store
+        .trigger_configs(id)
         .await
         .unwrap_or_default();
     view.generated_webhook_secret = generated;

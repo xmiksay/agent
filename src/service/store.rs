@@ -242,6 +242,10 @@ pub struct NewService {
     /// → no mappings.
     #[serde(default)]
     pub models: Option<BTreeMap<String, Uuid>>,
+    /// Per-trigger-type gating overrides to seed. Each row overrides the
+    /// service-level `trigger_mode`/`trigger_label` default. Absent → none.
+    #[serde(default)]
+    pub triggers: Option<BTreeMap<String, crate::service::TriggerConfig>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -259,6 +263,9 @@ pub struct UpdateService {
     /// Absent → leave the per-trigger-type model mapping unchanged; present →
     /// replace it wholesale with this `trigger_type → model_id` map (empty clears).
     pub models: Option<BTreeMap<String, Uuid>>,
+    /// Absent → leave per-trigger-type gating unchanged; present → replace all
+    /// rows wholesale (empty clears, falling back to the service-level defaults).
+    pub triggers: Option<BTreeMap<String, crate::service::TriggerConfig>>,
 }
 
 /// Distinguish an absent field (`None`) from an explicit `null` (`Some(None)`)
@@ -343,6 +350,9 @@ impl ServiceStore {
         if let Some(models) = new.models {
             self.set_trigger_models(id, &models).await?;
         }
+        if let Some(triggers) = &new.triggers {
+            self.set_trigger_configs(id, triggers).await?;
+        }
 
         self.get(id)
             .await?
@@ -413,6 +423,9 @@ impl ServiceStore {
 
         if let Some(models) = upd.models {
             self.set_trigger_models(id, &models).await?;
+        }
+        if let Some(triggers) = &upd.triggers {
+            self.set_trigger_configs(id, triggers).await?;
         }
 
         self.get(id)

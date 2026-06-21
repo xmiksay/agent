@@ -1,14 +1,17 @@
 //! Dispatch a [`NormalizedEvent`] into the task store, or release a branch
 //! when the underlying issue/PR closes.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::jobs::create::review_branch_name;
 use crate::jobs::types::TriggerReason;
 use crate::project::NewProjectConfig;
-use crate::service::{AuthKind, Service, TriggerMode};
+use crate::service::{AuthKind, Service, TriggerConfig, TriggerMode};
 use crate::webhook::normalized::{EventKind, NormalizedEvent, NoteTargetRef};
 use crate::workspace::layout::slugify;
 
@@ -62,6 +65,17 @@ pub async fn dispatch(
                 source_branch,
             )
             .await?;
+            // A ReviewMR ran on a separate `<source>-review` worktree; release it
+            // too. A missing branch row is a logged no-op, so this is safe even
+            // when no review ever ran for this PR.
+            release_for_branch(
+                state,
+                project.id,
+                &service.slug,
+                &project.project_slug,
+                &review_branch_name(source_branch),
+            )
+            .await?;
             return Ok(vec![]);
         }
         _ => {}
@@ -93,11 +107,23 @@ pub async fn dispatch(
         return Ok(vec![task_id]);
     }
 
+    // Per-trigger-type gating. The reattach path above runs FIRST and is NOT
+    // gated — a follow-up comment always reaches its existing task. Only the
+    // fresh-start `build_trigger` arms below consult these configs. A load
+    // failure must not fail dispatch: default to empty (all enabled, service
+    // defaults).
+    let trigger_cfgs = state
+        .service_store
+        .trigger_configs(service.id)
+        .await
+        .unwrap_or_default();
+
     let trigger = match build_trigger(
         &ev,
         &my_username,
         service.trigger_mode,
         &service.trigger_label,
+        &trigger_cfgs,
     ) {
         Some(t) => t,
         None => {
@@ -334,11 +360,29 @@ async fn stop_branch_agent(state: &AppState, project_id: Uuid, branch_name: &str
     }
 }
 
+/// The effective config for `trigger_type`: the per-type override row if present,
+/// else "enabled with the service-level defaults".
+fn resolve_cfg(
+    cfgs: &BTreeMap<String, TriggerConfig>,
+    trigger_type: &str,
+    default_mode: TriggerMode,
+    default_label: &str,
+) -> TriggerConfig {
+    cfgs.get(trigger_type)
+        .cloned()
+        .unwrap_or_else(|| TriggerConfig {
+            enabled: true,
+            mode: default_mode,
+            label: default_label.to_string(),
+        })
+}
+
 fn build_trigger(
     ev: &NormalizedEvent,
     my_username: &str,
     trigger_mode: TriggerMode,
     trigger_label: &str,
+    trigger_cfgs: &BTreeMap<String, TriggerConfig>,
 ) -> Option<TriggerReason> {
     match &ev.kind {
         EventKind::IssueAssigned {
@@ -361,18 +405,24 @@ fn build_trigger(
                 EventKind::IssueAssigned { .. } => "assigned",
                 _ => "updated",
             };
-            let by_assignee = matches!(trigger_mode, TriggerMode::Assignee | TriggerMode::Both)
+            // Per-type override of the service-level mode/label default.
+            let cfg = resolve_cfg(trigger_cfgs, "issue", trigger_mode, trigger_label);
+            if !cfg.enabled {
+                info!(iid, kind, "issue trigger disabled for this service");
+                return None;
+            }
+            let by_assignee = matches!(cfg.mode, TriggerMode::Assignee | TriggerMode::Both)
                 && assignees.iter().any(|a| a == my_username);
-            let by_label = matches!(trigger_mode, TriggerMode::Label | TriggerMode::Both)
-                && !trigger_label.is_empty()
-                && labels.iter().any(|l| l == trigger_label);
+            let by_label = matches!(cfg.mode, TriggerMode::Label | TriggerMode::Both)
+                && !cfg.label.is_empty()
+                && labels.iter().any(|l| l == &cfg.label);
             let matched = by_assignee || by_label;
             info!(
                 iid,
                 kind,
                 bot = %my_username,
-                mode = trigger_mode.as_str(),
-                label = %trigger_label,
+                mode = cfg.mode.as_str(),
+                label = %cfg.label,
                 assignees = ?assignees,
                 labels = ?labels,
                 matched,
@@ -400,6 +450,10 @@ fn build_trigger(
             ..
         } => {
             use crate::webhook::normalized::ReviewState;
+            if !resolve_cfg(trigger_cfgs, "fix_review", trigger_mode, trigger_label).enabled {
+                info!(iid, "fix_review trigger disabled for this service");
+                return None;
+            }
             // FixReview is the "fix comments on my own MR" workflow, so the gate
             // is "bot authored the MR". GitHub gives us the author directly.
             // GitLab webhooks only expose `author_id` (numeric); the bot doesn't
@@ -433,6 +487,10 @@ fn build_trigger(
             reviewers,
             title,
         } => {
+            if !resolve_cfg(trigger_cfgs, "review_mr", trigger_mode, trigger_label).enabled {
+                info!(iid, "review_mr trigger disabled for this service");
+                return None;
+            }
             if !reviewers.iter().any(|r| r == my_username) {
                 return None;
             }
@@ -469,6 +527,11 @@ fn build_trigger(
                     if !mentioned && !is_my_mr && !is_reviewer {
                         return None;
                     }
+                    if !resolve_cfg(trigger_cfgs, "mr_comment", trigger_mode, trigger_label).enabled
+                    {
+                        info!(iid, "mr_comment trigger disabled for this service");
+                        return None;
+                    }
                     Some(TriggerReason::MRComment {
                         mr_iid: *iid,
                         comment: body.clone(),
@@ -482,6 +545,12 @@ fn build_trigger(
                     // there we still require an @-mention of the bot.
                     let is_my_issue = assignees.iter().any(|a| a == my_username);
                     if !mentioned && !is_my_issue {
+                        return None;
+                    }
+                    if !resolve_cfg(trigger_cfgs, "issue_comment", trigger_mode, trigger_label)
+                        .enabled
+                    {
+                        info!(iid, "issue_comment trigger disabled for this service");
                         return None;
                     }
                     Some(TriggerReason::IssueComment {
@@ -522,38 +591,43 @@ mod tests {
         }
     }
 
+    /// No per-type overrides — every trigger uses the service-level defaults.
+    fn no_cfgs() -> BTreeMap<String, TriggerConfig> {
+        BTreeMap::new()
+    }
+
     #[test]
     fn label_mode_matches_via_label_not_assignee() {
         let ev = issue_event(vec!["other"], vec!["agent"]);
         // Label mode ignores assignees entirely; the watched label fires it.
-        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "agent").is_some());
+        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "agent", &no_cfgs()).is_some());
     }
 
     #[test]
     fn label_mode_ignores_assignee_match() {
         let ev = issue_event(vec!["bot"], vec!["something-else"]);
         // Bot is assigned but mode is label-only and the label doesn't match.
-        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "agent").is_none());
+        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "agent", &no_cfgs()).is_none());
     }
 
     #[test]
     fn label_mode_with_empty_label_never_matches() {
         let ev = issue_event(vec!["bot"], vec!["agent"]);
-        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "").is_none());
+        assert!(build_trigger(&ev, "bot", TriggerMode::Label, "", &no_cfgs()).is_none());
     }
 
     #[test]
     fn assignee_mode_matches_via_assignee_not_label() {
         let ev = issue_event(vec!["bot"], vec!["agent"]);
         // Assignee mode ignores labels; assignment fires it.
-        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "agent").is_some());
+        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "agent", &no_cfgs()).is_some());
     }
 
     #[test]
     fn assignee_mode_ignores_label_match() {
         let ev = issue_event(vec!["other"], vec!["agent"]);
         // The watched label is present but mode is assignee-only.
-        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "agent").is_none());
+        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "agent", &no_cfgs()).is_none());
     }
 
     #[test]
@@ -561,8 +635,43 @@ mod tests {
         let by_label = issue_event(vec!["other"], vec!["agent"]);
         let by_assignee = issue_event(vec!["bot"], vec!["x"]);
         let neither = issue_event(vec!["other"], vec!["x"]);
-        assert!(build_trigger(&by_label, "bot", TriggerMode::Both, "agent").is_some());
-        assert!(build_trigger(&by_assignee, "bot", TriggerMode::Both, "agent").is_some());
-        assert!(build_trigger(&neither, "bot", TriggerMode::Both, "agent").is_none());
+        assert!(build_trigger(&by_label, "bot", TriggerMode::Both, "agent", &no_cfgs()).is_some());
+        assert!(
+            build_trigger(&by_assignee, "bot", TriggerMode::Both, "agent", &no_cfgs()).is_some()
+        );
+        assert!(build_trigger(&neither, "bot", TriggerMode::Both, "agent", &no_cfgs()).is_none());
+    }
+
+    #[test]
+    fn disabled_issue_trigger_returns_none() {
+        // Bot is assigned and mode would match, but the per-type row disables it.
+        let ev = issue_event(vec!["bot"], vec!["agent"]);
+        let mut cfgs = BTreeMap::new();
+        cfgs.insert(
+            "issue".to_string(),
+            TriggerConfig {
+                enabled: false,
+                mode: TriggerMode::Assignee,
+                label: String::new(),
+            },
+        );
+        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "agent", &cfgs).is_none());
+    }
+
+    #[test]
+    fn per_type_override_mode_matches() {
+        // Service default is assignee, but the per-type row switches to label;
+        // the watched label fires even though the bot isn't assigned.
+        let ev = issue_event(vec!["other"], vec!["agent"]);
+        let mut cfgs = BTreeMap::new();
+        cfgs.insert(
+            "issue".to_string(),
+            TriggerConfig {
+                enabled: true,
+                mode: TriggerMode::Label,
+                label: "agent".to_string(),
+            },
+        );
+        assert!(build_trigger(&ev, "bot", TriggerMode::Assignee, "", &cfgs).is_some());
     }
 }

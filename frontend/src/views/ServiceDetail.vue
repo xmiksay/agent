@@ -6,8 +6,9 @@ import { useServicesStore } from "../stores/services";
 import { useModelsStore } from "../stores/models";
 import { servicesApi } from "../api/services";
 import ProviderBadge from "../components/ProviderBadge.vue";
-import { TRIGGER_TYPES } from "../util/triggerTypes";
-import type { AuthKind, GitLabTokenScope, UpdateService } from "../types/api";
+import TriggerGatingGrid from "../components/TriggerGatingGrid.vue";
+import { TRIGGER_TYPES, seedTriggers } from "../util/triggerTypes";
+import type { AuthKind, GitLabTokenScope, TriggerConfig, UpdateService } from "../types/api";
 
 const props = defineProps<{ id: string }>();
 const store = useServicesStore();
@@ -17,6 +18,8 @@ const router = useRouter();
 const draft = ref<UpdateService>({});
 // trigger_type -> model id; "" means unmapped and is dropped on submit.
 const triggerModels = ref<Record<string, string>>({});
+// Full 5-entry gating map; submitted wholesale (replaces all rows).
+const triggerGating = ref<Record<string, TriggerConfig>>(seedTriggers());
 const tokenDraft = ref("");
 const webhookSecretDraft = ref("");
 const appIdDraft = ref("");
@@ -61,6 +64,7 @@ async function reload() {
       trigger_label: store.detail.trigger_label,
     };
     triggerModels.value = { ...store.detail.models };
+    triggerGating.value = seedTriggers(store.detail.triggers);
     authKindDraft.value = store.detail.auth_kind;
     tokenDraft.value = "";
     webhookSecretDraft.value = "";
@@ -95,7 +99,11 @@ async function save() {
   saving.value = true;
   error.value = null;
   try {
-    const body: UpdateService = { ...draft.value, models: collectModels() };
+    const body: UpdateService = {
+      ...draft.value,
+      models: collectModels(),
+      triggers: triggerGating.value,
+    };
     if (tokenDraft.value) body.token = tokenDraft.value;
     if (webhookSecretDraft.value) body.webhook_secret = webhookSecretDraft.value;
     if (isGithub.value) body.auth_kind = authKindDraft.value;
@@ -420,6 +428,9 @@ async function remove() {
               </select>
             </div>
           </div>
+        </div>
+        <div class="col-span-2">
+          <TriggerGatingGrid v-model="triggerGating" />
         </div>
         <div class="col-span-2">
           <label class="flex items-center gap-2">

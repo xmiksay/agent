@@ -110,6 +110,15 @@ export type TriggerMode = "assignee" | "label" | "both";
 
 export type GitLabTokenScope = "group" | "project";
 
+// Per-trigger-type gating. `enabled` applies to every type; `mode`/`label` only
+// matter for the "issue" type (the other four gate on `enabled` alone). A
+// per-type entry overrides the service-level trigger_mode/trigger_label defaults.
+export interface TriggerConfig {
+  enabled: boolean;
+  mode: TriggerMode;
+  label: string;
+}
+
 // Non-secret metadata about a GitLab bot token minted via the provisioning
 // flow. Present only on GitLab services whose token was provisioned (not pasted).
 export interface GitLabTokenMeta {
@@ -142,6 +151,9 @@ export interface ServiceView {
   // Per-trigger-type model mapping: trigger_type -> model id (uuid). {} when
   // nothing mapped.
   models: Record<string, string>;
+  // Per-trigger-type gating: trigger_type -> TriggerConfig. {} = every type uses
+  // the service-level trigger_mode/trigger_label defaults, all enabled.
+  triggers: Record<string, TriggerConfig>;
   // Present only on a create/update response when the webhook secret was just
   // auto-generated (left blank). Revealed once; never returned by list/get.
   generated_webhook_secret?: string | null;
@@ -183,6 +195,8 @@ export interface NewService {
   // Per-trigger-type model mapping. Sending it replaces the whole mapping;
   // {} clears it.
   models?: Record<string, string>;
+  // Per-trigger-type gating. Sending it replaces all rows; {} seeds nothing.
+  triggers?: Record<string, TriggerConfig>;
 }
 
 export interface UpdateService {
@@ -199,6 +213,9 @@ export interface UpdateService {
   // Per-trigger-type model mapping. Omit to leave unchanged; sending it replaces
   // the whole mapping; {} clears it.
   models?: Record<string, string>;
+  // Per-trigger-type gating. Omit to leave unchanged; sending it replaces all
+  // rows wholesale; {} clears them back to the service-level defaults.
+  triggers?: Record<string, TriggerConfig>;
 }
 
 export interface BranchEntry {

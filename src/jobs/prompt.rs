@@ -141,15 +141,20 @@ pub fn build_prompt(
             url,
             ..
         } => {
+            // The worktree is a scratch `<source>-review` branch, so the local
+            // source/target refs may not exist — fetch and diff against origin refs.
             format!(
                 "Review {pr_noun} {pr_ref}{iid}: {title}\n\
                  Branch: {source_branch} -> {target_branch}\n\
                  URL: {url}\n\n\
                  Instructions:\n\
-                 - Review the diff: `git fetch origin && git diff origin/{target_branch}...origin/{source_branch}`\n\
+                 - Fetch latest: `git fetch origin`\n\
+                 - Review the diff: `git diff origin/{target_branch}...origin/{source_branch}`\n\
                  - Post your review as a comment using `{note}`\n\
                  - If changes are needed, list them clearly\n\
-                 - If everything looks good, approve with `{approve}`",
+                 - If everything looks good, approve with `{approve}`\n\
+                 - This is a read-only review branch: do NOT commit or push code; \
+                   only post the review note / approve.",
                 pr_noun = c.pr_noun(),
                 pr_ref = c.pr_ref(),
                 note = c.note_pr(*iid),
