@@ -63,9 +63,12 @@ impl ServiceStore {
     ) -> Result<()> {
         validate_trigger_types(configs)?;
 
+        // Atomic delete-then-insert: a failure mid-swap must not leave the
+        // service with a half-cleared config (issue #65).
+        let txn = self.db().begin().await.context("begin tx")?;
         service_triggers::Entity::delete_many()
             .filter(service_triggers::Column::ServiceId.eq(service_id))
-            .exec(self.db())
+            .exec(&txn)
             .await
             .context("clearing service_triggers")?;
 
@@ -78,10 +81,11 @@ impl ServiceStore {
                 mode: Set(cfg.mode.as_str().to_string()),
                 label: Set(cfg.label.clone()),
             })
-            .exec(self.db())
+            .exec(&txn)
             .await
             .context("inserting service_trigger")?;
         }
+        txn.commit().await.context("commit tx")?;
         Ok(())
     }
 }
