@@ -37,6 +37,11 @@ jobs:
       # `/postgres`, so a path component is required here.
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/agent
       CARGO_TERM_COLOR: always
+      # The runner image ships nvm preinstalled, which would make the Makefile's
+      # `nvm use` try to switch to the .nvmrc version inside nvm (not installed).
+      # Pointing NVM_DIR at a nonexistent dir makes the Makefile fall back to the
+      # PATH node that actions/setup-node provides.
+      NVM_DIR: /nonexistent
 
     steps:
       - uses: actions/checkout@v4
