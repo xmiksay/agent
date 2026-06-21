@@ -1,5 +1,7 @@
 # agent
 
+[![CI](https://github.com/xmiksay/agent/actions/workflows/ci.yml/badge.svg)](https://github.com/xmiksay/agent/actions/workflows/ci.yml)
+
 A Rust/Axum service that listens for git-forge webhooks, runs the `claude` CLI against the affected repo, and posts the result back as an issue/MR/PR comment. Supports **GitLab** and **GitHub** today; **Codeberg** (Forgejo) is planned. A Vue 3 SPA on the same port shows live task status, branch diff, captured stdout, and pending operator approvals.
 
 Engineering rules live in [`.claude/CLAUDE.md`](.claude/CLAUDE.md) and the full architecture map in [`docs/architecture.md`](docs/architecture.md). Read those first if you're going to modify the code.
