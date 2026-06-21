@@ -263,6 +263,15 @@ export function useTaskDetail(idRef: Ref<string>) {
     await withBusy("kill", () => store.kill(idRef.value));
   }
 
+  // Rewrite this task's agent.env with a fresh token — the mid-turn escape hatch
+  // when a long turn outlives the App token's ~1h TTL (#52). Server re-resolves
+  // from the service credentials.
+  async function refreshToken() {
+    await withBusy("token", async () => {
+      await tasksApi.refreshToken(idRef.value);
+    });
+  }
+
   async function remove() {
     const msg = isLive.value
       ? "An agent is attached. Force kill claude and delete?"
@@ -352,6 +361,7 @@ export function useTaskDetail(idRef: Ref<string>) {
     retry,
     resume,
     pause,
+    refreshToken,
     remove,
     message,
     sending,

@@ -8,6 +8,9 @@ use crate::AppState;
 use crate::jobs::lifecycle::derive_agent_state;
 use crate::jobs::store::TaskEdits;
 use crate::jobs::types::TriggerReason;
+use crate::project::ProviderKind;
+use crate::provider::resolve_token;
+use crate::service::Service;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -108,12 +111,44 @@ pub async fn list_tasks(
     Ok(Json(views))
 }
 
+/// Resolve a task's git worktree on disk via its project → service, returning
+/// the owning `Service` (for credentials + kind) alongside the absolute path.
+/// `None` if the project was deleted or carries no service. Shared by `get_task`
+/// (path only) and `refresh_token` (path + credentials).
+async fn resolve_task_worktree(
+    state: &AppState,
+    task: &crate::entity::tasks::Model,
+) -> Option<(Service, std::path::PathBuf)> {
+    use crate::workspace::layout::slugify;
+
+    let project = state
+        .project_store
+        .get_project_by_id(task.project_id)
+        .await
+        .ok()
+        .flatten()?;
+    let svc = state
+        .task_store
+        .providers()
+        .service(project.service_id?)
+        .await?;
+    let project_slug = slugify(&project.full_name);
+    let branch = task
+        .branch
+        .clone()
+        .unwrap_or_else(|| project.default_branch.clone());
+    let branch_slug = slugify(&branch);
+    let dir = state
+        .task_store
+        .workspace()
+        .branch_dir(&svc.slug, &project_slug, &branch_slug);
+    Some((svc, dir))
+}
+
 pub async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TaskDetail>, StatusCode> {
-    use crate::workspace::layout::slugify;
-
     let (task, result) = state
         .task_store
         .get_task(id)
@@ -121,33 +156,9 @@ pub async fn get_task(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Resolve the worktree path via the task's project → service.
-    let project = state
-        .project_store
-        .get_project_by_id(task.project_id)
+    let work_dir = resolve_task_worktree(&state, &task)
         .await
-        .ok()
-        .flatten();
-    let work_dir = match project {
-        Some(ref p) => match p.service_id {
-            Some(sid) => state.task_store.providers().service(sid).await.map(|svc| {
-                let project_slug = slugify(&p.full_name);
-                let branch = task
-                    .branch
-                    .clone()
-                    .unwrap_or_else(|| p.default_branch.clone());
-                let branch_slug = slugify(&branch);
-                state
-                    .task_store
-                    .workspace()
-                    .branch_dir(&svc.slug, &project_slug, &branch_slug)
-                    .to_string_lossy()
-                    .into_owned()
-            }),
-            None => None,
-        },
-        None => None,
-    };
+        .map(|(_, dir)| dir.to_string_lossy().into_owned());
 
     let task = task_view(task, &state).await;
     Ok(Json(TaskDetail {
@@ -155,6 +166,62 @@ pub async fn get_task(
         result,
         work_dir,
     }))
+}
+
+#[derive(Deserialize, Default)]
+pub struct RefreshTokenBody {
+    /// Operator-supplied token to push directly — covers the case where minting
+    /// is broken. Absent/blank → re-resolve from the service credentials.
+    pub token: Option<String>,
+}
+
+/// Rotate the token the agent itself uses: rewrite this task's `agent.env`
+/// (sourced per command via `BASH_ENV`) with a fresh token. The mid-turn escape
+/// hatch for a single turn that outlives the App token's ~1h TTL — env can't be
+/// auto-refreshed mid-turn (#52). Works whether the agent is live or idle: it
+/// only rewrites a file the agent reads on its next command.
+pub async fn refresh_token(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    body: Option<Json<RefreshTokenBody>>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let (task, _) = state
+        .task_store
+        .get_task(id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "task not found".to_string()))?;
+
+    let (svc, work_dir) = resolve_task_worktree(&state, &task).await.ok_or((
+        StatusCode::NOT_FOUND,
+        "task worktree unresolved".to_string(),
+    ))?;
+
+    let token_var = match svc.kind {
+        ProviderKind::Github => "GH_TOKEN",
+        ProviderKind::Gitlab => "GITLAB_TOKEN",
+    };
+
+    let supplied = body
+        .and_then(|b| b.0.token)
+        .filter(|t| !t.trim().is_empty());
+    let token = match supplied {
+        Some(t) => t,
+        None => {
+            let creds = svc
+                .credentials()
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            resolve_token(&creds)
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?
+        }
+    };
+
+    crate::workspace::write_agent_env(&work_dir, token_var, &token)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn confirm_task(

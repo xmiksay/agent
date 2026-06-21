@@ -74,6 +74,7 @@ fn build_store(db: &DatabaseConnection) -> Arc<TaskStore> {
         public_base_url: None,
         task_token_budget: 1_000_000,
         operator_approval_timeout_secs: 0,
+        job_timeout_secs: 0,
     };
     Arc::new(TaskStore::new(
         db.clone(),
