@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::jobs::edits::TaskEdits;
 use crate::jobs::lifecycle::derive_agent_state;
-use crate::jobs::store::TaskEdits;
 use crate::jobs::types::TriggerReason;
 use crate::project::ProviderKind;
 use crate::provider::resolve_token;

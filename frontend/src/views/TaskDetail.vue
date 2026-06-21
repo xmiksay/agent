@@ -7,6 +7,8 @@ import TriggerView from "../components/TriggerView.vue";
 import MarkdownView from "../components/MarkdownView.vue";
 import DiffView from "../components/DiffView.vue";
 import Accordion from "../components/Accordion.vue";
+import TaskEditPanel from "../components/TaskEditPanel.vue";
+import TaskOutlinePanel from "../components/TaskOutlinePanel.vue";
 import AuthApprovalForm from "../components/AuthApprovalForm.vue";
 import AnimatedNumber from "../components/AnimatedNumber.vue";
 import { useTaskDetail } from "../composables/useTaskDetail";
@@ -201,79 +203,25 @@ watch(pendingApprovals, (p) => {
 
     <!-- Edit task: state on any task; the run inputs (branch/title/description)
          only while pending — before the task is tied to a run. -->
-    <Accordion v-model:open="editing" title="Edit task" @update:open="(v) => v && startEdit()">
-      <div class="space-y-3 pt-3">
-        <div>
-          <label class="label">State</label>
-          <select v-model="editTaskState" :disabled="savingEdit" class="input">
-            <option value="pending">pending</option>
-            <option value="working_on">working_on</option>
-            <option value="completed">completed</option>
-            <option value="failed">failed</option>
-          </select>
-        </div>
-        <template v-if="isPending">
-          <div>
-            <label class="label">Branch</label>
-            <input
-              v-model="editBranch"
-              :disabled="savingEdit"
-              class="input font-mono"
-              placeholder="feature-branch"
-            />
-            <p class="mt-1 text-xs text-muted">The branch can't equal the default branch.</p>
-          </div>
-          <div v-if="triggerHasTitle">
-            <label class="label">Title</label>
-            <input v-model="editTitle" :disabled="savingEdit" class="input" />
-          </div>
-          <div v-if="triggerHasDescription">
-            <label class="label">Description</label>
-            <textarea v-model="editDescription" rows="6" :disabled="savingEdit" class="textarea font-mono"></textarea>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="label">Queue</label>
-              <select v-model="editQueueId" :disabled="savingEdit" class="select">
-                <option :value="null">— not queued —</option>
-                <option v-for="q in queues.options" :key="q.value" :value="q.value">
-                  {{ q.label }}
-                </option>
-              </select>
-            </div>
-            <div>
-              <label class="label">Priority</label>
-              <input
-                v-model.number="editPriority"
-                type="number"
-                :disabled="savingEdit"
-                class="input font-mono"
-              />
-              <p class="mt-1 text-xs text-muted">Higher runs sooner.</p>
-            </div>
-          </div>
-        </template>
-        <p v-else class="text-xs text-muted">
-          Branch, title and description can only be edited while the task is pending.
-        </p>
-        <div>
-          <label class="label">Model</label>
-          <select v-model="editModelId" :disabled="savingEdit" class="select">
-            <option :value="null">— use default —</option>
-            <option v-for="m in models.options" :key="m.value" :value="m.value">
-              {{ m.label }}
-            </option>
-          </select>
-          <p class="mt-1 text-xs text-muted">Applies on the next run/resume.</p>
-        </div>
-        <div class="flex justify-end gap-2">
-          <button class="btn btn-ghost btn-sm" :disabled="savingEdit" @click="editing = false">Cancel</button>
-          <button class="btn btn-primary btn-sm" :disabled="savingEdit" @click="saveEdit">
-            {{ savingEdit ? "Saving…" : "Save" }}
-          </button>
-        </div>
-      </div>
-    </Accordion>
+    <TaskEditPanel
+      v-model:open="editing"
+      v-model:branch="editBranch"
+      v-model:title="editTitle"
+      v-model:description="editDescription"
+      v-model:task-state="editTaskState"
+      v-model:model-id="editModelId"
+      v-model:queue-id="editQueueId"
+      v-model:priority="editPriority"
+      :is-pending="isPending"
+      :trigger-has-title="triggerHasTitle"
+      :trigger-has-description="triggerHasDescription"
+      :saving-edit="savingEdit"
+      :queue-options="queues.options"
+      :model-options="models.options"
+      @start="startEdit"
+      @save="saveEdit"
+      @cancel="editing = false"
+    />
 
     <!-- Ask for permission — present only when something is pending, auto-open. -->
     <Accordion
@@ -395,45 +343,11 @@ watch(pendingApprovals, (p) => {
       </div>
     </section>
 
-    <!-- Outline — background-task / sub-agent completions, lifted out of the
-         inline timeline so they don't read as noise. -->
-    <Accordion
+    <TaskOutlinePanel
       v-if="taskNotifications.length"
       v-model:open="showOutline"
-      title="Outline"
-      :subtitle="`${taskNotifications.length} task${taskNotifications.length === 1 ? '' : 's'}`"
-    >
-      <ul class="space-y-2 pt-3">
-        <li
-          v-for="(n, i) in taskNotifications"
-          :key="i"
-          class="space-y-1 rounded-md border border-line bg-panel-2/60 p-3"
-        >
-          <div class="flex items-center gap-2">
-            <span
-              class="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-label"
-              :class="
-                n.status === 'completed'
-                  ? 'bg-signal-ok/15 text-signal-ok'
-                  : n.status === 'failed' || /error/i.test(n.status)
-                    ? 'bg-signal-danger/15 text-signal-danger'
-                    : 'bg-panel text-faint'
-              "
-            >
-              {{ n.status || "task" }}
-            </span>
-            <span v-if="n.bgTaskId" class="font-mono text-[11px] text-faint">{{ n.bgTaskId }}</span>
-          </div>
-          <details>
-            <summary class="cursor-pointer">
-              <span class="truncate font-mono text-[11px] text-muted">{{ n.summary }}</span>
-            </summary>
-            <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-muted">{{ n.summary }}</pre>
-          </details>
-          <div v-if="n.outputFile" class="font-mono text-[11px] text-faint">→ {{ n.outputFile }}</div>
-        </li>
-      </ul>
-    </Accordion>
+      :notifications="taskNotifications"
+    />
 
     <!-- Output — agent turns (input + output), newest first. Each turn expands
          to its raw events; the "raw json" toggle drops to the flat stream. -->

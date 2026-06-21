@@ -1,5 +1,6 @@
 pub mod auth_requests;
 pub mod bulk;
+pub mod github_app;
 pub mod gitlab_token;
 pub mod handlers;
 pub mod models;

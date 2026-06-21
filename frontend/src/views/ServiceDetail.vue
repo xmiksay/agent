@@ -4,11 +4,12 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useServicesStore } from "../stores/services";
 import { useModelsStore } from "../stores/models";
-import { servicesApi } from "../api/services";
 import ProviderBadge from "../components/ProviderBadge.vue";
 import TriggerGatingGrid from "../components/TriggerGatingGrid.vue";
+import ServiceGithubApp from "../components/ServiceGithubApp.vue";
+import ServiceGitlabToken from "../components/ServiceGitlabToken.vue";
 import { TRIGGER_TYPES, seedTriggers } from "../util/triggerTypes";
-import type { AuthKind, GitLabTokenScope, TriggerConfig, UpdateService } from "../types/api";
+import type { AuthKind, TriggerConfig, UpdateService } from "../types/api";
 
 const props = defineProps<{ id: string }>();
 const store = useServicesStore();
@@ -26,20 +27,9 @@ const appIdDraft = ref("");
 const privateKeyDraft = ref("");
 const authKindDraft = ref<AuthKind>("pat");
 const saving = ref(false);
-const installing = ref(false);
-const syncing = ref(false);
-const syncResult = ref<{ ok: boolean; text: string } | null>(null);
 const error = ref<string | null>(null);
 const copied = ref(false);
 const generatedSecret = ref<string | null>(null);
-
-// GitLab bot-token provisioning form.
-const provScope = ref<GitLabTokenScope>("group");
-const provNamespace = ref("");
-const provName = ref("");
-const provExpiry = ref("");
-const provisioning = ref(false);
-const rotating = ref(false);
 
 const detail = computed(() => store.detail);
 // GitHub-only: `app` is rejected for GitLab, so the selector is hidden there.
@@ -141,66 +131,9 @@ function collectModels(): Record<string, string> {
   return out;
 }
 
-async function installApp() {
-  installing.value = true;
-  error.value = null;
-  try {
-    const { install_url } = await servicesApi.githubAppInstallUrl(props.id);
-    window.location.href = install_url;
-  } catch (e: unknown) {
-    error.value = extractErrorMessage(e);
-    installing.value = false;
-  }
-}
-
-async function syncApp() {
-  syncing.value = true;
-  syncResult.value = null;
-  try {
-    const res = await servicesApi.githubAppSync(props.id);
-    syncResult.value = { ok: true, text: res.message };
-    await reload();
-  } catch (e: unknown) {
-    syncResult.value = { ok: false, text: extractErrorMessage(e) };
-  } finally {
-    syncing.value = false;
-  }
-}
-
-async function provisionToken() {
-  if (!provNamespace.value.trim()) {
-    error.value = "enter the group or project path";
-    return;
-  }
-  provisioning.value = true;
-  error.value = null;
-  try {
-    await servicesApi.provisionGitlabToken(props.id, {
-      scope: provScope.value,
-      namespace: provNamespace.value.trim(),
-      name: provName.value.trim() || undefined,
-      expires_at: provExpiry.value || undefined,
-    });
-    await reload();
-  } catch (e: unknown) {
-    error.value = extractErrorMessage(e);
-  } finally {
-    provisioning.value = false;
-  }
-}
-
-async function rotateToken() {
-  if (!confirm("Rotate the bot token? The current token is revoked immediately.")) return;
-  rotating.value = true;
-  error.value = null;
-  try {
-    await servicesApi.rotateGitlabToken(props.id);
-    await reload();
-  } catch (e: unknown) {
-    error.value = extractErrorMessage(e);
-  } finally {
-    rotating.value = false;
-  }
+// Children clear the banner with an empty string and surface failures with a message.
+function setError(msg: string) {
+  error.value = msg || null;
 }
 
 async function remove() {
@@ -239,103 +172,22 @@ async function remove() {
       </div>
     </section>
 
-    <section v-if="isAppSaved" class="card space-y-3 p-5">
-      <div class="flex items-center gap-2">
-        <h2 class="text-sm font-semibold">GitHub App</h2>
-        <span
-          class="rounded px-2 py-0.5 text-xs font-medium"
-          :class="detail.app_installed ? 'bg-signal-ok/15 text-signal-ok' : 'bg-signal-auth/15 text-signal-auth'"
-        >
-          {{ detail.app_installed ? "Installed" : "Not installed" }}
-        </span>
-      </div>
-      <p class="text-xs text-muted">
-        Install the App on the repos it should act on — that records the installation id used to
-        mint short-lived tokens. Configure the webhook once at the app level (URL above + secret);
-        per-repo hooks are skipped for App services.
-      </p>
-      <div class="flex flex-wrap gap-2">
-        <button type="button" class="btn btn-primary" :disabled="installing" @click="installApp">
-          {{ installing ? "Redirecting…" : detail.app_installed ? "Reinstall / manage" : "Install GitHub App" }}
-        </button>
-        <button type="button" class="btn btn-ghost" :disabled="syncing" @click="syncApp">
-          {{ syncing ? "Syncing…" : "Sync App" }}
-        </button>
-      </div>
-      <p class="text-xs text-muted">
-        <strong>Sync App</strong> lets the bot finish setup itself with the App key: it discovers the
-        installation (no redirect needed) and registers the app-level webhook (URL + secret) for you.
-        Install the App on your repos first.
-      </p>
-      <p
-        v-if="syncResult"
-        class="text-xs"
-        :class="syncResult.ok ? 'text-signal-ok' : 'text-signal-danger'"
-      >
-        {{ syncResult.text }}
-      </p>
-    </section>
+    <ServiceGithubApp
+      v-if="isAppSaved"
+      :id="props.id"
+      :app-installed="detail.app_installed"
+      @reload="reload"
+      @error="setError"
+    />
 
-    <section v-if="isGitlab" class="card space-y-3 p-5">
-      <div class="flex items-center gap-2">
-        <h2 class="text-sm font-semibold">Bot access token</h2>
-        <span
-          class="rounded px-2 py-0.5 text-xs font-medium"
-          :class="gitlabToken ? 'bg-signal-ok/15 text-signal-ok' : 'bg-signal-auth/15 text-signal-auth'"
-        >
-          {{ gitlabToken ? "Provisioned" : "Not provisioned" }}
-        </span>
-      </div>
-      <p class="text-xs text-muted">
-        Mint a dedicated Group/Project Access Token (scopes <code>api</code> +
-        <code>write_repository</code>, Maintainer role) so the agent acts as its own bot.
-        The service's current token is used once as the owner-scoped bootstrap, then replaced
-        by the minted token.
-      </p>
-
-      <p v-if="gitlabToken" class="text-xs text-muted">
-        Current: <span class="font-mono">{{ gitlabToken.scope }}</span> token #{{ gitlabToken.token_id }}
-        on <span class="font-mono">{{ gitlabToken.namespace }}</span
-        ><template v-if="gitlabToken.expires_at">, expires {{ gitlabToken.expires_at }}</template>.
-      </p>
-
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <label class="label">Scope</label>
-          <select v-model="provScope" class="select">
-            <option value="group">Group</option>
-            <option value="project">Project</option>
-          </select>
-        </div>
-        <div>
-          <label class="label">Group / project path or id</label>
-          <input v-model="provNamespace" class="input font-mono" placeholder="my-group/sub" />
-        </div>
-        <div>
-          <label class="label">Token name <span class="text-faint">(optional)</span></label>
-          <input v-model="provName" class="input font-mono" :placeholder="`agent-${detail.slug}`" />
-        </div>
-        <div>
-          <label class="label">Expires <span class="text-faint">(optional, ≤365d)</span></label>
-          <input v-model="provExpiry" type="date" class="input font-mono" />
-        </div>
-      </div>
-
-      <div class="flex gap-2">
-        <button type="button" class="btn btn-primary" :disabled="provisioning" @click="provisionToken">
-          {{ provisioning ? "Minting…" : gitlabToken ? "Re-provision" : "Provision token" }}
-        </button>
-        <button
-          v-if="gitlabToken"
-          type="button"
-          class="btn btn-ghost"
-          :disabled="rotating"
-          @click="rotateToken"
-        >
-          {{ rotating ? "Rotating…" : "Rotate" }}
-        </button>
-      </div>
-    </section>
+    <ServiceGitlabToken
+      v-if="isGitlab"
+      :id="props.id"
+      :slug="detail.slug"
+      :gitlab-token="gitlabToken"
+      @reload="reload"
+      @error="setError"
+    />
 
     <form class="card space-y-3 p-5" @submit.prevent="save">
       <h2 class="text-sm font-semibold">Settings</h2>
