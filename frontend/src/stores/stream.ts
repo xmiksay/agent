@@ -179,6 +179,7 @@ export const useStreamStore = defineStore("stream", () => {
     connected,
     ensure,
     eventsFor,
+    apply,
     seedEvents,
     seedApprovals,
     dropApproval,

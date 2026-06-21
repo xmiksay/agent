@@ -47,6 +47,8 @@ cargo run                                     # rust-embed bakes the SPA into th
 
 Visit `http://localhost:3000` and (if `API_BEARER_TOKEN` is set) paste the token. Hot-reload dev: `cd frontend && npm run dev` (vite on 5173).
 
+The pre-"done" gate is `make verify` — Rust fmt + clippy + the frontend typecheck (lint) plus `cargo test` and the frontend `vitest` suite (`cd frontend && npm run test`).
+
 ### 3. Add a git service
 
 Go to **Services → Add service** and fill in:
