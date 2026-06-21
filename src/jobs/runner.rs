@@ -96,6 +96,15 @@ pub async fn run_job(
         .clone_or_fetch(&work_dir, &https_auth, &branch, &default_branch)
         .await?;
 
+    // The agent's *own* git/gh/glab calls read the token from a mutable env file
+    // it re-sources per command (BASH_ENV), not the frozen spawn-time process
+    // env — so the token can be rotated mid-session (issue #52). Seed it now with
+    // the freshly-resolved token; `.git/` exists after the clone/fetch above.
+    crate::workspace::write_agent_env(&work_dir, provider_token_var, &provider_token_value)
+        .await
+        .context("seeding agent.env")?;
+    let agent_env_path = crate::workspace::agent_env_path(&work_dir);
+
     // The selected model's provider picks the backend/CLI; `model_arg` is its
     // `model_id` (None → default backend + the CLI's own default model).
     let (backend, model_arg) = resolve_backend(model.as_ref())?;
@@ -158,6 +167,11 @@ pub async fn run_job(
     crate::agent::apply_model_env(&mut cmd, backend.as_ref(), model.as_ref());
     let mut child = cmd
         .env(provider_token_var, &provider_token_value)
+        // Bash sources $BASH_ENV at the start of every non-interactive shell (how
+        // the CLI's Bash tool runs commands), so each git/gh/glab invocation
+        // re-reads the *current* token from agent.env. The frozen process env var
+        // above is the belt-and-suspenders initial value; the sourced file wins.
+        .env("BASH_ENV", &agent_env_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -327,6 +341,21 @@ pub async fn run_job(
         // a resumable row rather than a stuck `pending` one.
         hub.mark_running(task_id);
         let _ = store.set_states(task_id, "cold", "working_on").await;
+
+        // Refresh agent.env at the start of each turn so a warm-idle wake-up past
+        // the App token's ~1h TTL runs the agent's own git/gh/glab with a live
+        // token (#52). Re-resolving is cheap for a PAT and hits the refreshing
+        // cache for an App; best-effort — a write failure must not fail the turn.
+        match resolve_token(&provider_creds).await {
+            Ok(token) => {
+                if let Err(e) =
+                    crate::workspace::write_agent_env(&work_dir, provider_token_var, &token).await
+                {
+                    warn!(%task_id, error = %e, "failed to refresh agent.env for turn");
+                }
+            }
+            Err(e) => warn!(%task_id, error = %e, "failed to resolve token for turn refresh"),
+        }
 
         // Forward to the writer task (which owns child stdin). A send error means
         // the writer is gone (stdin closed) — end the session.

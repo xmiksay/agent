@@ -105,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
             post(api::handlers::continue_task),
         )
         .route("/api/tasks/{id}/message", post(api::handlers::push_message))
+        .route("/api/tasks/{id}/token", post(api::handlers::refresh_token))
         .route("/api/tasks/{id}/diff", get(api::handlers::task_diff))
         .route("/api/tasks/{id}/events", get(api::handlers::task_events))
         .route(

@@ -56,6 +56,15 @@ export const tasksApi = {
       body: { body },
     });
   },
+  // Rotate the token the agent itself uses by rewriting its agent.env. With no
+  // token, the server re-resolves from the service credentials; pass one to push
+  // an operator-supplied token directly.
+  refreshToken(id: string, token?: string): Promise<void> {
+    return api(`/api/tasks/${id}/token`, {
+      method: "POST",
+      body: token ? { token } : undefined,
+    });
+  },
   update(id: string, edits: TaskEdits): Promise<void> {
     return api(`/api/tasks/${id}`, {
       method: "PATCH",

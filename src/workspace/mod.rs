@@ -1,6 +1,9 @@
 pub mod git;
 pub mod layout;
 pub mod lock;
+pub mod token_env;
+
+pub use token_env::{agent_env_path, write_agent_env};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

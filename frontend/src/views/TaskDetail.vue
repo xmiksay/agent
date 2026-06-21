@@ -19,7 +19,7 @@ const {
   onApprovalResolved, diffText, diffError, diffLoading, loadDiff,
   editing, editBranch, editTitle, editDescription, editTaskState,
   triggerHasTitle, triggerHasDescription, editModelId, savingEdit, startEdit, saveEdit,
-  confirmRun, retry, resume, pause, remove,
+  confirmRun, retry, resume, pause, refreshToken, remove,
   message, sending, sendMessage, redefineGoal, stopAgent,
 } = useTaskDetail(toRef(props, "id"));
 
@@ -133,6 +133,15 @@ watch(pendingApprovals, (p) => {
           @click="pause"
         >
           {{ busy === "kill" ? "Pausing…" : "Pause" }}
+        </button>
+        <button
+          v-if="store.detail.work_dir"
+          :disabled="!!busy"
+          class="btn btn-ghost btn-sm"
+          title="Rewrite the agent's agent.env with a fresh provider token — the escape hatch when a long turn outlives the token's TTL"
+          @click="refreshToken"
+        >
+          {{ busy === "token" ? "Refreshing…" : "Refresh token" }}
         </button>
         <button
           :disabled="!!busy"

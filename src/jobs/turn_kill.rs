@@ -104,10 +104,10 @@ mod tests {
             .expect("spawn sh");
 
         let gc_pid: i32 = loop {
-            if let Ok(s) = std::fs::read_to_string(&pidfile) {
-                if let Ok(p) = s.trim().parse() {
-                    break p;
-                }
+            if let Ok(s) = std::fs::read_to_string(&pidfile)
+                && let Ok(p) = s.trim().parse()
+            {
+                break p;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
