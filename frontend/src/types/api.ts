@@ -307,6 +307,9 @@ export interface StatsQuery {
   from?: string;
   to?: string;
   group_by?: StatsGroupBy;
+  service_id?: string;
+  project_id?: string;
+  branch?: string;
 }
 
 export interface AuthRequest {

@@ -25,6 +25,13 @@ pub struct StatsQuery {
     pub to: Option<DateTime<Utc>>,
     /// `project` (default), `service`, `branch`, or `trigger_type`.
     pub group_by: Option<String>,
+    /// Narrow to one service. `tasks` has no service column — applied in the
+    /// Rust loop via `project_meta`, not the SeaORM query.
+    pub service_id: Option<Uuid>,
+    /// Narrow to one project (`tasks.project_id` column).
+    pub project_id: Option<Uuid>,
+    /// Narrow to one branch (`tasks.branch` column; branchless tasks excluded).
+    pub branch: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -59,9 +66,16 @@ pub async fn task_stats(
         ));
     }
 
-    let rows = tasks::Entity::find()
+    let mut find = tasks::Entity::find()
         .filter(tasks::Column::CreatedAt.gte(from))
-        .filter(tasks::Column::CreatedAt.lt(to))
+        .filter(tasks::Column::CreatedAt.lt(to));
+    if let Some(pid) = q.project_id {
+        find = find.filter(tasks::Column::ProjectId.eq(pid));
+    }
+    if let Some(ref b) = q.branch {
+        find = find.filter(tasks::Column::Branch.eq(b.clone()));
+    }
+    let rows = find
         .all(state.task_store.db())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -90,9 +104,18 @@ pub async fn task_stats(
     let now = Utc::now();
     let mut buckets: HashMap<String, StatsRow> = HashMap::new();
     let mut total_secs: i64 = 0;
-    let total_tasks = rows.len() as i64;
+    // Accumulated in-loop so the service filter (applied here, not in SQL) keeps
+    // the headline count consistent with the rows.
+    let mut total_tasks: i64 = 0;
 
     for t in rows {
+        if let Some(want) = q.service_id {
+            let svc = project_meta.get(&t.project_id).and_then(|(_, s)| *s);
+            if svc != Some(want) {
+                continue;
+            }
+        }
+        total_tasks += 1;
         let secs = duration_secs(&t, now);
         total_secs += secs;
         let project_name = project_meta
