@@ -25,11 +25,15 @@ class MemoryStorage implements Storage {
   }
 }
 
-if (typeof globalThis.localStorage === "undefined") {
-  Object.defineProperty(globalThis, "localStorage", {
-    value: new MemoryStorage(),
-    writable: true,
-  });
-}
+// Always install our own — don't merely fill an `undefined` gap. Newer Node
+// exposes a *native* `localStorage` global that throws unless started with
+// `--localstorage-file`, and jsdom doesn't shadow it; a conditional polyfill
+// would leave that throwing accessor in place. Force a deterministic in-memory
+// store so tests never touch real persistence.
+Object.defineProperty(globalThis, "localStorage", {
+  value: new MemoryStorage(),
+  writable: true,
+  configurable: true,
+});
 
 beforeEach(() => globalThis.localStorage.clear());
