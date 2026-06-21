@@ -2,7 +2,9 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { tasksApi } from "../api/tasks";
 import { formatSecs } from "../util/duration";
-import type { StatsGroupBy, StatsResponse } from "../types/api";
+import { useTaskFilters } from "../util/taskFilters";
+import { useServicesStore } from "../stores/services";
+import type { StatsGroupBy, StatsResponse, Task } from "../types/api";
 
 // Picks default to "last 30 days". `<input type="date">` works in local TZ;
 // we convert to ISO UTC at the day boundary for the API call.
@@ -29,6 +31,44 @@ const data = ref<StatsResponse | null>(null);
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
 
+// Service + project selection is shared with the task list via useTaskFilters,
+// so picking a project on Tasks carries into Stats. Branch is Stats-only (the
+// task list has no branch filter), so it rides its own localStorage key.
+const services = useServicesStore();
+const { serviceId, projectId } = useTaskFilters();
+const BRANCH_KEY = "agent-stats-branch";
+const branch = ref<string>(localStorage.getItem(BRANCH_KEY) ?? "");
+watch(branch, (b) => {
+  try {
+    localStorage.setItem(BRANCH_KEY, b);
+  } catch {
+    // Private mode / storage disabled — branch filter just won't persist.
+  }
+});
+
+// Project + branch options come from the tasks actually present, so the
+// dropdowns only list projects/branches with runs (same idiom as TasksList).
+const allTasks = ref<Task[]>([]);
+const serviceOptions = computed(() =>
+  services.list.map((s) => ({ id: s.id, label: s.display_name })),
+);
+const projectOptions = computed(() => {
+  const seen = new Map<string, string>();
+  for (const t of allTasks.value) {
+    if (t.project_id && !seen.has(t.project_id)) seen.set(t.project_id, t.project_path);
+  }
+  return [...seen]
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+});
+const branchOptions = computed(() => {
+  const seen = new Set<string>();
+  for (const t of allTasks.value) {
+    if (t.branch) seen.add(t.branch);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
+});
+
 const groupOptions: { value: StatsGroupBy; label: string }[] = [
   { value: "project", label: "Project" },
   { value: "service", label: "Service" },
@@ -44,6 +84,9 @@ async function reload() {
       from: isoMidnightUtc(fromDate.value, false),
       to: isoMidnightUtc(toDate.value, true),
       group_by: groupBy.value,
+      service_id: serviceId.value || undefined,
+      project_id: projectId.value || undefined,
+      branch: branch.value || undefined,
     });
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e);
@@ -53,8 +96,22 @@ async function reload() {
   }
 }
 
-onMounted(reload);
-watch([fromDate, toDate, groupBy], reload);
+onMounted(() => {
+  reload();
+  services.refresh();
+  // Populate the project/branch dropdowns from the full task set.
+  tasksApi
+    .list()
+    .then((ts) => (allTasks.value = ts))
+    .catch(() => {});
+});
+watch([fromDate, toDate, groupBy, serviceId, projectId, branch], reload);
+
+function clearFilters() {
+  serviceId.value = "";
+  projectId.value = "";
+  branch.value = "";
+}
 
 const totalLine = computed(() => {
   if (!data.value) return "";
@@ -92,6 +149,34 @@ function quickRange(days: number) {
           </option>
         </select>
       </div>
+      <div>
+        <label class="label">Service</label>
+        <select v-model="serviceId" class="select w-40">
+          <option value="">All services</option>
+          <option v-for="s in serviceOptions" :key="s.id" :value="s.id">{{ s.label }}</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Project</label>
+        <select v-model="projectId" class="select w-44">
+          <option value="">All projects</option>
+          <option v-for="p in projectOptions" :key="p.id" :value="p.id">{{ p.label }}</option>
+        </select>
+      </div>
+      <div>
+        <label class="label">Branch</label>
+        <select v-model="branch" class="select w-44">
+          <option value="">All branches</option>
+          <option v-for="b in branchOptions" :key="b" :value="b">{{ b }}</option>
+        </select>
+      </div>
+      <button
+        v-if="serviceId || projectId || branch"
+        class="btn btn-ghost btn-sm"
+        @click="clearFilters"
+      >
+        Clear
+      </button>
       <div class="ml-auto flex gap-1.5">
         <button
           v-for="r in [

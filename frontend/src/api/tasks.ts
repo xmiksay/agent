@@ -79,6 +79,9 @@ export const tasksApi = {
     if (query.from) params.from = query.from;
     if (query.to) params.to = query.to;
     if (query.group_by) params.group_by = query.group_by;
+    if (query.service_id) params.service_id = query.service_id;
+    if (query.project_id) params.project_id = query.project_id;
+    if (query.branch) params.branch = query.branch;
     return api("/api/tasks/stats", { params });
   },
 };
