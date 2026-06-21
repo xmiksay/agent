@@ -193,11 +193,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/services/{id}/github_app/install",
-            get(api::services::github_app_install),
+            get(api::github_app::github_app_install),
         )
         .route(
             "/api/services/{id}/github_app/sync",
-            post(api::services::github_app_sync),
+            post(api::github_app::github_app_sync),
         )
         .route(
             "/api/services/{id}/gitlab_token/provision",
@@ -244,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
         // the `state` param naming an existing service).
         .route(
             "/github_app/callback",
-            get(api::services::github_app_callback),
+            get(api::github_app::github_app_callback),
         )
         // Single app-wide live stream. Auth is in-band (the client's first frame
         // is its token), so it sits outside the `/api/*` bearer middleware.

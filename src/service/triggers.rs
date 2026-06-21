@@ -13,7 +13,8 @@ use uuid::Uuid;
 
 use crate::entity::service_triggers;
 use crate::jobs::types::TRIGGER_TYPES;
-use crate::service::store::{ServiceStore, TriggerMode};
+use crate::service::store::ServiceStore;
+use crate::service::types::TriggerMode;
 
 /// The gating config for one trigger type. `mode`/`label` are only meaningful
 /// for the issue type; the other types gate on `enabled` alone.

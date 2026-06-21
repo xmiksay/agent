@@ -480,7 +480,7 @@ mod tests {
         store
             .update_task(
                 id,
-                crate::jobs::store::TaskEdits {
+                crate::jobs::edits::TaskEdits {
                     task_state: Some("working_on".into()),
                     ..Default::default()
                 },
@@ -588,7 +588,7 @@ mod tests {
     /// once the task leaves `pending` the same edit is refused.
     #[tokio::test]
     async fn edit_trigger_title_and_description() {
-        use crate::jobs::store::TaskEdits;
+        use crate::jobs::edits::TaskEdits;
 
         let Some((db, name, admin)) = fresh_db().await else {
             return;
