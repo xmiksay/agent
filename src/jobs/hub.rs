@@ -415,6 +415,47 @@ mod tests {
         assert_eq!(EnvelopeKind::Status.as_db_str(), "status");
     }
 
+    /// The per-turn permit lifecycle the runner drives via the hub: a seeded
+    /// channel starts idle, `mark_running` flips it to running at turn start, and
+    /// `mark_idle` clears it at turn end (the agent stays warm). The `warm` mirror
+    /// is independent of `running`, so an idle-between-turns agent reads warm but
+    /// not running.
+    #[test]
+    fn turn_permit_flags_track_running_lifecycle() {
+        let hub = LiveSessions::detached();
+        let task = Uuid::new_v4();
+
+        // Seed warm + idle, the state right after `register` before the first turn.
+        hub.insert_test_channel(task, true, false);
+        assert!(hub.is_warm_sync(task));
+        assert!(!hub.is_running(task), "seeded idle");
+
+        hub.mark_running(task);
+        assert!(hub.is_running(task), "turn started → running");
+        assert!(hub.is_warm_sync(task), "still warm while running");
+
+        hub.mark_idle(task);
+        assert!(!hub.is_running(task), "turn ended → idle");
+        assert!(
+            hub.is_warm_sync(task),
+            "idle agent stays warm between turns"
+        );
+    }
+
+    /// The flag mutators and queries are no-ops / false for an unknown task, so a
+    /// late `mark_idle` after `end` (which removes the channel) can't panic.
+    #[test]
+    fn turn_permit_flags_are_noops_without_a_channel() {
+        let hub = LiveSessions::detached();
+        let task = Uuid::new_v4();
+
+        assert!(!hub.is_running(task));
+        assert!(!hub.is_warm_sync(task));
+        hub.mark_running(task); // must not panic on a missing channel
+        hub.mark_idle(task);
+        assert!(!hub.is_running(task));
+    }
+
     /// The flush trigger fires exactly when `FLUSH_BATCH` unflushed frames have
     /// accumulated — mirrors the threshold check in `publish`.
     #[test]
