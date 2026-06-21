@@ -46,41 +46,39 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         dotenvy::dotenv().ok();
+        Self::from_lookup(|key| env::var(key).ok())
+    }
 
+    /// Build the config from a key→value lookup. Split out of `from_env` so the
+    /// parse/validation logic is testable without mutating the process
+    /// environment — `env::set_var` here would race the other DB-backed tests in
+    /// this binary that read `DATABASE_URL`.
+    fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
         Ok(Self {
-            api_bearer_token: env::var("API_BEARER_TOKEN").ok(),
-            database_url: env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
-            repo_base_path: env::var("REPO_BASE_PATH")
-                .unwrap_or_else(|_| "/tmp/claude-jobs".to_string()),
-            max_concurrent_jobs: env::var("MAX_CONCURRENT_JOBS")
-                .unwrap_or_else(|_| "3".to_string())
+            api_bearer_token: get("API_BEARER_TOKEN"),
+            database_url: get("DATABASE_URL").context("DATABASE_URL must be set")?,
+            repo_base_path: get("REPO_BASE_PATH").unwrap_or_else(|| "/tmp/claude-jobs".to_string()),
+            max_concurrent_jobs: get("MAX_CONCURRENT_JOBS")
+                .unwrap_or_else(|| "3".to_string())
                 .parse()
                 .context("MAX_CONCURRENT_JOBS must be a number")?,
-            listen_addr: env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
-            public_base_url: env::var("PUBLIC_BASE_URL")
-                .ok()
+            listen_addr: get("LISTEN_ADDR").unwrap_or_else(|| "0.0.0.0:3000".to_string()),
+            public_base_url: get("PUBLIC_BASE_URL")
                 .map(|v| v.trim_end_matches('/').to_string())
                 .filter(|v| !v.is_empty()),
-            task_token_budget: env::var("TASK_TOKEN_BUDGET")
-                .unwrap_or_else(|_| "1000000".to_string())
+            task_token_budget: get("TASK_TOKEN_BUDGET")
+                .unwrap_or_else(|| "1000000".to_string())
                 .parse()
                 .context("TASK_TOKEN_BUDGET must be a number")?,
             operator_approval_timeout_secs: parse_u64_or(
-                env::var("OPERATOR_APPROVAL_TIMEOUT_SECS").ok(),
+                get("OPERATOR_APPROVAL_TIMEOUT_SECS"),
                 0,
                 "OPERATOR_APPROVAL_TIMEOUT_SECS",
             )?,
-            job_timeout_secs: parse_u64_or(
-                env::var("JOB_TIMEOUT_SECS").ok(),
-                0,
-                "JOB_TIMEOUT_SECS",
-            )?,
-            nvm_dir: env::var("NVM_DIR").ok().filter(|v| !v.trim().is_empty()),
-            project_db_admin_url: env::var("PROJECT_DB_ADMIN_URL")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
-            project_db_host_for_agent: env::var("PROJECT_DB_HOST_FOR_AGENT")
-                .ok()
+            job_timeout_secs: parse_u64_or(get("JOB_TIMEOUT_SECS"), 0, "JOB_TIMEOUT_SECS")?,
+            nvm_dir: get("NVM_DIR").filter(|v| !v.trim().is_empty()),
+            project_db_admin_url: get("PROJECT_DB_ADMIN_URL").filter(|v| !v.trim().is_empty()),
+            project_db_host_for_agent: get("PROJECT_DB_HOST_FOR_AGENT")
                 .filter(|v| !v.trim().is_empty()),
         })
     }
@@ -156,7 +154,75 @@ fn redact_db_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_u64_or, redact_db_url};
+    use super::{Config, parse_u64_or, redact_db_url};
+    use std::collections::HashMap;
+
+    /// A `get` closure backed by a fixed map, standing in for `env::var`.
+    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k| map.get(k).cloned()
+    }
+
+    #[test]
+    fn from_lookup_happy_parse_fills_defaults() {
+        let cfg = Config::from_lookup(lookup(&[(
+            "DATABASE_URL",
+            "postgres://u:p@localhost/agent",
+        )]))
+        .expect("happy parse");
+        assert_eq!(cfg.database_url, "postgres://u:p@localhost/agent");
+        assert_eq!(cfg.repo_base_path, "/tmp/claude-jobs");
+        assert_eq!(cfg.max_concurrent_jobs, 3);
+        assert_eq!(cfg.listen_addr, "0.0.0.0:3000");
+        assert_eq!(cfg.task_token_budget, 1_000_000);
+        assert_eq!(cfg.operator_approval_timeout_secs, 0);
+        assert_eq!(cfg.job_timeout_secs, 0);
+        assert!(cfg.public_base_url.is_none());
+        assert!(cfg.api_bearer_token.is_none());
+        assert!(cfg.nvm_dir.is_none());
+    }
+
+    #[test]
+    fn from_lookup_fails_when_database_url_missing() {
+        let err = Config::from_lookup(lookup(&[]))
+            .err()
+            .expect("missing DATABASE_URL must error");
+        assert!(err.to_string().contains("DATABASE_URL"), "{err}");
+    }
+
+    #[test]
+    fn from_lookup_applies_overrides_and_trims_base_url() {
+        let cfg = Config::from_lookup(lookup(&[
+            ("DATABASE_URL", "postgres://localhost/agent"),
+            ("MAX_CONCURRENT_JOBS", "8"),
+            ("JOB_TIMEOUT_SECS", "1800"),
+            // trailing slash trimmed; an empty value collapses to None.
+            ("PUBLIC_BASE_URL", "https://agent.example.com/"),
+            ("NVM_DIR", "   "),
+        ]))
+        .expect("override parse");
+        assert_eq!(cfg.max_concurrent_jobs, 8);
+        assert_eq!(cfg.job_timeout_secs, 1800);
+        assert_eq!(
+            cfg.public_base_url.as_deref(),
+            Some("https://agent.example.com")
+        );
+        assert!(cfg.nvm_dir.is_none(), "blank NVM_DIR collapses to None");
+    }
+
+    #[test]
+    fn from_lookup_rejects_non_numeric_budget() {
+        let err = Config::from_lookup(lookup(&[
+            ("DATABASE_URL", "postgres://localhost/agent"),
+            ("TASK_TOKEN_BUDGET", "lots"),
+        ]))
+        .err()
+        .expect("non-numeric budget must error");
+        assert!(err.to_string().contains("TASK_TOKEN_BUDGET"), "{err}");
+    }
 
     #[test]
     fn approval_timeout_defaults_to_zero_when_unset_or_empty() {

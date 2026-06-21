@@ -163,7 +163,99 @@ async fn push_changes(work_dir: &str, token_env: &str, creds: &ServiceCredential
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::ProviderKind;
+    use crate::provider::NoteTarget;
     use std::process::Command as StdCommand;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    /// A `GitProvider` that records every posted note instead of hitting the wire,
+    /// so the finalize note path can be exercised offline.
+    struct RecordingProvider {
+        notes: AsyncMutex<Vec<(NoteTarget, String)>>,
+    }
+
+    impl RecordingProvider {
+        fn new() -> Self {
+            Self {
+                notes: AsyncMutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl GitProvider for RecordingProvider {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::Github
+        }
+        fn service_id(&self) -> Uuid {
+            Uuid::nil()
+        }
+        async fn post_note(&self, _project: &str, target: NoteTarget, body: &str) -> Result<()> {
+            self.notes.lock().await.push((target, body.to_string()));
+            Ok(())
+        }
+        async fn ensure_webhook(&self, _repo: &str, _url: &str, _secret: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn result(is_error: bool, msg: &str) -> ClaudeOutput {
+        ClaudeOutput {
+            result: msg.to_string(),
+            session_id: "sid".to_string(),
+            total_cost_usd: 0.1234,
+            is_error,
+            num_turns: 3,
+            input_tokens: 0,
+            output_tokens: 0,
+        }
+    }
+
+    /// A successful issue turn posts a completion note to the *issue* target with
+    /// the cost/turn summary and no error text.
+    #[tokio::test]
+    async fn post_result_issue_completion_targets_issue() {
+        let provider = RecordingProvider::new();
+        let trigger = TriggerReason::Issue {
+            iid: 42,
+            title: "t".into(),
+            description: String::new(),
+            url: "u".into(),
+        };
+        post_result(&trigger, &result(false, "ok"), "acme/widgets", &provider)
+            .await
+            .expect("post note");
+
+        let notes = provider.notes.lock().await;
+        assert_eq!(notes.len(), 1);
+        assert!(matches!(notes[0].0, NoteTarget::Issue(42)));
+        assert!(notes[0].1.contains("(completed)"));
+        assert!(notes[0].1.contains("Task completed"));
+        assert!(notes[0].1.contains("$0.1234"));
+        assert!(notes[0].1.contains("Turns: 3"));
+    }
+
+    /// An errored MR-comment turn posts an *error* note to the merge-request
+    /// target, surfacing the agent's error text.
+    #[tokio::test]
+    async fn post_result_mr_error_targets_merge_request() {
+        let provider = RecordingProvider::new();
+        let trigger = TriggerReason::MRComment {
+            mr_iid: 7,
+            comment: "c".into(),
+            source_branch: "feature".into(),
+            url: "u".into(),
+        };
+        post_result(&trigger, &result(true, "boom"), "acme/widgets", &provider)
+            .await
+            .expect("post note");
+
+        let notes = provider.notes.lock().await;
+        assert_eq!(notes.len(), 1);
+        assert!(matches!(notes[0].0, NoteTarget::MergeRequest(7)));
+        assert!(notes[0].1.contains("(error)"));
+        assert!(notes[0].1.contains("Error: boom"));
+    }
 
     fn git(dir: &std::path::Path, args: &[&str]) {
         let ok = StdCommand::new("git")
