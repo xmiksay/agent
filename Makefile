@@ -39,9 +39,10 @@ lint:
 	cargo clippy --all-targets -- -D warnings
 	cd $(FRONTEND) && $(USE_NODE) && npm run typecheck
 
-## Run the test suite
+## Run the test suite: Rust + frontend (vitest)
 test:
 	cargo test
+	cd $(FRONTEND) && $(USE_NODE) && npm run test
 
 ## The pre-"done" gate: lint + tests must be green before declaring a change done
 verify: lint test
