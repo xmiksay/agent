@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { extractErrorMessage } from "../util/error";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useModelsStore } from "../stores/models";
@@ -48,7 +49,7 @@ async function save() {
     const body: UpdateModel = { ...draft.value, effort: effort.value || null };
     await store.update(props.id, body);
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
   } finally {
     saving.value = false;
   }
@@ -61,19 +62,9 @@ async function remove() {
     await store.remove(props.id);
     router.push({ name: "models" });
   } catch (e: unknown) {
-    alert(extractMessage(e));
+    alert(extractErrorMessage(e));
   }
-}
-
-function extractMessage(e: unknown): string {
-  if (typeof e === "object" && e !== null) {
-    const err = e as { data?: unknown; message?: string };
-    if (typeof err.data === "string") return err.data;
-    if (err.message) return err.message;
-  }
-  return String(e);
-}
-</script>
+}</script>
 
 <template>
   <section v-if="detail" class="space-y-6">

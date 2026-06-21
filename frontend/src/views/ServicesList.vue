@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { extractErrorMessage } from "../util/error";
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useServicesStore } from "../stores/services";
@@ -86,7 +87,7 @@ async function submit() {
     privateKey.value = "";
     showForm.value = false;
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
   } finally {
     saving.value = false;
   }
@@ -99,19 +100,9 @@ async function remove(id: string, slug: string) {
   try {
     await store.remove(id);
   } catch (e: unknown) {
-    alert(extractMessage(e));
+    alert(extractErrorMessage(e));
   }
 }
-
-function extractMessage(e: unknown): string {
-  if (typeof e === "object" && e !== null) {
-    const err = e as { data?: unknown; message?: string };
-    if (typeof err.data === "string") return err.data;
-    if (err.message) return err.message;
-  }
-  return String(e);
-}
-
 function webhookHelp(kind: ProviderKind) {
   return kind === "github"
     ? "Configure as a Webhook in GitHub: Content type application/json, your webhook_secret as the secret, events: issues, issue_comment, pull_request, pull_request_review."
