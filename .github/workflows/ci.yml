@@ -53,6 +53,10 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          # Persist the compiled dependencies even when lint/tests fail, so a red
+          # run doesn't force the next one to rebuild from cold.
+          cache-on-failure: true
 
       - name: Set up Node
         uses: actions/setup-node@v4
