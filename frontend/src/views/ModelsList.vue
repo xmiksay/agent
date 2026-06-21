@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { extractErrorMessage } from "../util/error";
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useModelsStore } from "../stores/models";
@@ -51,7 +52,7 @@ async function submit() {
     effort.value = "";
     showForm.value = false;
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
   } finally {
     saving.value = false;
   }
@@ -62,19 +63,9 @@ async function remove(id: string, alias: string) {
   try {
     await store.remove(id);
   } catch (e: unknown) {
-    alert(extractMessage(e));
+    alert(extractErrorMessage(e));
   }
 }
-
-function extractMessage(e: unknown): string {
-  if (typeof e === "object" && e !== null) {
-    const err = e as { data?: unknown; message?: string };
-    if (typeof err.data === "string") return err.data;
-    if (err.message) return err.message;
-  }
-  return String(e);
-}
-
 onMounted(async () => {
   await Promise.all([store.refresh(), providers.refresh()]);
   // Default the provider to the first one once the list is loaded.

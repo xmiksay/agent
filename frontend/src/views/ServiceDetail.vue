@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { extractErrorMessage } from "../util/error";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useServicesStore } from "../stores/services";
@@ -117,7 +118,7 @@ async function save() {
     appIdDraft.value = "";
     privateKeyDraft.value = "";
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
   } finally {
     saving.value = false;
   }
@@ -139,7 +140,7 @@ async function installApp() {
     const { install_url } = await servicesApi.githubAppInstallUrl(props.id);
     window.location.href = install_url;
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
     installing.value = false;
   }
 }
@@ -152,7 +153,7 @@ async function syncApp() {
     syncResult.value = { ok: true, text: res.message };
     await reload();
   } catch (e: unknown) {
-    syncResult.value = { ok: false, text: extractMessage(e) };
+    syncResult.value = { ok: false, text: extractErrorMessage(e) };
   } finally {
     syncing.value = false;
   }
@@ -174,7 +175,7 @@ async function provisionToken() {
     });
     await reload();
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
   } finally {
     provisioning.value = false;
   }
@@ -188,7 +189,7 @@ async function rotateToken() {
     await servicesApi.rotateGitlabToken(props.id);
     await reload();
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
   } finally {
     rotating.value = false;
   }
@@ -201,19 +202,9 @@ async function remove() {
     await store.remove(props.id);
     router.push({ name: "services" });
   } catch (e: unknown) {
-    alert(extractMessage(e));
+    alert(extractErrorMessage(e));
   }
-}
-
-function extractMessage(e: unknown): string {
-  if (typeof e === "object" && e !== null) {
-    const err = e as { data?: unknown; message?: string };
-    if (typeof err.data === "string") return err.data;
-    if (err.message) return err.message;
-  }
-  return String(e);
-}
-</script>
+}</script>
 
 <template>
   <section v-if="detail" class="space-y-6">

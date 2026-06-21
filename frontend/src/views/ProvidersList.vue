@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { extractErrorMessage } from "../util/error";
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useProvidersStore } from "../stores/providers";
@@ -36,7 +37,7 @@ async function submit() {
     form.value = blank();
     showForm.value = false;
   } catch (e: unknown) {
-    error.value = extractMessage(e);
+    error.value = extractErrorMessage(e);
   } finally {
     saving.value = false;
   }
@@ -47,19 +48,9 @@ async function remove(id: string, name: string) {
   try {
     await store.remove(id);
   } catch (e: unknown) {
-    alert(extractMessage(e));
+    alert(extractErrorMessage(e));
   }
 }
-
-function extractMessage(e: unknown): string {
-  if (typeof e === "object" && e !== null) {
-    const err = e as { data?: unknown; message?: string };
-    if (typeof err.data === "string") return err.data;
-    if (err.message) return err.message;
-  }
-  return String(e);
-}
-
 onMounted(async () => {
   await store.refresh();
   if (!form.value.kind) form.value.kind = store.kinds[0] ?? "claude_code";
